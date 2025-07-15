@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Acta de Aceptación Subida</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .logo {
+            max-width: 200px;
+            margin-bottom: 20px;
+        }
+        .content {
+            background-color: #f9f9f9;
+            padding: 30px;
+            border-radius: 5px;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            font-size: 12px;
+            color: #666;
+        }
+        .button {
+            display: inline-block;
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <img src="{{logoUrl}}" alt="Logo" class="logo">
+            <h1>Acta de Aceptación Subida</h1>
+        </div>
+        <div class="content">
+            <p>Hola,</p>
+            <p>Se ha subido exitosamente el acta de aceptación para la factura:</p>
+            <ul>
+                <li><strong>Proveedor:</strong> {{providerName}}</li>
+                <li><strong>Número de Factura:</strong> {{invoiceNumber}}</li>
+                <li><strong>Fecha:</strong> {{date}}</li>
+                {{#if showAdditionalInfo}}
+                <li><strong>Tipo:</strong> {{type}}</li>
+                <li><strong>Monto Total:</strong> {{montoTotal}} {{moneda}}</li>
+                {{#if category}}<li><strong>Categoría:</strong> {{category}}</li>{{/if}}
+                {{#if projectName}}<li><strong>Proyecto:</strong> {{projectName}}</li>{{/if}}
+                {{#if razonSocial}}<li><strong>Razón Social del Emisor:</strong> {{razonSocial}}</li>{{/if}}
+                {{#if direccionEmisor}}<li><strong>Dirección del Emisor:</strong> {{direccionEmisor}}</li>{{/if}}
+                {{#if status}}<li><strong>Estado:</strong> {{status}}</li>{{/if}}
+                {{/if}}
+            </ul>
+            <p>Puedes revisar el estado de la factura en el sistema.</p>
+            <a href="#" class="button">Ver Factura</a>
+        </div>
+        <div class="footer">
+            <p>Este es un correo automático, por favor no responda a este mensaje.</p>
+            <p>&copy; {{year}} Todos los derechos reservados.</p>
+        </div>
+    </div>
+</body>
+</html> 

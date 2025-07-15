@@ -1,0 +1,105 @@
+<html lang='es'>
+  <head>
+    <meta charset='UTF-8' />
+    <meta name='viewport' content='width=device-width, initial-scale=1.0' />
+    <title>Verifica tu Email</title>
+    <style>
+      /* Estilos inspirados en Eventuz: diseño limpio, colores modernos y tipografía sans-serif */
+      body {
+        margin: 0;
+        padding: 0;
+        background-color: #f4f6f8;
+        font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+        color: #333;
+      }
+      .container {
+        max-width: 600px;
+        margin: 40px auto;
+        background-color: #ffffff;
+        border-radius: 8px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        overflow: hidden;
+      }
+      .header {
+        background-color: #1cb6e7;
+        text-align: center;
+        padding: 20px;
+      }
+      .header img {
+        max-width: 120px;
+        margin-bottom: 10px;
+      }
+      .header h1 {
+        margin: 0;
+        font-size: 24px;
+        color: #ffffff;
+      }
+      .content {
+        padding: 30px;
+        text-align: center;
+      }
+      .content p {
+        font-size: 16px;
+        line-height: 1.5;
+      }
+      .code {
+        font-size: 32px;
+        font-weight: bold;
+        color: #1cb6e7;
+        margin: 20px 0;
+        letter-spacing: 4px;
+      }
+      .button {
+        display: inline-block;
+        background-color: #1cb6e7;
+        color: #ffffff;
+        text-decoration: none;
+        padding: 12px 25px;
+        border-radius: 4px;
+        font-size: 16px;
+        margin-top: 20px;
+      }
+      .footer {
+        text-align: center;
+        font-size: 12px;
+        color: #777;
+        padding: 15px;
+        background-color: #f4f6f8;
+      }
+      @media (max-width: 600px) {
+        .container {
+          margin: 20px;
+        }
+        .code {
+          font-size: 28px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class='container'>
+      <div class='header'>
+        {{! Logo opcional, si se define en las variables }}
+        {{#if logoUrl}}
+          <img src='{{logoUrl}}' alt='Eventuz' />
+        {{/if}}
+        <h1>Verifica tu Email</h1>
+      </div>
+      <div class='content'>
+        <p>Hola</p>
+        <p>
+          Gracias por registrarte en Eventuz. Para completar tu registro,
+          utiliza el siguiente código de verificación:
+        </p>
+        <div class='code'>{{verificationCode}}</div>
+        {{!-- <a href='{{verificationLink}}' class='button'>Verificar Email</a> --}}
+        <p>
+          Si no solicitaste este correo, ignóralo.
+        </p>
+      </div>
+      <div class='footer'>
+        <p>© {{year}} Eventuz. Todos los derechos reservados.</p>
+      </div>
+    </div>
+  </body>
+</html>

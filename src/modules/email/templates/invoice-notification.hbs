@@ -1,0 +1,102 @@
+<html lang='es'>
+  <head>
+    <meta charset='UTF-8' />
+    <meta name='viewport' content='width=device-width, initial-scale=1.0' />
+    <title>Nueva Factura Subida</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background-color: #f4f6f8;
+        font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+        color: #333;
+      }
+      .container {
+        max-width: 600px;
+        margin: 40px auto;
+        background-color: #ffffff;
+        border-radius: 8px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        overflow: hidden;
+      }
+      .header {
+        background-color: #1cb6e7;
+        text-align: center;
+        padding: 20px;
+      }
+      .header img {
+        max-width: 120px;
+        margin-bottom: 10px;
+      }
+      .header h1 {
+        margin: 0;
+        font-size: 24px;
+        color: #ffffff;
+      }
+      .content {
+        padding: 30px;
+      }
+      .content p {
+        font-size: 16px;
+        line-height: 1.5;
+        margin-bottom: 15px;
+      }
+      .details {
+        background-color: #f8f9fa;
+        padding: 20px;
+        border-radius: 4px;
+        margin: 20px 0;
+      }
+      .details p {
+        margin: 5px 0;
+      }
+      .footer {
+        text-align: center;
+        font-size: 12px;
+        color: #777;
+        padding: 15px;
+        background-color: #f4f6f8;
+      }
+      @media (max-width: 600px) {
+        .container {
+          margin: 20px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class='container'>
+      <div class='header'>
+        {{#if logoUrl}}
+          <img src='{{logoUrl}}' alt='Logo' />
+        {{/if}}
+        <h1>Nueva Factura Subida</h1>
+      </div>
+      <div class='content'>
+        <p>Hola,</p>
+        <p>Se ha subido una nueva factura al sistema por <strong>{{createdBy}}</strong>:</p>
+        <div class='details'>
+          <p><strong>Proveedor:</strong> {{providerName}}</p>
+          <p><strong>Número de Factura:</strong> {{invoiceNumber}}</p>
+          <p><strong>Fecha:</strong> {{date}}</p>
+          <p><strong>Tipo:</strong> {{type}}</p>
+          {{#if showAdditionalInfo}}
+          <p><strong>Monto Total:</strong> {{montoTotal}} {{moneda}}</p>
+          <p><strong>Categoría:</strong> {{category}}</p>
+          <p><strong>Proyecto:</strong> {{projectName}}</p>
+          <p><strong>Razón Social del Emisor:</strong> {{razonSocial}}</p>
+          {{#if direccionEmisor}}
+          <p><strong>Dirección del Emisor:</strong> {{direccionEmisor}}</p>
+          {{/if}}
+          <p><strong>Estado:</strong> {{status}}</p>
+          {{/if}}
+        </div>
+        <p>Puedes acceder a la factura a través del sistema.</p>
+        <p>Si tienes alguna pregunta, no dudes en contactarnos.</p>
+      </div>
+      <div class='footer'>
+        <p>© {{year}} Sistema de Facturación. Todos los derechos reservados.</p>
+      </div>
+    </div>
+  </body>
+</html> 

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang='es'>
+<head>
+    <meta charset='UTF-8' />
+    <meta name='viewport' content='width=device-width, initial-scale=1.0' />
+    <title>Bienvenido</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #ffffff;
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            color: #333;
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 500px;
+            margin: 40px auto;
+            padding: 0 20px;
+        }
+        .content {
+            color: #444;
+        }
+        .content p {
+            margin-bottom: 15px;
+        }
+        .details {
+            background-color: #f8f9fa;
+            padding: 15px;
+            margin: 20px 0;
+            border-left: 3px solid #1cb6e7;
+        }
+        .button {
+            display: inline-block;
+            padding: 10px 20px;
+            background-color: #1cb6e7;
+            color: #ffffff;
+            text-decoration: none;
+            border-radius: 2px;
+            margin: 20px 0;
+        }
+        .footer {
+            text-align: center;
+            font-size: 12px;
+            color: #999;
+            margin-top: 40px;
+        }
+    </style>
+</head>
+<body>
+    <div class='container'>
+        <div class='content'>
+            <p>Hola {{firstName}} {{lastName}},</p>
+            <p>Bienvenido a nuestra plataforma de proveedores.</p>
+            <div class='details'>
+                <p><strong>Email:</strong> {{email}}</p>
+                <p><strong>Contraseña temporal:</strong> {{password}}</p>
+            </div>
+            <a href='https://fact.marcostorresalarcon.com/auth/login' target='_blank' class='button'>Acceder</a>
+            <p>Si necesitas ayuda, contáctanos.</p>
+        </div>
+        <div class='footer'>
+            <p>© {{year}} Sistema de Facturación</p>
+        </div>
+    </div>
+</body>
+</html> 

@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <title>Nueva Factura de Gastos Subida</title>
+    <style>
+        body {
+            background: #f4f6f8;
+            font-family: 'Segoe UI', 'Helvetica Neue', Arial, 'Liberation Sans', sans-serif;
+            color: #333;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background: #fff;
+            border-radius: 10px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+            overflow: hidden;
+        }
+        .header {
+            background: #1cb6e7;
+            color: #fff;
+            text-align: center;
+            padding: 32px 20px 20px 20px;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 26px;
+            letter-spacing: 1px;
+        }
+        .content {
+            padding: 32px 24px 24px 24px;
+        }
+        .content p {
+            font-size: 16px;
+            margin-bottom: 18px;
+        }
+        .details-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 24px;
+        }
+        .details-table th, .details-table td {
+            padding: 10px 8px;
+            text-align: left;
+        }
+        .details-table th {
+            background: #f4f6f8;
+            color: #1cb6e7;
+            font-weight: 600;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        .details-table td {
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .footer {
+            background: #f4f6f8;
+            color: #888;
+            text-align: center;
+            font-size: 13px;
+            padding: 18px 10px;
+        }
+        @media (max-width: 600px) {
+            .container { margin: 10px; }
+            .content { padding: 16px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Nueva Factura de Gastos Subida</h1>
+        </div>
+        <div class="content">
+            <p>Se ha subido una nueva factura de gastos con los siguientes detalles:</p>
+            <table class="details-table">
+                <tr>
+                    <th>Proveedor</th>
+                    <td>{{providerName}}</td>
+                </tr>
+                <tr>
+                    <th>Número de Factura</th>
+                    <td>{{invoiceNumber}}</td>
+                </tr>
+                <tr>
+                    <th>Fecha</th>
+                    <td>{{date}}</td>
+                </tr>
+                <tr>
+                    <th>Tipo</th>
+                    <td>{{type}}</td>
+                </tr>
+                <tr>
+                    <th>Estado</th>
+                    <td>{{status}}</td>
+                </tr>
+                <tr>
+                    <th>Monto Total</th>
+                    <td><strong>{{montoTotal}} {{moneda}}</strong></td>
+                </tr>
+            </table>
+            <p style="margin-top: 24px;">Por favor, revise la factura y suba el acta de aprobación correspondiente si aplica.</p>
+        </div>
+        <div class="footer">
+            Este es un correo automático, por favor no responda a este mensaje.<br>
+            &copy; {{year}} Sistema de Gastos
+        </div>
+    </div>
+</body>
+</html> 

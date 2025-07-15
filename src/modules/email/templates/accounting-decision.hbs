@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang='es'>
+  <head>
+    <meta charset='UTF-8' />
+    <meta name='viewport' content='width=device-width, initial-scale=1.0' />
+    <title>Decisión de Contabilidad</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background-color: #f4f6f8;
+        font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+        color: #333;
+      }
+      .container {
+        max-width: 600px;
+        margin: 40px auto;
+        background-color: #ffffff;
+        border-radius: 8px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        overflow: hidden;
+      }
+      .header {
+        background-color: #1cb6e7;
+        text-align: center;
+        padding: 20px;
+      }
+      .header img {
+        max-width: 120px;
+        margin-bottom: 10px;
+      }
+      .header h1 {
+        margin: 0;
+        font-size: 24px;
+        color: #ffffff;
+      }
+      .content {
+        padding: 30px;
+      }
+      .content p {
+        font-size: 16px;
+        line-height: 1.5;
+        margin-bottom: 15px;
+      }
+      .details {
+        background-color: #f8f9fa;
+        padding: 20px;
+        border-radius: 4px;
+        margin: 20px 0;
+      }
+      .details p {
+        margin: 5px 0;
+      }
+      .footer {
+        text-align: center;
+        font-size: 12px;
+        color: #777;
+        padding: 15px;
+        background-color: #f4f6f8;
+      }
+      @media (max-width: 600px) {
+        .container {
+          margin: 20px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class='container'>
+      <div class='header'>
+        {{#if logoUrl}}
+          <img src='{{logoUrl}}' alt='Logo' />
+        {{/if}}
+        <h1>Decisión de Contabilidad</h1>
+      </div>
+      <div class='content'>
+        <p>Hola,</p>
+        <p>Se ha tomado una decisión sobre la factura:</p>
+        <div class='details'>
+          <p><strong>Número de Factura:</strong> {{invoiceNumber}}</p>
+          <p><strong>Estado:</strong> {{decisionText}}</p>
+          {{#if reason}}
+          <p><strong>Razón:</strong> {{reason}}</p>
+          {{/if}}
+        </div>
+        <p>Por favor, proceda con los siguientes pasos según corresponda.</p>
+        <p>Si tienes alguna pregunta, no dudes en contactarnos.</p>
+      </div>
+      <div class='footer'>
+        <p>© {{year}} Sistema de Facturación. Todos los derechos reservados.</p>
+      </div>
+    </div>
+  </body>
+</html> 

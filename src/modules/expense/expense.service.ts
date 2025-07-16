@@ -144,10 +144,12 @@ export class ExpenseService {
         max_tokens: 500,
       })
 
-      const jsonStringLimpio = response.choices[0]?.message?.content || ''
-        .replace(/^```json\s*/, '')
-        .replace(/\s*```$/, '')
-        .trim()
+      const jsonStringLimpio =
+        response.choices[0]?.message?.content ||
+        ''
+          .replace(/^```json\s*/, '')
+          .replace(/\s*```$/, '')
+          .trim()
       const jsonObject = JSON.parse(jsonStringLimpio)
 
       if (jsonObject.serie && jsonObject.correlativo) {
@@ -173,7 +175,6 @@ export class ExpenseService {
       let expenseStatus = 'pending'
       if (jsonObject.rucEmisor && jsonObject.serie && jsonObject.correlativo) {
         try {
-
           const sunatApiUrl = `https://api.sunat.gob.pe/v1/contribuyente/contribuyentes/10450256451/validarcomprobante`
           this.logger.log(
             `Usando RUC empresa HARDCODEADO para consulta SUNAT: 10450256451`
@@ -328,10 +329,7 @@ export class ExpenseService {
       // Validar que companyId esté presente
       if (!body.clientId) {
         this.logger.error('clientId es null o undefined')
-        throw new HttpException(
-          'clientId es requerido',
-          HttpStatus.BAD_REQUEST
-        )
+        throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
       }
 
       this.logger.log(`Creando expense con clientId: ${body.clientId}`)
@@ -359,10 +357,11 @@ export class ExpenseService {
       this.logger.log(`clientId guardado: ${body.clientId}`)
       this.logger.log(`Expense creado con ID: ${expense._id}`)
 
-      const project = await this.projectService.findOne(body.proyectId)
+      const project = await this.projectService.findOne(
+        body.proyectId,
+        body.clientId
+      )
       try {
-
-
         const creatorId = body.userId
         let creatorName = 'Usuario del sistema'
 
@@ -379,8 +378,6 @@ export class ExpenseService {
           }
         }
 
-
-
         if (body.userId) {
           try {
             const creator = await this.userService.findOne(body.userId)
@@ -391,8 +388,9 @@ export class ExpenseService {
                 creator.email,
                 {
                   providerName: creatorFullName,
-                  invoiceNumber: `${jsonObject.serie || ''}-${jsonObject.correlativo || ''
-                    }`,
+                  invoiceNumber: `${jsonObject.serie || ''}-${
+                    jsonObject.correlativo || ''
+                  }`,
                   date:
                     jsonObject.fechaEmision ||
                     new Date().toISOString().split('T')[0],
@@ -414,11 +412,12 @@ export class ExpenseService {
               error
             )
           }
-
         }
 
         try {
-          const colaboradores = await this.userService.findAll(new Types.ObjectId(body.clientId))
+          const colaboradores = await this.userService.findAll(
+            new Types.ObjectId(body.clientId)
+          )
 
           if (colaboradores && colaboradores.length > 0) {
             this.logger.debug(
@@ -448,8 +447,9 @@ export class ExpenseService {
                     colaborador.email,
                     {
                       providerName: creatorName,
-                      invoiceNumber: `${jsonObject.serie || ''}-${jsonObject.correlativo || ''
-                        }`,
+                      invoiceNumber: `${jsonObject.serie || ''}-${
+                        jsonObject.correlativo || ''
+                      }`,
                       date:
                         jsonObject.fechaEmision ||
                         new Date().toISOString().split('T')[0],
@@ -504,9 +504,7 @@ export class ExpenseService {
     }
   }
 
-  async create(
-    createExpenseDto: CreateExpenseDto
-  ): Promise<Expense> {
+  async create(createExpenseDto: CreateExpenseDto): Promise<Expense> {
     let fechaEmisionDate: Date | undefined = undefined
     if ('fechaEmision' in createExpenseDto && createExpenseDto.fechaEmision) {
       fechaEmisionDate = new Date(createExpenseDto.fechaEmision as any)
@@ -515,7 +513,7 @@ export class ExpenseService {
       if (typeof dataObj === 'string') {
         try {
           dataObj = JSON.parse(dataObj)
-        } catch { }
+        } catch {}
       }
       if (dataObj && dataObj.fechaEmision) {
         fechaEmisionDate = parseFechaEmision(dataObj.fechaEmision)
@@ -719,20 +717,15 @@ export class ExpenseService {
     }
 
     return this.expenseRepository
-      .findOneAndUpdate(
-        { _id: expenseIdObject },
-        updateExpenseDto,
-        { new: true }
-      )
+      .findOneAndUpdate({ _id: expenseIdObject }, updateExpenseDto, {
+        new: true,
+      })
       .populate('clientId')
       .populate('categoryId')
       .exec()
   }
 
-  async approveInvoice(
-    id: string,
-    approvalDto: ApprovalDto,
-  ) {
+  async approveInvoice(id: string, approvalDto: ApprovalDto) {
     const expense = await this.findOne(id)
     if (!expense) {
       throw new NotFoundException(`Factura con ID ${id} no encontrada`)
@@ -750,8 +743,6 @@ export class ExpenseService {
     let userName = null
     let userLastName = null
 
-
-
     const updatedExpense = await this.expenseRepository
       .findByIdAndUpdate(
         id,
@@ -765,11 +756,7 @@ export class ExpenseService {
       .exec()
 
     setImmediate(() => {
-      this.sendApprovalEmails(
-        expense,
-        validUserId,
-        userName
-      ).catch(error => {
+      this.sendApprovalEmails(expense, validUserId, userName).catch(error => {
         this.logger.error('Error al enviar correos de aprobación:', error)
       })
     })
@@ -796,8 +783,7 @@ export class ExpenseService {
         try {
           const approver = await this.userService.findOne(validUserId)
           if (approver) {
-            approverName =
-              approver.name
+            approverName = approver.name
 
             this.logger.debug(
               `Información de aprobador obtenida de la BD: ${approverName}`
@@ -829,8 +815,6 @@ export class ExpenseService {
             this.logger.debug(
               `Enviando notificación de aprobación a ${creator.email}, rol: ${creator.role}`
             )
-
-
           } else {
             this.logger.warn(
               'No se encontró email para el creador de la factura'
@@ -849,7 +833,9 @@ export class ExpenseService {
       }
 
       try {
-        const colaboradores = await this.userService.findAll(new Types.ObjectId(expense.clientId))
+        const colaboradores = await this.userService.findAll(
+          new Types.ObjectId(expense.clientId)
+        )
 
         if (colaboradores && colaboradores.length > 0) {
           this.logger.debug(
@@ -864,10 +850,10 @@ export class ExpenseService {
                 await this.emailService.sendInvoiceApprovedToColaborador(
                   colaborador.email,
                   {
-                    providerName:
-                      colaborador.name,
-                    invoiceNumber: `${invoiceData.serie || ''}-${invoiceData.correlativo || ''
-                      }`,
+                    providerName: colaborador.name,
+                    invoiceNumber: `${invoiceData.serie || ''}-${
+                      invoiceData.correlativo || ''
+                    }`,
                     date:
                       invoiceData.fechaEmision ||
                       new Date().toISOString().split('T')[0],
@@ -926,7 +912,6 @@ export class ExpenseService {
     let userName = null
     let userLastName = null
 
-
     const updatedExpense = await this.expenseRepository
       .findByIdAndUpdate(
         id,
@@ -975,8 +960,7 @@ export class ExpenseService {
         try {
           const rejector = await this.userService.findOne(validUserId)
           if (rejector) {
-            rejectorName =
-              rejector.name
+            rejectorName = rejector.name
 
             this.logger.debug(
               `Información de rechazador obtenida de la BD: ${rejectorName}`
@@ -1010,8 +994,6 @@ export class ExpenseService {
             this.logger.debug(
               `Enviando notificación de rechazo a ${creator.email}, rol: ${creator.role}`
             )
-
-
           } else {
             this.logger.warn(
               'No se encontró email para el creador de la factura'
@@ -1028,8 +1010,6 @@ export class ExpenseService {
           'La factura no tiene un creador asignado (createdBy es null)'
         )
       }
-
-
     } catch (error) {
       this.logger.error('Error al enviar notificación de rechazo:', error)
     }

@@ -90,7 +90,6 @@ export class ExpenseService {
     details: any
     message: string
   } {
-    this.logger.log('Interpreting SUNAT response...', sunatData)
 
     if (sunatData.success === true && sunatData.data?.estadoCp === '0') {
       return {
@@ -112,9 +111,6 @@ export class ExpenseService {
         message: 'El comprobante no existe en SUNAT.',
       }
     } else {
-      this.logger.warn(
-        `Uninterpretable SUNAT response: ${JSON.stringify(sunatData)}`
-      )
       return {
         status: 'ERROR_SUNAT',
         details: sunatData,
@@ -124,7 +120,7 @@ export class ExpenseService {
   }
 
   async analyzeImageWithUrl(body: CreateExpenseDto): Promise<Expense> {
-    console.log('body', body)
+    const configSunat = await this.sunatConfigService.findOne(body.clientId)
     const prompt = PROMPT1
     try {
       const response = await this.openai.chat.completions.create({
@@ -177,59 +173,22 @@ export class ExpenseService {
       let expenseStatus = 'pending'
       if (jsonObject.rucEmisor && jsonObject.serie && jsonObject.correlativo) {
         try {
-          const sunatApiUrl = `https://api.sunat.gob.pe/v1/contribuyente/contribuyentes/10450256451/validarcomprobante`
+          const sunatApiUrl = `https://api.sunat.gob.pe/v1/contribuyente/contribuyentes/${configSunat.ruc}/validarcomprobante`
           this.logger.log(
-            `Usando RUC empresa HARDCODEADO para consulta SUNAT: 10450256451`
+            `Usando RUC empresa HARDCODEADO para consulta SUNAT: ${configSunat.ruc}`
           )
 
           const sunatToken = await this.generateTokenSunat(body.clientId)
 
           if (sunatToken?.access_token) {
             // Formatear fecha al formato YYYY-MM-DD para SUNAT
-            let fechaFormateada = jsonObject.fechaEmision
-            if (fechaFormateada) {
-              // Convertir diferentes formatos a YYYY-MM-DD
-              if (fechaFormateada.includes('-')) {
-                const partes = fechaFormateada.split('-')
-                if (partes.length === 3) {
-                  if (partes[0].length === 2) {
-                    // DD-MM-YYYY -> YYYY-MM-DD
-                    fechaFormateada = `${partes[2]}-${partes[1].padStart(2, '0')}-${partes[0].padStart(2, '0')}`
-                  } else if (partes[0].length === 4) {
-                    // Ya está en YYYY-MM-DD, solo asegurar formato
-                    fechaFormateada = `${partes[0]}-${partes[1].padStart(2, '0')}-${partes[2].padStart(2, '0')}`
-                  }
-                }
-              } else if (fechaFormateada.includes('/')) {
-                const partes = fechaFormateada.split('/')
-                if (partes.length === 3 && partes[0].length === 2) {
-                  // DD/MM/YYYY -> YYYY-MM-DD
-                  fechaFormateada = `${partes[2]}-${partes[1].padStart(2, '0')}-${partes[0].padStart(2, '0')}`
-                }
-              }
+            let fechaFormateada = jsonObject.fechaEmision.replace(/-/g, '/')
 
-              // Validar que la fecha no sea muy futura (podría indicar error de OCR)
-              const fechaValidacion = new Date(fechaFormateada)
-              const fechaActual = new Date()
-              const unAnioFuturo = new Date()
-              unAnioFuturo.setFullYear(fechaActual.getFullYear() + 1)
+            this.logger.log(
+              `Fecha original: ${jsonObject.fechaEmision}, Fecha formateada para SUNAT: ${fechaFormateada}`
+            )
 
-              if (fechaValidacion > unAnioFuturo) {
-                this.logger.warn(
-                  `Fecha posiblemente incorrecta (muy futura): ${fechaFormateada}. Podría ser error de OCR.`
-                )
-                // Intentar con el año anterior (error común de OCR)
-                const añoAnterior = fechaValidacion.getFullYear() - 1
-                fechaFormateada = `${añoAnterior}-${fechaValidacion.getMonth() + 1}-${fechaValidacion.getDate()}`
-                this.logger.log(
-                  `Intentando con año anterior: ${fechaFormateada}`
-                )
-              }
 
-              this.logger.debug(
-                `Fecha original: ${jsonObject.fechaEmision}, Fecha formateada para SUNAT: ${fechaFormateada}`
-              )
-            }
 
             const params = {
               numRuc: jsonObject.rucEmisor,
@@ -244,97 +203,41 @@ export class ExpenseService {
               fechaEmision: fechaFormateada,
               monto: jsonObject.montoTotal?.toFixed(2),
             }
-
-            this.logger.log(`Validando con SUNAT - RUC Empresa: 10450256451`)
-            this.logger.log(`Parámetros SUNAT: ${JSON.stringify(params)}`)
-
             const headers = {
               Authorization: `Bearer ${sunatToken.access_token}`,
               'Content-Type': 'application/json',
             }
 
-            this.logger.debug(
-              `Requesting SUNAT: URL=${sunatApiUrl}, Params=${JSON.stringify(params)}, Headers=${JSON.stringify(headers)}`
-            )
-
             try {
               const response = await firstValueFrom(
                 this.httpService.post(sunatApiUrl, params, { headers })
               )
-
-              this.logger.log(`SUNAT response status: ${response.status}`)
-              this.logger.debug(
-                `SUNAT response data: ${JSON.stringify(response.data)}`
-              )
               sunatValidationResult = this.interpretSunatResponse(response.data)
+              expenseStatus = sunatValidationResult.status
 
-              // Actualizar status basado en validación SUNAT
-              switch (sunatValidationResult.status) {
-                case 'VALIDO_ACEPTADO':
-                  expenseStatus = 'sunat_valid'
-                  break
-                case 'VALIDO_NO_PERTENECE':
-                  expenseStatus = 'sunat_valid_not_ours'
-                  break
-                case 'NO_ENCONTRADO':
-                  expenseStatus = 'sunat_not_found'
-                  break
-                default:
-                  expenseStatus = 'sunat_error'
-              }
-
-              this.logger.log(
-                `SUNAT validation completed. Status: ${sunatValidationResult.status}`
-              )
             } catch (error) {
-              this.logger.error(
-                `SUNAT API Error: ${error.message}`,
-                error.stack
-              )
-
-              // Capturar detalles específicos del error HTTP
-              let errorDetails = error.message
-              if (error.response) {
-                errorDetails = `Status: ${error.response.status}, Data: ${JSON.stringify(error.response.data)}`
-                this.logger.error(`SUNAT Error Response: ${errorDetails}`)
-              }
-
               expenseStatus = 'sunat_error'
               sunatValidationResult = {
                 status: 'ERROR_SUNAT',
-                details: errorDetails,
+                details: error.message,
                 message: 'Error en la comunicación con SUNAT.',
               }
             }
           } else {
-            this.logger.error('No se pudo obtener token de SUNAT')
             expenseStatus = 'sunat_error'
           }
         } catch (error) {
-          this.logger.error(
-            `Error en validación SUNAT: ${error.message}`,
-            error.stack
-          )
           expenseStatus = 'sunat_error'
         }
-      } else {
-        this.logger.warn('Datos insuficientes para validación SUNAT', {
-          rucEmisor: jsonObject.rucEmisor,
-          serie: jsonObject.serie,
-          correlativo: jsonObject.correlativo,
-        })
       }
 
       const categoryObject = Types.ObjectId.createFromHexString(body.categoryId)
       const projectObject = Types.ObjectId.createFromHexString(body.proyectId)
 
-      // Validar que companyId esté presente
       if (!body.clientId) {
-        this.logger.error('clientId es null o undefined')
         throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
       }
 
-      this.logger.log(`Creando expense con clientId: ${body.clientId}`)
 
       const expense = await this.expenseRepository.create({
         categoryId: categoryObject,
@@ -351,13 +254,6 @@ export class ExpenseService {
         fechaEmision: jsonObject.fechaEmision,
       })
 
-      this.logger.log('=== RESULTADO FINAL ===')
-      this.logger.log(`Status final: ${expenseStatus}`)
-      this.logger.log(
-        `SUNAT Validation Result: ${JSON.stringify(sunatValidationResult)}`
-      )
-      this.logger.log(`clientId guardado: ${body.clientId}`)
-      this.logger.log(`Expense creado con ID: ${expense._id}`)
 
       const project = await this.projectService.findOne(
         body.proyectId,

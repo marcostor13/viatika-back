@@ -6,6 +6,7 @@ export interface SunatConfigDocument extends Document {
   clientId: Types.ObjectId
   clientIdSunat: string
   clientSecret: string
+  ruc: string
   isActive: boolean
 }
 
@@ -19,6 +20,9 @@ export class SunatConfig {
 
   @Prop({ required: true })
   clientSecret: string
+
+  @Prop({ required: true })
+  ruc: string
 
   @Prop({ default: true })
   isActive: boolean

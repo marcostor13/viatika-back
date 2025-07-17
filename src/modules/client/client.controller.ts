@@ -19,7 +19,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard'
 @Controller('client')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class ClientController {
-  constructor(private readonly clientService: ClientService) {}
+  constructor(private readonly clientService: ClientService) { }
 
   @Post()
   @Roles(ROLES.SUPER_ADMIN)
@@ -34,13 +34,13 @@ export class ClientController {
   }
 
   @Get(':id')
-  @Roles(ROLES.SUPER_ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
   findOne(@Param('id') id: string) {
     return this.clientService.findOne(id)
   }
 
   @Patch(':id')
-  @Roles(ROLES.SUPER_ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
   update(@Param('id') id: string, @Body() updateClientDto: UpdateClientDto) {
     return this.clientService.update(id, updateClientDto)
   }

@@ -80,8 +80,8 @@ export class ExpenseController {
         message: 'Credenciales SUNAT funcionando correctamente',
         token: {
           access_token: token.access_token ? 'PRESENTE' : 'AUSENTE',
-          token_type: token.token_type,
-          expires_in: token.expires_in,
+          // token_type: token.token_type,
+          // expires_in: token.expires_in,
         },
       }
     } catch (error) {

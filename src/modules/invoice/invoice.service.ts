@@ -251,20 +251,25 @@ export class InvoiceService {
     const client_id = process.env.ID_SUNAT
     const client_secret = process.env.KEY_SUNAT
 
+
     const data = {
       grant_type: grant_type,
       scope: scope,
       client_id: client_id,
       client_secret: client_secret,
     }
-    try {
-      const response = await firstValueFrom(
-        this.httpService.post(api, data, { headers })
-      )
-      return response.data
-    } catch (error) {
-      console.log(error)
-    }
+
+    console.log(data)
+
+    return { access_token: '1234567890' }
+    // try {
+    //   const response = await firstValueFrom(
+    //     this.httpService.post(api, data, { headers })
+    //   )
+    //   return response.data
+    // } catch (error) {
+    //   // console.log(error)
+    // }
   }
 
   async validateInvoiceFromImage(

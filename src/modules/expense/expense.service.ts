@@ -44,12 +44,10 @@ export class ExpenseService {
     this.openai = new OpenAI({ apiKey })
   }
 
-  // Métodos para validación SUNAT
   async generateTokenSunat(clientId: string) {
     try {
-      // Obtener credenciales desde la base de datos
       const credentials =
-        await this.sunatConfigService.getActiveCredentials(clientId)
+        await this.sunatConfigService.getCredentials(clientId)
 
       console.log('credentials', credentials)
       const client_id = credentials.clientId
@@ -67,12 +65,16 @@ export class ExpenseService {
         grant_type: grant_type,
         scope: scope,
         client_id: client_id,
-        client_secret: client_secret,
+        client_secret: client_secret
       }
-
       const response = await firstValueFrom(
         this.httpService.post(api, data, { headers })
       )
+
+      await this.sunatConfigService.update(credentials._id, {
+        isActive: true,
+      })
+
       return response.data
     } catch (error) {
       this.logger.error('Error al generar token de SUNAT', error)
@@ -388,9 +390,8 @@ export class ExpenseService {
                 creator.email,
                 {
                   providerName: creatorFullName,
-                  invoiceNumber: `${jsonObject.serie || ''}-${
-                    jsonObject.correlativo || ''
-                  }`,
+                  invoiceNumber: `${jsonObject.serie || ''}-${jsonObject.correlativo || ''
+                    }`,
                   date:
                     jsonObject.fechaEmision ||
                     new Date().toISOString().split('T')[0],
@@ -447,9 +448,8 @@ export class ExpenseService {
                     colaborador.email,
                     {
                       providerName: creatorName,
-                      invoiceNumber: `${jsonObject.serie || ''}-${
-                        jsonObject.correlativo || ''
-                      }`,
+                      invoiceNumber: `${jsonObject.serie || ''}-${jsonObject.correlativo || ''
+                        }`,
                       date:
                         jsonObject.fechaEmision ||
                         new Date().toISOString().split('T')[0],
@@ -513,7 +513,7 @@ export class ExpenseService {
       if (typeof dataObj === 'string') {
         try {
           dataObj = JSON.parse(dataObj)
-        } catch {}
+        } catch { }
       }
       if (dataObj && dataObj.fechaEmision) {
         fechaEmisionDate = parseFechaEmision(dataObj.fechaEmision)
@@ -851,9 +851,8 @@ export class ExpenseService {
                   colaborador.email,
                   {
                     providerName: colaborador.name,
-                    invoiceNumber: `${invoiceData.serie || ''}-${
-                      invoiceData.correlativo || ''
-                    }`,
+                    invoiceNumber: `${invoiceData.serie || ''}-${invoiceData.correlativo || ''
+                      }`,
                     date:
                       invoiceData.fechaEmision ||
                       new Date().toISOString().split('T')[0],

@@ -2,6 +2,7 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose'
 import { Document, Types } from 'mongoose'
 
 export interface SunatConfigDocument extends Document {
+  _id: string
   clientId: Types.ObjectId
   clientIdSunat: string
   clientSecret: string

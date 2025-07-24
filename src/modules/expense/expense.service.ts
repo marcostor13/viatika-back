@@ -46,8 +46,7 @@ export class ExpenseService {
 
   async generateTokenSunat(clientId: string) {
     try {
-      const credentials =
-        await this.sunatConfigService.getCredentials(clientId)
+      const credentials = await this.sunatConfigService.getCredentials(clientId)
 
       console.log('credentials', credentials)
       const client_id = credentials.clientId
@@ -65,7 +64,7 @@ export class ExpenseService {
         grant_type: grant_type,
         scope: scope,
         client_id: client_id,
-        client_secret: client_secret
+        client_secret: client_secret,
       }
       const response = await firstValueFrom(
         this.httpService.post(api, data, { headers })
@@ -90,7 +89,6 @@ export class ExpenseService {
     details: any
     message: string
   } {
-
     if (sunatData.success === true && sunatData.data?.estadoCp === '0') {
       return {
         status: 'VALIDO_ACEPTADO',
@@ -188,8 +186,6 @@ export class ExpenseService {
               `Fecha original: ${jsonObject.fechaEmision}, Fecha formateada para SUNAT: ${fechaFormateada}`
             )
 
-
-
             const params = {
               numRuc: jsonObject.rucEmisor,
               codComp:
@@ -214,7 +210,6 @@ export class ExpenseService {
               )
               sunatValidationResult = this.interpretSunatResponse(response.data)
               expenseStatus = sunatValidationResult.status
-
             } catch (error) {
               expenseStatus = 'sunat_error'
               sunatValidationResult = {
@@ -238,7 +233,6 @@ export class ExpenseService {
         throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
       }
 
-
       const expense = await this.expenseRepository.create({
         categoryId: categoryObject,
         proyectId: projectObject,
@@ -253,7 +247,6 @@ export class ExpenseService {
         createdBy: body.userId || 'system',
         fechaEmision: jsonObject.fechaEmision,
       })
-
 
       const project = await this.projectService.findOne(
         body.proyectId,
@@ -286,8 +279,9 @@ export class ExpenseService {
                 creator.email,
                 {
                   providerName: creatorFullName,
-                  invoiceNumber: `${jsonObject.serie || ''}-${jsonObject.correlativo || ''
-                    }`,
+                  invoiceNumber: `${jsonObject.serie || ''}-${
+                    jsonObject.correlativo || ''
+                  }`,
                   date:
                     jsonObject.fechaEmision ||
                     new Date().toISOString().split('T')[0],
@@ -344,8 +338,9 @@ export class ExpenseService {
                     colaborador.email,
                     {
                       providerName: creatorName,
-                      invoiceNumber: `${jsonObject.serie || ''}-${jsonObject.correlativo || ''
-                        }`,
+                      invoiceNumber: `${jsonObject.serie || ''}-${
+                        jsonObject.correlativo || ''
+                      }`,
                       date:
                         jsonObject.fechaEmision ||
                         new Date().toISOString().split('T')[0],
@@ -409,7 +404,7 @@ export class ExpenseService {
       if (typeof dataObj === 'string') {
         try {
           dataObj = JSON.parse(dataObj)
-        } catch { }
+        } catch {}
       }
       if (dataObj && dataObj.fechaEmision) {
         fechaEmisionDate = parseFechaEmision(dataObj.fechaEmision)
@@ -627,9 +622,16 @@ export class ExpenseService {
       throw new NotFoundException(`Factura con ID ${id} no encontrada`)
     }
 
-    if (expense.status !== 'pending') {
+    if (expense.status === 'approved') {
       throw new HttpException(
-        `La factura ya ha sido ${expense.status === 'approved' ? 'aprobada' : 'rechazada'}`,
+        'La factura ya ha sido aprobada',
+        HttpStatus.BAD_REQUEST
+      )
+    }
+
+    if (expense.status === 'rejected') {
+      throw new HttpException(
+        'La factura ya ha sido rechazada',
         HttpStatus.BAD_REQUEST
       )
     }
@@ -747,8 +749,9 @@ export class ExpenseService {
                   colaborador.email,
                   {
                     providerName: colaborador.name,
-                    invoiceNumber: `${invoiceData.serie || ''}-${invoiceData.correlativo || ''
-                      }`,
+                    invoiceNumber: `${invoiceData.serie || ''}-${
+                      invoiceData.correlativo || ''
+                    }`,
                     date:
                       invoiceData.fechaEmision ||
                       new Date().toISOString().split('T')[0],
@@ -789,9 +792,16 @@ export class ExpenseService {
       throw new NotFoundException(`Factura con ID ${id} no encontrada`)
     }
 
-    if (expense.status !== 'pending') {
+    if (expense.status === 'approved') {
       throw new HttpException(
-        `La factura ya ha sido ${expense.status === 'approved' ? 'aprobada' : 'rechazada'}`,
+        'La factura ya ha sido aprobada',
+        HttpStatus.BAD_REQUEST
+      )
+    }
+
+    if (expense.status === 'rejected') {
+      throw new HttpException(
+        'La factura ya ha sido rechazada',
         HttpStatus.BAD_REQUEST
       )
     }

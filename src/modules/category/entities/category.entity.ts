@@ -21,7 +21,7 @@ export class Category {
   @Prop({ required: true })
   name: string
 
-  @Prop({ required: true, unique: true })
+  @Prop({ unique: true })
   key: string
 
   @Prop()

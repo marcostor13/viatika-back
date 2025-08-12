@@ -26,12 +26,11 @@ import { Types } from 'mongoose'
 export class ExpenseController {
   private readonly logger = new Logger(ExpenseController.name)
 
-  constructor(private readonly expenseService: ExpenseService) { }
+  constructor(private readonly expenseService: ExpenseService) {}
 
   @Post('analyze-image')
   @UseGuards(JwtAuthGuard, RolesGuard)
   analyzeImage(@Body() body: CreateExpenseDto, @Request() req) {
-
     const clientId = body.clientId || req.user?.clientId
     if (!clientId) {
       throw new Error('No se pudo obtener la empresa del usuario ni del body')
@@ -47,27 +46,6 @@ export class ExpenseController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   create(@Body() createExpenseDto: CreateExpenseDto) {
     return this.expenseService.create(createExpenseDto)
-  }
-
-  @Get(':clientId')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-
-  findAll(
-    @Param('clientId') clientId: string,
-    @Request() req,
-    @Query() query: any,
-    @Query('sortBy') sortBy?: string,
-    @Query('sortOrder') sortOrder?: 'asc' | 'desc'
-  ) {
-    if (sortBy) query.sortBy = sortBy
-    if (sortOrder) query.sortOrder = sortOrder
-
-    return this.expenseService.findAll(clientId, query)
-  }
-
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.expenseService.findOne(id)
   }
 
   @Get('test-sunat-credentials/:clientId')
@@ -94,22 +72,36 @@ export class ExpenseController {
     }
   }
 
+  @Get('client/:clientId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  findAll(
+    @Param('clientId') clientId: string,
+    @Request() req,
+    @Query() query: any,
+    @Query('sortBy') sortBy?: string,
+    @Query('sortOrder') sortOrder?: 'asc' | 'desc'
+  ) {
+    if (sortBy) query.sortBy = sortBy
+    if (sortOrder) query.sortOrder = sortOrder
+
+    return this.expenseService.findAll(clientId, query)
+  }
+
+  @Get(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  findOne(@Param('id') id: string) {
+    return this.expenseService.findOne(id)
+  }
+
   @Get(':id/sunat-validation')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  getSunatValidation(
-    @Param('id') id: string
-  ) {
+  getSunatValidation(@Param('id') id: string) {
     return this.expenseService.getSunatValidationInfo(id)
   }
 
-
-
   @Patch(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  update(
-    @Param('id') id: string,
-    @Body() updateExpenseDto: UpdateExpenseDto
-  ) {
+  update(@Param('id') id: string, @Body() updateExpenseDto: UpdateExpenseDto) {
     return this.expenseService.update(id, updateExpenseDto)
   }
 

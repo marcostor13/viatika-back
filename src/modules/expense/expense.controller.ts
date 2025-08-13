@@ -48,6 +48,27 @@ export class ExpenseController {
     return this.expenseService.create(createExpenseDto)
   }
 
+  @Get(':clientId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  findAll(
+    @Param('clientId') clientId: string,
+    @Request() req,
+    @Query() query: any,
+    @Query('sortBy') sortBy?: string,
+    @Query('sortOrder') sortOrder?: 'asc' | 'desc'
+  ) {
+    if (sortBy) query.sortBy = sortBy
+    if (sortOrder) query.sortOrder = sortOrder
+
+    return this.expenseService.findAll(clientId, query)
+  }
+
+  @Get('invoice/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  findOne(@Param('id') id: string) {
+    return this.expenseService.findOne(id)
+  }
+
   @Get('test-sunat-credentials/:clientId')
   @UseGuards(JwtAuthGuard, RolesGuard)
   async testSunatCredentials(@Param('clientId') clientId: string) {
@@ -72,40 +93,19 @@ export class ExpenseController {
     }
   }
 
-  @Get('client/:clientId')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  findAll(
-    @Param('clientId') clientId: string,
-    @Request() req,
-    @Query() query: any,
-    @Query('sortBy') sortBy?: string,
-    @Query('sortOrder') sortOrder?: 'asc' | 'desc'
-  ) {
-    if (sortBy) query.sortBy = sortBy
-    if (sortOrder) query.sortOrder = sortOrder
-
-    return this.expenseService.findAll(clientId, query)
-  }
-
-  @Get(':id')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  findOne(@Param('id') id: string) {
-    return this.expenseService.findOne(id)
-  }
-
-  @Get(':id/sunat-validation')
+  @Get('invoice/:id/sunat-validation')
   @UseGuards(JwtAuthGuard, RolesGuard)
   getSunatValidation(@Param('id') id: string) {
     return this.expenseService.getSunatValidationInfo(id)
   }
 
-  @Patch(':id')
+  @Patch('invoice/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   update(@Param('id') id: string, @Body() updateExpenseDto: UpdateExpenseDto) {
     return this.expenseService.update(id, updateExpenseDto)
   }
 
-  @Patch(':id/approve')
+  @Patch('invoice/:id/approve')
   @UseGuards(JwtAuthGuard, RolesGuard)
   approveInvoice(
     @Param('id') id: string,
@@ -133,7 +133,7 @@ export class ExpenseController {
     return this.expenseService.approveInvoice(id, approvalDto)
   }
 
-  @Patch(':id/reject')
+  @Patch('invoice/:id/reject')
   @UseGuards(JwtAuthGuard, RolesGuard)
   rejectInvoice(
     @Param('id') id: string,
@@ -154,14 +154,14 @@ export class ExpenseController {
       approvalDto.userId = req.user.sub
     } else {
       this.logger.warn(
-        `No se encontró ID de usuario en el JWT, se usará el proporcionado: ${approvalDto.userId || 'ninguno'}`
+        `No se encontró ID de usuario del JWT, se usará el proporcionado: ${approvalDto.userId || 'ninguno'}`
       )
     }
 
     return this.expenseService.rejectInvoice(id, approvalDto)
   }
 
-  @Delete(':id')
+  @Delete('invoice/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   remove(@Param('id') id: string) {
     return this.expenseService.remove(id)

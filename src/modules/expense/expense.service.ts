@@ -483,16 +483,19 @@ export class ExpenseService {
     if (filters.status) query.status = filters.status
 
     if (filters.dateFrom || filters.dateTo) {
-      query.fechaEmision = {}
       if (filters.dateFrom) {
         const dateFrom = new Date(filters.dateFrom)
         dateFrom.setUTCHours(0, 0, 0, 0)
-        query.fechaEmision.$gte = dateFrom
+        query.createdAt = { $gte: dateFrom }
       }
       if (filters.dateTo) {
         const dateTo = new Date(filters.dateTo)
         dateTo.setUTCHours(23, 59, 59, 999)
-        query.fechaEmision.$lte = dateTo
+        if (query.createdAt) {
+          query.createdAt.$lte = dateTo
+        } else {
+          query.createdAt = { $lte: dateTo }
+        }
       }
     }
     if (filters.amountMin || filters.amountMax) {

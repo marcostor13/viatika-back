@@ -410,10 +410,12 @@ export class ExpenseService {
         fechaEmisionDate = parseFechaEmision(dataObj.fechaEmision)
       }
     }
+
     const createdExpense = new this.expenseRepository({
       ...createExpenseDto,
       clientId: new Types.ObjectId(createExpenseDto.clientId),
       fechaEmision: fechaEmisionDate,
+      createdBy: createExpenseDto.userId,
     })
     return createdExpense.save()
   }
@@ -482,22 +484,6 @@ export class ExpenseService {
 
     if (filters.status) query.status = filters.status
 
-    if (filters.dateFrom || filters.dateTo) {
-      if (filters.dateFrom) {
-        const dateFrom = new Date(filters.dateFrom)
-        dateFrom.setUTCHours(0, 0, 0, 0)
-        query.createdAt = { $gte: dateFrom }
-      }
-      if (filters.dateTo) {
-        const dateTo = new Date(filters.dateTo)
-        dateTo.setUTCHours(23, 59, 59, 999)
-        if (query.createdAt) {
-          query.createdAt.$lte = dateTo
-        } else {
-          query.createdAt = { $lte: dateTo }
-        }
-      }
-    }
     if (filters.amountMin || filters.amountMax) {
       query.total = {}
       if (filters.amountMin) query.total.$gte = Number(filters.amountMin)
@@ -516,19 +502,8 @@ export class ExpenseService {
     const sortBy = filters.sortBy || 'fechaEmision'
     const sortOrder = filters.sortOrder || 'desc'
 
-    let sortField = sortBy
-    if (sortBy === 'fechaEmision') {
-      sortField = 'fechaEmision'
-    } else if (sortBy === 'createdAt') {
-      sortField = 'createdAt'
-    }
-
     const sortOptions: any = {}
-    sortOptions[sortField] = sortOrder === 'desc' ? -1 : 1
-
-    if (sortBy === 'fechaEmision') {
-      sortOptions['createdAt'] = sortOrder === 'desc' ? -1 : 1
-    }
+    sortOptions[sortBy] = sortOrder === 'desc' ? -1 : 1
 
     const result = await this.expenseRepository
       .find(query)
@@ -537,7 +512,46 @@ export class ExpenseService {
       .sort(sortOptions)
       .exec()
 
-    return result
+    let filteredResult = result
+    if (filters.dateFrom || filters.dateTo) {
+      filteredResult = result.filter(expense => {
+        if (!expense.fechaEmision) return false
+
+        const [day, month, year] = expense.fechaEmision.split('-').map(Number)
+        const expenseDate = new Date(year, month - 1, day)
+
+        let matches = true
+
+        if (filters.dateFrom) {
+          const [yearFrom, monthFrom, dayFrom] = filters.dateFrom
+            .split('-')
+            .map(Number)
+          const fromDate = new Date(yearFrom, monthFrom - 1, dayFrom)
+          matches = matches && expenseDate >= fromDate
+        }
+
+        if (filters.dateTo) {
+          const [yearTo, monthTo, dayTo] = filters.dateTo.split('-').map(Number)
+          const toDate = new Date(yearTo, monthTo - 1, dayTo)
+          matches = matches && expenseDate <= toDate
+        }
+
+        return matches
+      })
+    }
+
+    if (sortBy === 'fechaEmision') {
+      return filteredResult.sort((a, b) => {
+        if (!a.fechaEmision || !b.fechaEmision) return 0
+        const dateA = new Date(a.fechaEmision.split('-').reverse().join('-'))
+        const dateB = new Date(b.fechaEmision.split('-').reverse().join('-'))
+        return sortOrder === 'desc'
+          ? dateB.getTime() - dateA.getTime()
+          : dateA.getTime() - dateB.getTime()
+      })
+    }
+
+    return filteredResult
   }
 
   async findOne(id: string): Promise<Expense | null> {

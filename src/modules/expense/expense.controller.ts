@@ -44,7 +44,12 @@ export class ExpenseController {
 
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  create(@Body() createExpenseDto: CreateExpenseDto) {
+  create(@Body() createExpenseDto: CreateExpenseDto, @Request() req) {
+    const userId = req.user?.sub || req.user?._id || createExpenseDto.userId
+    if (userId) {
+      createExpenseDto.userId = userId
+    }
+
     return this.expenseService.create(createExpenseDto)
   }
 

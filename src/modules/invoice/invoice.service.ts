@@ -76,7 +76,7 @@ export class InvoiceService {
       if (typeof dataObj === 'string') {
         try {
           dataObj = JSON.parse(dataObj)
-        } catch { }
+        } catch {}
       }
       if (dataObj && dataObj.fechaEmision) {
         const parts = dataObj.fechaEmision.split(/[\/\-]/)
@@ -180,9 +180,7 @@ export class InvoiceService {
     status: InvoiceStatus,
     companyId: string,
     reason?: string
-  ) {
-
-  }
+  ) {}
 
   async uploadActaAceptacion(id: string, fileBuffer: Buffer): Promise<Invoice> {
     const invoice = await this.invoiceModel.findById(id)
@@ -191,20 +189,18 @@ export class InvoiceService {
     }
 
     // Convertimos el buffer a base64 para almacenamiento seguro
-    const base64File = fileBuffer.toString('base64');
+    const base64File = fileBuffer.toString('base64')
 
     // Actualizamos la factura y retornamos el documento actualizado, garantizando el tipado correcto
-    const updatedInvoice = await this.invoiceModel.findByIdAndUpdate(
-      id,
-      { actaAceptacion: base64File },
-      { new: true }
-    ).exec();
+    const updatedInvoice = await this.invoiceModel
+      .findByIdAndUpdate(id, { actaAceptacion: base64File }, { new: true })
+      .exec()
 
     if (!updatedInvoice) {
-      throw new NotFoundException(`Factura con ID ${id} no encontrada`);
+      throw new NotFoundException(`Factura con ID ${id} no encontrada`)
     }
 
-    return updatedInvoice;
+    return updatedInvoice
   }
 
   async downloadActaAceptacion(
@@ -250,7 +246,6 @@ export class InvoiceService {
     const scope = 'https://api.sunat.gob.pe/v1/contribuyente/contribuyentes'
     const client_id = process.env.ID_SUNAT
     const client_secret = process.env.KEY_SUNAT
-
 
     const data = {
       grant_type: grant_type,
@@ -641,7 +636,6 @@ export class InvoiceService {
 
       // Obtener usuarios con roles específicos para enviar notificaciones
 
-
       return {
         success: true,
         message: 'Archivos subidos exitosamente',
@@ -684,12 +678,7 @@ export class InvoiceService {
     }
   }
 
-  async rejectInvoice(
-    invoiceId: string,
-    rejectionReason: string
-  ) {
-
-  }
+  async rejectInvoice(invoiceId: string, rejectionReason: string) {}
 
   async updatePaymentStatus(
     id: string,
@@ -700,19 +689,16 @@ export class InvoiceService {
     //   this.logger.debug(
     //     `[DEBUG] Iniciando actualización de estado de pago de factura ${id} a ${status}`
     //   )
-
     //   const invoice = await this.invoiceModel.findById(id)
     //   if (!invoice) {
     //     this.logger.error(`Factura con ID ${id} no encontrada`)
     //     throw new NotFoundException(`Factura con ID ${id} no encontrada`)
     //   }
-
     //   invoice.paymentStatus = status
     //   if (status === 'REJECTED' && rejectionReason) {
     //     invoice.rejectionReason = rejectionReason
     //   }
     //   const updatedInvoice = await invoice.save()
-
     //   this.logger.debug(
     //     `[DEBUG] Estado de pago actualizado: ${JSON.stringify(
     //       {
@@ -726,12 +712,10 @@ export class InvoiceService {
     //       2
     //     )}`
     //   )
-
     //   // Obtener todos los proveedores activos
     //   const providers = (
     //     await this.usersService.findAll(invoice.companyId)
     //   ).filter(u => u.role === UserRole.PROVIDER && u.isActive)
-
     //   // Enviar notificación a todos los proveedores
     //   for (const provider of providers) {
     //     try {
@@ -759,7 +743,6 @@ export class InvoiceService {
     //       )
     //     }
     //   }
-
     //   return updatedInvoice
     // } catch (error) {
     //   this.logger.error(

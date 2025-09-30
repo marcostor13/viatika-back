@@ -32,13 +32,10 @@ import { Roles } from '../auth/decorators/roles.decorador'
 @Controller('invoices')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
-
 export class InvoiceController {
   private readonly logger = new Logger(InvoiceController.name)
 
-  constructor(
-    private readonly invoiceService: InvoiceService
-  ) { }
+  constructor(private readonly invoiceService: InvoiceService) {}
 
   @Get('token-sunat')
   getToken() {

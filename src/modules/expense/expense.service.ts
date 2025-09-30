@@ -80,7 +80,9 @@ export class ExpenseService {
   }
 
   // Parseo robusto del contenido JSON devuelto por OpenAI
-  private parseOpenAiJsonContent(content?: string | null): ExtractedInvoiceData {
+  private parseOpenAiJsonContent(
+    content?: string | null
+  ): ExtractedInvoiceData {
     const safe = (content || '')
       .replace(/^```json\s*/i, '')
       .replace(/\s*```$/i, '')
@@ -154,7 +156,7 @@ export class ExpenseService {
             numero: data.correlativo,
             fechaEmision: fechaEmision,
             monto:
-              typeof data.montoTotal === 'number'
+              typeof data.montoTotal === 'number' && data.montoTotal > 0
                 ? data.montoTotal.toFixed(2)
                 : undefined,
           }
@@ -275,7 +277,9 @@ export class ExpenseService {
       )
 
       if (!colaboradores || colaboradores.length === 0) {
-        this.logger.debug('No se encontraron usuarios con rol COLABORADOR activos')
+        this.logger.debug(
+          'No se encontraron usuarios con rol COLABORADOR activos'
+        )
         return
       }
 
@@ -300,7 +304,10 @@ export class ExpenseService {
         }
       }
     } catch (error) {
-      this.logger.error('Error al enviar notificaciones a colaboradores:', error)
+      this.logger.error(
+        'Error al enviar notificaciones a colaboradores:',
+        error
+      )
     }
   }
 
@@ -395,11 +402,12 @@ export class ExpenseService {
 
       await this.validateDuplicateInvoiceIfAny(extraction, body.clientId)
 
-      const { validation, expenseStatus } = await this.validateWithSunatIfPossible(
-        extraction,
-        body.clientId,
-        configSunat.ruc
-      )
+      const { validation, expenseStatus } =
+        await this.validateWithSunatIfPossible(
+          extraction,
+          body.clientId,
+          configSunat.ruc
+        )
 
       const expense = await this.createExpenseDocument(
         body,
@@ -414,7 +422,11 @@ export class ExpenseService {
       )
 
       try {
-        await this.notifyStakeholders(body, extraction, project?.name || 'No especificado')
+        await this.notifyStakeholders(
+          body,
+          extraction,
+          project?.name || 'No especificado'
+        )
       } catch (error) {
         this.logger.error('Error al enviar notificaciones de correo:', error)
       }
@@ -433,14 +445,18 @@ export class ExpenseService {
     }
   }
 
-  async analyzePdf(body: CreateExpenseDto, file: Express.Multer.File): Promise<Expense> {
+  async analyzePdf(
+    body: CreateExpenseDto,
+    file: Express.Multer.File
+  ): Promise<Expense> {
     if (!file || !file.buffer) {
       throw new HttpException('Archivo PDF no provisto', HttpStatus.BAD_REQUEST)
     }
 
     try {
       const pdfModule = await import('pdf-parse')
-      const pdfParse: (data: Buffer) => Promise<{ text: string }> = (pdfModule as any).default ?? (pdfModule as any)
+      const pdfParse: (data: Buffer) => Promise<{ text: string }> =
+        (pdfModule as any).default ?? (pdfModule as any)
       const parsed = await pdfParse(file.buffer)
       const textFromPdf = parsed.text || ''
 
@@ -469,15 +485,19 @@ export class ExpenseService {
       await this.validateDuplicateInvoiceIfAny(extraction, body.clientId)
 
       // Subir el PDF y setear la URL como file/imageUrl del gasto
-      const uploadedUrl = await this.uploadExpensePdfAndGetUrl(file, body.clientId)
+      const uploadedUrl = await this.uploadExpensePdfAndGetUrl(
+        file,
+        body.clientId
+      )
       body.imageUrl = uploadedUrl
 
       const configSunat = await this.sunatConfigService.findOne(body.clientId)
-      const { validation, expenseStatus } = await this.validateWithSunatIfPossible(
-        extraction,
-        body.clientId,
-        configSunat.ruc
-      )
+      const { validation, expenseStatus } =
+        await this.validateWithSunatIfPossible(
+          extraction,
+          body.clientId,
+          configSunat.ruc
+        )
 
       const expense = await this.createExpenseDocument(
         body,
@@ -492,7 +512,11 @@ export class ExpenseService {
       )
 
       try {
-        await this.notifyStakeholders(body, extraction, project?.name || 'No especificado')
+        await this.notifyStakeholders(
+          body,
+          extraction,
+          project?.name || 'No especificado'
+        )
       } catch (error) {
         this.logger.error('Error al enviar notificaciones de correo:', error)
       }
@@ -501,7 +525,10 @@ export class ExpenseService {
     } catch (error) {
       if (error instanceof HttpException) throw error
       this.logger.error('Error al analizar PDF:', error)
-      throw new HttpException('Error al analizar el PDF.', HttpStatus.INTERNAL_SERVER_ERROR)
+      throw new HttpException(
+        'Error al analizar el PDF.',
+        HttpStatus.INTERNAL_SERVER_ERROR
+      )
     }
   }
 
@@ -514,7 +541,7 @@ export class ExpenseService {
       if (typeof dataObj === 'string') {
         try {
           dataObj = JSON.parse(dataObj)
-        } catch { }
+        } catch {}
       }
       if (dataObj && dataObj.fechaEmision) {
         fechaEmisionDate = parseFechaEmision(dataObj.fechaEmision)
@@ -989,8 +1016,9 @@ export class ExpenseService {
                   colaborador.email,
                   {
                     providerName: colaborador.name,
-                    invoiceNumber: `${invoiceData.serie || ''}-${invoiceData.correlativo || ''
-                      }`,
+                    invoiceNumber: `${invoiceData.serie || ''}-${
+                      invoiceData.correlativo || ''
+                    }`,
                     date:
                       invoiceData.fechaEmision ||
                       new Date().toISOString().split('T')[0],
@@ -1237,9 +1265,64 @@ export class ExpenseService {
     }
   }
 
-  private async uploadExpensePdfAndGetUrl(file: Express.Multer.File, clientId: string): Promise<string> {
+  private async uploadExpensePdfAndGetUrl(
+    file: Express.Multer.File,
+    clientId: string
+  ): Promise<string> {
     const fileNameSafe = `expenses/${clientId}/${Date.now()}-${(file.originalname || 'document.pdf').replace(/\s+/g, '-')}`
     return this.uploadService.uploadImage(file, fileNameSafe)
+  }
+
+  async validateWithSunatData(
+    id: string,
+    data: {
+      rucEmisor: string
+      serie: string
+      correlativo: string
+      fechaEmision: string
+      montoTotal?: number
+      tipoComprobante?: string
+    },
+    clientId: string
+  ) {
+    const expense = await this.findOne(id)
+    if (!expense) {
+      throw new NotFoundException(`Factura con ID ${id} no encontrada`)
+    }
+
+    try {
+      const configSunat = await this.sunatConfigService.findOne(clientId)
+      const { validation, expenseStatus } =
+        await this.validateWithSunatIfPossible(data, clientId, configSunat.ruc)
+
+      const updatedExpense = await this.expenseRepository
+        .findByIdAndUpdate(
+          id,
+          {
+            sunatValidation: validation,
+            status: expenseStatus,
+          },
+          { new: true }
+        )
+        .exec()
+
+      return {
+        message: 'Validación SUNAT completada',
+        status: validation.status,
+        details: validation.details,
+        expense: updatedExpense,
+      }
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        return {
+          message: 'No se encontró configuración SUNAT para esta empresa',
+          status: 'SUNAT_CONFIG_NOT_FOUND',
+          details: 'La empresa no tiene configuración SUNAT configurada',
+          expense: expense,
+        }
+      }
+      throw error
+    }
   }
 }
 

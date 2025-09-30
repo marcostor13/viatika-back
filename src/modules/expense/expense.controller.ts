@@ -29,7 +29,7 @@ import { Types } from 'mongoose'
 export class ExpenseController {
   private readonly logger = new Logger(ExpenseController.name)
 
-  constructor(private readonly expenseService: ExpenseService) { }
+  constructor(private readonly expenseService: ExpenseService) {}
 
   @Post('analyze-image')
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -192,5 +192,28 @@ export class ExpenseController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   remove(@Param('id') id: string) {
     return this.expenseService.remove(id)
+  }
+
+  @Post('invoice/:id/validate-sunat')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  async validateWithSunat(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      rucEmisor: string
+      serie: string
+      correlativo: string
+      fechaEmision: string
+      montoTotal?: number
+      clientId?: string
+      tipoComprobante?: string
+    },
+    @Request() req: any
+  ) {
+    const clientId = body.clientId || req.user?.clientId
+    if (!clientId) {
+      throw new Error('No se pudo obtener la empresa del usuario ni del body')
+    }
+    return this.expenseService.validateWithSunatData(id, body, clientId)
   }
 }

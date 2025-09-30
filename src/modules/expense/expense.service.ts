@@ -414,10 +414,12 @@ export class ExpenseService {
         fechaEmisionDate = parseFechaEmision(dataObj.fechaEmision)
       }
     }
+
     const createdExpense = new this.expenseRepository({
       ...createExpenseDto,
       clientId: new Types.ObjectId(createExpenseDto.clientId),
       fechaEmision: fechaEmisionDate,
+      createdBy: createExpenseDto.userId,
     })
     return createdExpense.save()
   }
@@ -486,22 +488,6 @@ export class ExpenseService {
 
     if (filters.status) query.status = filters.status
 
-    if (filters.dateFrom || filters.dateTo) {
-      if (filters.dateFrom) {
-        const dateFrom = new Date(filters.dateFrom)
-        dateFrom.setUTCHours(0, 0, 0, 0)
-        query.createdAt = { $gte: dateFrom }
-      }
-      if (filters.dateTo) {
-        const dateTo = new Date(filters.dateTo)
-        dateTo.setUTCHours(23, 59, 59, 999)
-        if (query.createdAt) {
-          query.createdAt.$lte = dateTo
-        } else {
-          query.createdAt = { $lte: dateTo }
-        }
-      }
-    }
     if (filters.amountMin || filters.amountMax) {
       query.total = {}
       if (filters.amountMin) query.total.$gte = Number(filters.amountMin)
@@ -517,22 +503,151 @@ export class ExpenseService {
       return expense ? [expense] : []
     }
 
+    // Si hay filtros de fecha, usar agregación para comparar fechas correctamente
+    if (filters.dateFrom || filters.dateTo) {
+      // Usar agregación para convertir strings de fecha a fechas reales y comparar
+      const pipeline: any[] = []
+
+      // Match por clientId y otros filtros básicos
+      const matchStage: any = { clientId: new Types.ObjectId(clientId) }
+
+      // Aplicar otros filtros básicos
+      if (filters.createdBy && /^[0-9a-fA-F]{24}$/.test(filters.createdBy)) {
+        matchStage.createdBy = filters.createdBy
+      }
+
+      if (filters.status) {
+        matchStage.status = filters.status
+      }
+
+      if (filters.amountMin || filters.amountMax) {
+        matchStage.total = {}
+        if (filters.amountMin) matchStage.total.$gte = Number(filters.amountMin)
+        if (filters.amountMax) matchStage.total.$lte = Number(filters.amountMax)
+      }
+
+      pipeline.push({ $match: matchStage })
+
+      // Agregar filtros de proyecto y categoría si existen
+      if (filters.projectId || filters.proyectId) {
+        const projectId = filters.projectId || filters.proyectId
+        if (/^[0-9a-fA-F]{24}$/.test(projectId)) {
+          pipeline.push({
+            $match: {
+              $or: [
+                { proyectId: new Types.ObjectId(projectId) },
+                { proyectId: projectId },
+              ],
+            },
+          })
+        }
+      }
+
+      if (filters.categoryId && /^[0-9a-fA-F]{24}$/.test(filters.categoryId)) {
+        pipeline.push({
+          $match: {
+            $or: [
+              { categoryId: new Types.ObjectId(filters.categoryId) },
+              { categoryId: filters.categoryId },
+            ],
+          },
+        })
+      }
+
+      // Agregar stage para convertir fechaEmision a fecha real y filtrar
+      pipeline.push({
+        $addFields: {
+          fechaEmisionDate: {
+            $dateFromString: {
+              dateString: {
+                $concat: [
+                  { $arrayElemAt: [{ $split: ['$fechaEmision', '-'] }, 2] }, // año
+                  '-',
+                  { $arrayElemAt: [{ $split: ['$fechaEmision', '-'] }, 1] }, // mes
+                  '-',
+                  { $arrayElemAt: [{ $split: ['$fechaEmision', '-'] }, 0] }, // día
+                ],
+              },
+              format: '%Y-%m-%d',
+              timezone: 'UTC', // Usar UTC para evitar problemas de zona horaria
+            },
+          },
+        },
+      })
+
+      // Filtrar por fechas
+      const dateFilter: any = {}
+      if (filters.dateFrom) {
+        const [yearFrom, monthFrom, dayFrom] = filters.dateFrom
+          .split('-')
+          .map(Number)
+        // Usar UTC para evitar problemas de zona horaria
+        const fromDate = new Date(
+          Date.UTC(yearFrom, monthFrom - 1, dayFrom, 0, 0, 0, 0)
+        )
+        dateFilter.fechaEmisionDate = { $gte: fromDate }
+      }
+
+      if (filters.dateTo) {
+        const [yearTo, monthTo, dayTo] = filters.dateTo.split('-').map(Number)
+        // Usar UTC para evitar problemas de zona horaria, incluir todo el día
+        const toDate = new Date(
+          Date.UTC(yearTo, monthTo - 1, dayTo, 23, 59, 59, 999)
+        )
+        if (dateFilter.fechaEmisionDate) {
+          dateFilter.fechaEmisionDate.$lte = toDate
+        } else {
+          dateFilter.fechaEmisionDate = { $lte: toDate }
+        }
+      }
+
+      if (Object.keys(dateFilter).length > 0) {
+        pipeline.push({ $match: dateFilter })
+      }
+
+      // Remover el campo temporal
+      pipeline.push({
+        $project: {
+          fechaEmisionDate: 0,
+        },
+      })
+
+      // Aplicar ordenamiento
+      const sortBy = filters.sortBy || 'fechaEmision'
+      const sortOrder = filters.sortOrder || 'desc'
+      const sortOptions: any = {}
+      sortOptions[sortBy] = sortOrder === 'desc' ? -1 : 1
+      pipeline.push({ $sort: sortOptions })
+
+      // Ejecutar agregación
+      const result = await this.expenseRepository.aggregate(pipeline)
+
+      // Populate las referencias
+      const populatedResult = await this.expenseRepository.populate(result, [
+        { path: 'proyectId' },
+        { path: 'categoryId' },
+      ])
+
+      // Ordenar por fechaEmision si es necesario (ya que MongoDB no puede ordenar strings de fecha correctamente)
+      if (sortBy === 'fechaEmision') {
+        return populatedResult.sort((a, b) => {
+          if (!a.fechaEmision || !b.fechaEmision) return 0
+          const dateA = new Date(a.fechaEmision.split('-').reverse().join('-'))
+          const dateB = new Date(b.fechaEmision.split('-').reverse().join('-'))
+          return sortOrder === 'desc'
+            ? dateB.getTime() - dateA.getTime()
+            : dateA.getTime() - dateB.getTime()
+        })
+      }
+
+      return populatedResult
+    }
+
     const sortBy = filters.sortBy || 'fechaEmision'
     const sortOrder = filters.sortOrder || 'desc'
 
-    let sortField = sortBy
-    if (sortBy === 'fechaEmision') {
-      sortField = 'fechaEmision'
-    } else if (sortBy === 'createdAt') {
-      sortField = 'createdAt'
-    }
-
     const sortOptions: any = {}
-    sortOptions[sortField] = sortOrder === 'desc' ? -1 : 1
-
-    if (sortBy === 'fechaEmision') {
-      sortOptions['createdAt'] = sortOrder === 'desc' ? -1 : 1
-    }
+    sortOptions[sortBy] = sortOrder === 'desc' ? -1 : 1
 
     const result = await this.expenseRepository
       .find(query)
@@ -540,6 +655,18 @@ export class ExpenseService {
       .populate('categoryId')
       .sort(sortOptions)
       .exec()
+
+    // Ordenar por fechaEmision si es necesario (ya que MongoDB no puede ordenar strings de fecha correctamente)
+    if (sortBy === 'fechaEmision') {
+      return result.sort((a, b) => {
+        if (!a.fechaEmision || !b.fechaEmision) return 0
+        const dateA = new Date(a.fechaEmision.split('-').reverse().join('-'))
+        const dateB = new Date(b.fechaEmision.split('-').reverse().join('-'))
+        return sortOrder === 'desc'
+          ? dateB.getTime() - dateA.getTime()
+          : dateA.getTime() - dateB.getTime()
+      })
+    }
 
     return result
   }

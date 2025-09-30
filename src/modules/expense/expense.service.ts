@@ -20,6 +20,27 @@ import { SunatConfigService } from '../sunat-config/sunat-config.service'
 import { HttpService } from '@nestjs/axios'
 import { firstValueFrom } from 'rxjs'
 import { UserService } from '../user/user.service'
+import { UploadService } from '../upload/upload.service'
+
+// Tipos auxiliares
+interface ExtractedInvoiceData {
+  rucEmisor?: string
+  serie?: string
+  correlativo?: string
+  fechaEmision?: string
+  montoTotal?: number
+  tipoComprobante?: string
+  moneda?: string
+  razonSocial?: string
+  direccionEmisor?: string
+  [key: string]: unknown
+}
+
+interface SunatValidationMeta {
+  status: string
+  details: unknown
+  message: string
+}
 
 @Injectable()
 export class ExpenseService {
@@ -35,13 +56,252 @@ export class ExpenseService {
     private readonly projectService: ProjectService,
     private readonly userService: UserService,
     private readonly sunatConfigService: SunatConfigService,
-    private readonly httpService: HttpService
+    private readonly httpService: HttpService,
+    private readonly uploadService: UploadService
   ) {
     const apiKey = this.configService.get<string>('OPENAI_API_KEY')
     if (!apiKey) {
       throw new Error('OpenAI API key is not configured.')
     }
     this.openai = new OpenAI({ apiKey })
+  }
+
+  // Construcción del mensaje para Vision
+  private buildVisionMessages(prompt: string, imageUrl: string) {
+    return [
+      {
+        role: 'user' as const,
+        content: [
+          { type: 'text' as const, text: prompt },
+          { type: 'image_url' as const, image_url: { url: imageUrl } },
+        ],
+      },
+    ]
+  }
+
+  // Parseo robusto del contenido JSON devuelto por OpenAI
+  private parseOpenAiJsonContent(content?: string | null): ExtractedInvoiceData {
+    const safe = (content || '')
+      .replace(/^```json\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim()
+    try {
+      return JSON.parse(safe)
+    } catch (error) {
+      this.logger.error('No se pudo parsear la respuesta de OpenAI', error)
+      throw new HttpException(
+        'Respuesta inválida del analizador de imagen.',
+        HttpStatus.BAD_GATEWAY
+      )
+    }
+  }
+
+  private determineCodComp(tipo?: string): string {
+    if (tipo === 'Factura') return '01'
+    if (tipo === 'Boleta') return '03'
+    return '01'
+  }
+
+  private formatDateForSunat(dateStr?: string): string | undefined {
+    if (!dateStr) return undefined
+    return dateStr.replace(/-/g, '/')
+  }
+
+  private async validateDuplicateInvoiceIfAny(
+    data: ExtractedInvoiceData,
+    clientId: string
+  ): Promise<void> {
+    if (data.serie && data.correlativo) {
+      const existingInvoice = await this.findBySeriAndCorrelativo(
+        data.serie,
+        data.correlativo,
+        clientId
+      )
+      if (existingInvoice) {
+        throw new HttpException(
+          `Ya existe una factura/boleta con el número ${data.serie}-${data.correlativo}`,
+          HttpStatus.CONFLICT
+        )
+      }
+    }
+  }
+
+  private async validateWithSunatIfPossible(
+    data: ExtractedInvoiceData,
+    clientId: string,
+    companyRuc: string
+  ): Promise<{ validation: SunatValidationMeta; expenseStatus: string }> {
+    let validation: SunatValidationMeta = {
+      status: 'PENDING',
+      details: null,
+      message: 'Validación pendiente',
+    }
+    let expenseStatus = 'pending'
+
+    if (data.rucEmisor && data.serie && data.correlativo) {
+      try {
+        const sunatApiUrl = `https://api.sunat.gob.pe/v1/contribuyente/contribuyentes/${companyRuc}/validarcomprobante`
+        this.logger.log(`Usando RUC empresa para consulta SUNAT: ${companyRuc}`)
+
+        const sunatToken = await this.generateTokenSunat(clientId)
+        if (sunatToken?.access_token) {
+          const fechaEmision = this.formatDateForSunat(data.fechaEmision)
+
+          const params = {
+            numRuc: data.rucEmisor,
+            codComp: this.determineCodComp(data.tipoComprobante),
+            numeroSerie: data.serie,
+            numero: data.correlativo,
+            fechaEmision: fechaEmision,
+            monto:
+              typeof data.montoTotal === 'number'
+                ? data.montoTotal.toFixed(2)
+                : undefined,
+          }
+
+          const headers = {
+            Authorization: `Bearer ${sunatToken.access_token}`,
+            'Content-Type': 'application/json',
+          }
+
+          try {
+            const response = await firstValueFrom(
+              this.httpService.post(sunatApiUrl, params, { headers })
+            )
+            validation = this.interpretSunatResponse(response.data)
+            expenseStatus = validation.status
+          } catch (error) {
+            expenseStatus = 'sunat_error'
+            validation = {
+              status: 'ERROR_SUNAT',
+              details: (error as Error).message,
+              message: 'Error en la comunicación con SUNAT.',
+            }
+          }
+        } else {
+          expenseStatus = 'sunat_error'
+        }
+      } catch {
+        expenseStatus = 'sunat_error'
+      }
+    }
+
+    return { validation, expenseStatus }
+  }
+
+  private async createExpenseDocument(
+    body: CreateExpenseDto,
+    data: ExtractedInvoiceData,
+    validation: SunatValidationMeta,
+    status: string
+  ) {
+    if (!body.clientId) {
+      throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
+    }
+
+    const categoryObject = Types.ObjectId.createFromHexString(body.categoryId)
+    const projectObject = Types.ObjectId.createFromHexString(body.proyectId)
+
+    return this.expenseRepository.create({
+      categoryId: categoryObject,
+      proyectId: projectObject,
+      clientId: body.clientId,
+      total: data.montoTotal,
+      data: JSON.stringify({ ...data, sunatValidation: validation }),
+      file: body.imageUrl,
+      status: status,
+      createdBy: body.userId || 'system',
+      fechaEmision: data.fechaEmision,
+    })
+  }
+
+  private async getCreatorName(userId?: string | null): Promise<string> {
+    if (!userId) return 'Usuario del sistema'
+    try {
+      const creator = await this.userService.findOne(userId)
+      return creator?.name || 'Usuario del sistema'
+    } catch {
+      this.logger.warn('No se pudo obtener información del usuario creador')
+      return 'Usuario del sistema'
+    }
+  }
+
+  private buildNotificationPayload(
+    data: ExtractedInvoiceData,
+    body: CreateExpenseDto,
+    projectName: string,
+    creatorName: string
+  ) {
+    return {
+      providerName: creatorName,
+      invoiceNumber: `${data.serie || ''}-${data.correlativo || ''}`,
+      date: data.fechaEmision || new Date().toISOString().split('T')[0],
+      type: data.tipoComprobante || 'Factura',
+      status: 'PENDIENTE',
+      montoTotal: data.montoTotal || 0,
+      moneda: data.moneda || 'PEN',
+      createdBy: creatorName,
+      category: body.categoryId || 'No especificada',
+      projectName: projectName || 'No especificado',
+      razonSocial: data.razonSocial || 'No especificada',
+      direccionEmisor: data.direccionEmisor,
+    }
+  }
+
+  private async notifyStakeholders(
+    body: CreateExpenseDto,
+    data: ExtractedInvoiceData,
+    projectName: string
+  ) {
+    const creatorName = await this.getCreatorName(body.userId)
+
+    if (body.userId) {
+      try {
+        const creator = await this.userService.findOne(body.userId)
+        if (creator?.email) {
+          await this.emailService.sendInvoiceUploadedExpenseNotification(
+            creator.email,
+            this.buildNotificationPayload(data, body, projectName, creatorName)
+          )
+        }
+      } catch (error) {
+        this.logger.warn('No se pudo enviar notificación al creador:', error)
+      }
+    }
+
+    try {
+      const colaboradores = await this.userService.findAll(
+        new Types.ObjectId(body.clientId)
+      )
+
+      if (!colaboradores || colaboradores.length === 0) {
+        this.logger.debug('No se encontraron usuarios con rol COLABORADOR activos')
+        return
+      }
+
+      this.logger.debug(
+        `Encontrados ${colaboradores.length} colaboradores activos para notificar`
+      )
+      for (const colaborador of colaboradores) {
+        if (!colaborador.email) continue
+        try {
+          await this.emailService.sendInvoiceUploadedExpenseNotification(
+            colaborador.email,
+            this.buildNotificationPayload(data, body, projectName, creatorName)
+          )
+          this.logger.debug(
+            `Notificación enviada al colaborador: ${colaborador.email}`
+          )
+        } catch (error) {
+          this.logger.warn(
+            `Error al enviar notificación al colaborador ${colaborador.email}:`,
+            error
+          )
+        }
+      }
+    } catch (error) {
+      this.logger.error('Error al enviar notificaciones a colaboradores:', error)
+    }
   }
 
   async generateTokenSunat(clientId: string) {
@@ -122,265 +382,39 @@ export class ExpenseService {
     const configSunat = await this.sunatConfigService.findOne(body.clientId)
     const prompt = PROMPT1
     try {
-      const response = await this.openai.chat.completions.create({
+      const completion = await this.openai.chat.completions.create({
         model: this.visionModel,
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: prompt },
-              {
-                type: 'image_url',
-                image_url: {
-                  url: body.imageUrl,
-                },
-              },
-            ],
-          },
-        ],
+        messages: this.buildVisionMessages(prompt, body.imageUrl),
         temperature: 0,
-        max_tokens: 8192
+        max_tokens: 8192,
       })
 
-      const jsonStringLimpio =
-        response.choices[0]?.message?.content ||
-        ''
-          .replace(/^```json\s*/, '')
-          .replace(/\s*```$/, '')
-          .trim()
-      const jsonObject = JSON.parse(jsonStringLimpio)
+      const extraction = this.parseOpenAiJsonContent(
+        completion.choices[0]?.message?.content
+      )
 
-      if (jsonObject.serie && jsonObject.correlativo) {
-        const existingInvoice = await this.findBySeriAndCorrelativo(
-          jsonObject.serie,
-          jsonObject.correlativo,
-          body.clientId
-        )
+      await this.validateDuplicateInvoiceIfAny(extraction, body.clientId)
 
-        if (existingInvoice) {
-          throw new HttpException(
-            `Ya existe una factura/boleta con el número ${jsonObject.serie}-${jsonObject.correlativo}`,
-            HttpStatus.CONFLICT
-          )
-        }
-      }
+      const { validation, expenseStatus } = await this.validateWithSunatIfPossible(
+        extraction,
+        body.clientId,
+        configSunat.ruc
+      )
 
-      let sunatValidationResult = {
-        status: 'PENDING',
-        details: null,
-        message: 'Validación pendiente',
-      }
-      let expenseStatus = 'pending'
-      if (jsonObject.rucEmisor && jsonObject.serie && jsonObject.correlativo) {
-        try {
-          const sunatApiUrl = `https://api.sunat.gob.pe/v1/contribuyente/contribuyentes/${configSunat.ruc}/validarcomprobante`
-          this.logger.log(
-            `Usando RUC empresa HARDCODEADO para consulta SUNAT: ${configSunat.ruc}`
-          )
-
-          const sunatToken = await this.generateTokenSunat(body.clientId)
-
-          if (sunatToken?.access_token) {
-            // Formatear fecha al formato YYYY-MM-DD para SUNAT
-            let fechaFormateada = jsonObject.fechaEmision.replace(/-/g, '/')
-
-            this.logger.log(
-              `Fecha original: ${jsonObject.fechaEmision}, Fecha formateada para SUNAT: ${fechaFormateada}`
-            )
-
-            const params = {
-              numRuc: jsonObject.rucEmisor,
-              codComp:
-                jsonObject.tipoComprobante === 'Factura'
-                  ? '01'
-                  : jsonObject.tipoComprobante === 'Boleta'
-                    ? '03'
-                    : '01',
-              numeroSerie: jsonObject.serie,
-              numero: jsonObject.correlativo,
-              fechaEmision: fechaFormateada,
-              monto: jsonObject.montoTotal?.toFixed(2),
-            }
-
-            console.log('params', params)
-            const headers = {
-              Authorization: `Bearer ${sunatToken.access_token}`,
-              'Content-Type': 'application/json',
-            }
-
-            try {
-              const response = await firstValueFrom(
-                this.httpService.post(sunatApiUrl, params, { headers })
-              )
-
-              console.log('response', response)
-              sunatValidationResult = this.interpretSunatResponse(response.data)
-              expenseStatus = sunatValidationResult.status
-            } catch (error) {
-              expenseStatus = 'sunat_error'
-              sunatValidationResult = {
-                status: 'ERROR_SUNAT',
-                details: error.message,
-                message: 'Error en la comunicación con SUNAT.',
-              }
-            }
-          } else {
-            expenseStatus = 'sunat_error'
-          }
-        } catch (error) {
-          expenseStatus = 'sunat_error'
-        }
-      }
-
-      const categoryObject = Types.ObjectId.createFromHexString(body.categoryId)
-      const projectObject = Types.ObjectId.createFromHexString(body.proyectId)
-
-      if (!body.clientId) {
-        throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
-      }
-
-      const expense = await this.expenseRepository.create({
-        categoryId: categoryObject,
-        proyectId: projectObject,
-        clientId: body.clientId,
-        total: jsonObject.montoTotal,
-        data: JSON.stringify({
-          ...jsonObject,
-          sunatValidation: sunatValidationResult,
-        }),
-        file: body.imageUrl,
-        status: expenseStatus,
-        createdBy: body.userId || 'system',
-        fechaEmision: jsonObject.fechaEmision,
-      })
+      const expense = await this.createExpenseDocument(
+        body,
+        extraction,
+        validation,
+        expenseStatus
+      )
 
       const project = await this.projectService.findOne(
         body.proyectId,
         body.clientId
       )
+
       try {
-        const creatorId = body.userId
-        let creatorName = 'Usuario del sistema'
-
-        if (creatorId) {
-          try {
-            const creator = await this.userService.findOne(creatorId)
-            if (creator) {
-              creatorName = creator.name
-            }
-          } catch (error) {
-            this.logger.warn(
-              'No se pudo obtener información del usuario creador'
-            )
-          }
-        }
-
-        if (body.userId) {
-          try {
-            const creator = await this.userService.findOne(body.userId)
-            if (creator && creator.email) {
-              const creatorFullName = creator.name
-
-              await this.emailService.sendInvoiceUploadedExpenseNotification(
-                creator.email,
-                {
-                  providerName: creatorFullName,
-                  invoiceNumber: `${jsonObject.serie || ''}-${jsonObject.correlativo || ''
-                    }`,
-                  date:
-                    jsonObject.fechaEmision ||
-                    new Date().toISOString().split('T')[0],
-                  type: jsonObject.tipoComprobante || 'Factura',
-                  status: 'PENDIENTE',
-                  montoTotal: jsonObject.montoTotal || 0,
-                  moneda: jsonObject.moneda || 'PEN',
-                  createdBy: creatorFullName,
-                  category: body.categoryId || 'No especificada',
-                  projectName: project.name || 'No especificado',
-                  razonSocial: jsonObject.razonSocial || 'No especificada',
-                  direccionEmisor: jsonObject.direccionEmisor,
-                }
-              )
-            }
-          } catch (error) {
-            this.logger.warn(
-              'No se pudo enviar notificación al creador:',
-              error
-            )
-          }
-        }
-
-        try {
-          const colaboradores = await this.userService.findAll(
-            new Types.ObjectId(body.clientId)
-          )
-
-          if (colaboradores && colaboradores.length > 0) {
-            this.logger.debug(
-              `Encontrados ${colaboradores.length} colaboradores activos para notificar`
-            )
-
-            const creatorId = body.userId
-            let creatorName = 'Usuario del sistema'
-
-            if (creatorId) {
-              try {
-                const creator = await this.userService.findOne(creatorId)
-                if (creator) {
-                  creatorName = creator.name
-                }
-              } catch (error) {
-                this.logger.warn(
-                  'No se pudo obtener información del usuario creador'
-                )
-              }
-            }
-
-            for (const colaborador of colaboradores) {
-              if (colaborador.email) {
-                try {
-                  await this.emailService.sendInvoiceUploadedExpenseNotification(
-                    colaborador.email,
-                    {
-                      providerName: creatorName,
-                      invoiceNumber: `${jsonObject.serie || ''}-${jsonObject.correlativo || ''
-                        }`,
-                      date:
-                        jsonObject.fechaEmision ||
-                        new Date().toISOString().split('T')[0],
-                      type: jsonObject.tipoComprobante || 'Factura',
-                      status: 'PENDIENTE',
-                      montoTotal: jsonObject.montoTotal || 0,
-                      moneda: jsonObject.moneda || 'PEN',
-                      createdBy: creatorName,
-                      category: body.categoryId || 'No especificada',
-                      projectName: project.name || 'No especificado',
-                      razonSocial: jsonObject.razonSocial || 'No especificada',
-                      direccionEmisor: jsonObject.direccionEmisor,
-                    }
-                  )
-                  this.logger.debug(
-                    `Notificación enviada al colaborador: ${colaborador.email}`
-                  )
-                } catch (error) {
-                  this.logger.warn(
-                    `Error al enviar notificación al colaborador ${colaborador.email}:`,
-                    error
-                  )
-                }
-              }
-            }
-          } else {
-            this.logger.debug(
-              'No se encontraron usuarios con rol COLABORADOR activos'
-            )
-          }
-        } catch (error) {
-          this.logger.error(
-            'Error al enviar notificaciones a colaboradores:',
-            error
-          )
-        }
+        await this.notifyStakeholders(body, extraction, project?.name || 'No especificado')
       } catch (error) {
         this.logger.error('Error al enviar notificaciones de correo:', error)
       }
@@ -396,6 +430,78 @@ export class ExpenseService {
         'Error al analizar la imagen desde la URL con OpenAI.',
         HttpStatus.INTERNAL_SERVER_ERROR
       )
+    }
+  }
+
+  async analyzePdf(body: CreateExpenseDto, file: Express.Multer.File): Promise<Expense> {
+    if (!file || !file.buffer) {
+      throw new HttpException('Archivo PDF no provisto', HttpStatus.BAD_REQUEST)
+    }
+
+    try {
+      const pdfModule = await import('pdf-parse')
+      const pdfParse: (data: Buffer) => Promise<{ text: string }> = (pdfModule as any).default ?? (pdfModule as any)
+      const parsed = await pdfParse(file.buffer)
+      const textFromPdf = parsed.text || ''
+
+      console.log('textFromPdf', textFromPdf)
+
+      const prompt = PROMPT1
+      const completion = await this.openai.chat.completions.create({
+        model: this.visionModel,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: prompt },
+              { type: 'text', text: textFromPdf.substring(0, 15000) },
+            ],
+          },
+        ],
+        temperature: 0,
+        max_tokens: 8192,
+      })
+
+      const extraction = this.parseOpenAiJsonContent(
+        completion.choices[0]?.message?.content
+      )
+
+      await this.validateDuplicateInvoiceIfAny(extraction, body.clientId)
+
+      // Subir el PDF y setear la URL como file/imageUrl del gasto
+      const uploadedUrl = await this.uploadExpensePdfAndGetUrl(file, body.clientId)
+      body.imageUrl = uploadedUrl
+
+      const configSunat = await this.sunatConfigService.findOne(body.clientId)
+      const { validation, expenseStatus } = await this.validateWithSunatIfPossible(
+        extraction,
+        body.clientId,
+        configSunat.ruc
+      )
+
+      const expense = await this.createExpenseDocument(
+        body,
+        extraction,
+        validation,
+        expenseStatus
+      )
+
+      const project = await this.projectService.findOne(
+        body.proyectId,
+        body.clientId
+      )
+
+      try {
+        await this.notifyStakeholders(body, extraction, project?.name || 'No especificado')
+      } catch (error) {
+        this.logger.error('Error al enviar notificaciones de correo:', error)
+      }
+
+      return expense
+    } catch (error) {
+      if (error instanceof HttpException) throw error
+      this.logger.error('Error al analizar PDF:', error)
+      throw new HttpException('Error al analizar el PDF.', HttpStatus.INTERNAL_SERVER_ERROR)
     }
   }
 
@@ -1129,6 +1235,11 @@ export class ExpenseService {
         HttpStatus.INTERNAL_SERVER_ERROR
       )
     }
+  }
+
+  private async uploadExpensePdfAndGetUrl(file: Express.Multer.File, clientId: string): Promise<string> {
+    const fileNameSafe = `expenses/${clientId}/${Date.now()}-${(file.originalname || 'document.pdf').replace(/\s+/g, '-')}`
+    return this.uploadService.uploadImage(file, fileNameSafe)
   }
 }
 

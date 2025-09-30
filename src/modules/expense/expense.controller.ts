@@ -10,7 +10,10 @@ import {
   UseGuards,
   Logger,
   Query,
+  UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common'
+import { FileInterceptor } from '@nestjs/platform-express'
 import { ExpenseService } from './expense.service'
 import { CreateExpenseDto } from './dto/create-expense.dto'
 import { UpdateExpenseDto } from './dto/update-expense.dto'
@@ -26,7 +29,7 @@ import { Types } from 'mongoose'
 export class ExpenseController {
   private readonly logger = new Logger(ExpenseController.name)
 
-  constructor(private readonly expenseService: ExpenseService) {}
+  constructor(private readonly expenseService: ExpenseService) { }
 
   @Post('analyze-image')
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -40,6 +43,25 @@ export class ExpenseController {
     body.userId = req.user?.sub || req.user?._id || body.userId
 
     return this.expenseService.analyzeImageWithUrl(body)
+  }
+
+  @Post('analize-pdf')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseInterceptors(FileInterceptor('file'))
+  analyzePdf(
+    @UploadedFile() file: Express.Multer.File,
+    @Body() body: CreateExpenseDto,
+    @Request() req
+  ) {
+    const clientId = body.clientId || req.user?.clientId
+    if (!clientId) {
+      throw new Error('No se pudo obtener la empresa del usuario ni del body')
+    }
+
+    body.clientId = clientId
+    body.userId = req.user?.sub || req.user?._id || body.userId
+
+    return this.expenseService.analyzePdf(body, file)
   }
 
   @Post()

@@ -10,6 +10,7 @@ import { ProjectModule } from '../project/project.module'
 import { UserModule } from '../user/user.module'
 import { SunatConfigModule } from '../sunat-config/sunat-config.module'
 import { HttpModule } from '@nestjs/axios'
+import { UploadModule } from '../upload/upload.module'
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { HttpModule } from '@nestjs/axios'
     UserModule,
     SunatConfigModule,
     HttpModule,
+    UploadModule,
   ],
   controllers: [ExpenseController],
   providers: [ExpenseService],

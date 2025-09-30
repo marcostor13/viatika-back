@@ -36,5 +36,7 @@ export const PROMPT1 = `
       - Debes usar la precisión y el contexto del texto de la factura para extraer los datos.
       - Si no encuentras todos los datos necesarios, responde con un objeto vacio.
       - Solo responde con el Objeto JSON, no agregues comentarios o explicaciones.
-      
+
+    # Salida: 
+     - Tu respuesta debe ser únicamente el objeto JSON, sin texto introductorio, explicaciones ni formato de bloque de código de Markdown. Comienza tu respuesta directamente con {.      
     `

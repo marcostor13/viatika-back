@@ -25,7 +25,7 @@ import { UserService } from '../user/user.service'
 export class ExpenseService {
   private readonly logger = new Logger(ExpenseService.name)
   private readonly openai: OpenAI
-  private readonly visionModel = 'gpt-4-turbo'
+  private readonly visionModel = 'gpt-4o'
 
   constructor(
     private readonly configService: ConfigService,
@@ -47,6 +47,7 @@ export class ExpenseService {
   async generateTokenSunat(clientId: string) {
     try {
       const credentials = await this.sunatConfigService.getCredentials(clientId)
+      console.log('credentials', credentials)
 
       console.log('credentials', credentials)
       const client_id = credentials.clientId
@@ -89,13 +90,13 @@ export class ExpenseService {
     details: any
     message: string
   } {
-    if (sunatData.success === true && sunatData.data?.estadoCp === '0') {
+    if (sunatData.success === true && sunatData.data?.estadoCp === '1') {
       return {
         status: 'VALIDO_ACEPTADO',
         details: sunatData.data,
         message: 'El comprobante es válido y fue facturado a esta empresa.',
       }
-    } else if (sunatData.success === true && sunatData.data?.estadoCp === '1') {
+    } else if (sunatData.success === true && sunatData.data?.estadoCp === '0') {
       return {
         status: 'VALIDO_NO_PERTENECE',
         details: sunatData.data,
@@ -137,7 +138,8 @@ export class ExpenseService {
             ],
           },
         ],
-        max_tokens: 500,
+        temperature: 0,
+        max_tokens: 8192
       })
 
       const jsonStringLimpio =
@@ -199,6 +201,8 @@ export class ExpenseService {
               fechaEmision: fechaFormateada,
               monto: jsonObject.montoTotal?.toFixed(2),
             }
+
+            console.log('params', params)
             const headers = {
               Authorization: `Bearer ${sunatToken.access_token}`,
               'Content-Type': 'application/json',
@@ -208,6 +212,8 @@ export class ExpenseService {
               const response = await firstValueFrom(
                 this.httpService.post(sunatApiUrl, params, { headers })
               )
+
+              console.log('response', response)
               sunatValidationResult = this.interpretSunatResponse(response.data)
               expenseStatus = sunatValidationResult.status
             } catch (error) {
@@ -279,9 +285,8 @@ export class ExpenseService {
                 creator.email,
                 {
                   providerName: creatorFullName,
-                  invoiceNumber: `${jsonObject.serie || ''}-${
-                    jsonObject.correlativo || ''
-                  }`,
+                  invoiceNumber: `${jsonObject.serie || ''}-${jsonObject.correlativo || ''
+                    }`,
                   date:
                     jsonObject.fechaEmision ||
                     new Date().toISOString().split('T')[0],
@@ -338,9 +343,8 @@ export class ExpenseService {
                     colaborador.email,
                     {
                       providerName: creatorName,
-                      invoiceNumber: `${jsonObject.serie || ''}-${
-                        jsonObject.correlativo || ''
-                      }`,
+                      invoiceNumber: `${jsonObject.serie || ''}-${jsonObject.correlativo || ''
+                        }`,
                       date:
                         jsonObject.fechaEmision ||
                         new Date().toISOString().split('T')[0],
@@ -404,7 +408,7 @@ export class ExpenseService {
       if (typeof dataObj === 'string') {
         try {
           dataObj = JSON.parse(dataObj)
-        } catch {}
+        } catch { }
       }
       if (dataObj && dataObj.fechaEmision) {
         fechaEmisionDate = parseFechaEmision(dataObj.fechaEmision)
@@ -752,9 +756,8 @@ export class ExpenseService {
                   colaborador.email,
                   {
                     providerName: colaborador.name,
-                    invoiceNumber: `${invoiceData.serie || ''}-${
-                      invoiceData.correlativo || ''
-                    }`,
+                    invoiceNumber: `${invoiceData.serie || ''}-${invoiceData.correlativo || ''
+                      }`,
                     date:
                       invoiceData.fechaEmision ||
                       new Date().toISOString().split('T')[0],

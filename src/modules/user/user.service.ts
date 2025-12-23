@@ -17,7 +17,6 @@ export interface IUser {
     isActive?: boolean;
 }
 
-
 export interface IUserResponse {
     _id: Types.ObjectId;
     email: string;
@@ -34,6 +33,19 @@ export class UserService {
     constructor(
         @InjectModel(User.name) private userModel: Model<UserDocument>
     ) { }
+
+    async findAllWithClient(): Promise<IUserResponse[]> {
+        const users = await this.userModel.find().populate('roleId').populate('clientId').exec();
+        return users.map(user => ({
+            _id: user._id,
+            email: user.email,
+            name: user.name,
+            role: user.roleId as unknown as RoleDocument,
+            client: user.clientId as unknown as ClientDocument,
+            isActive: user.isActive,
+        }));
+    }
+
     async findByEmail(email: string): Promise<IUserResponse | null> {
         const user = await this.userModel.findOne({ email }).populate('roleId').populate('clientId').exec();
         if (!user) {

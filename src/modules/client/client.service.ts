@@ -2,13 +2,17 @@ import { Injectable } from '@nestjs/common';
 import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
 import { Client, ClientDocument } from './entities/client.entity';
-import { Model } from 'mongoose';
+import { ClientSession, Model } from 'mongoose';
 import { InjectModel } from '@nestjs/mongoose';
 
 @Injectable()
 export class ClientService {
   constructor(@InjectModel(Client.name) private clientModel: Model<ClientDocument>) { }
-  create(createClientDto: CreateClientDto) {
+  create(createClientDto: CreateClientDto, session?: ClientSession) {
+    if (session) {
+      const client = new this.clientModel(createClientDto);
+      return client.save({ session });
+    }
     return this.clientModel.create(createClientDto);
   }
 

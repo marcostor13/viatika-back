@@ -20,7 +20,7 @@ export class EmailService {
         subject: 'Confirma tu correo en Nuestra App',
         template: './confirmation', // se añade automáticamente la extensión (.hbs)
         context: {
-          logoUrl: 'https://eventuz.com/assets/images/logo1.svg',
+          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
           verificationCode: this.getCode(),
           year: new Date().getFullYear(),
         },
@@ -53,7 +53,7 @@ export class EmailService {
         subject: 'Nueva Factura Subida',
         template: './invoice-notification',
         context: {
-          logoUrl: 'https://eventuz.com/assets/images/logo1.svg',
+          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
           providerName: data.providerName,
           invoiceNumber: data.invoiceNumber,
           date: data.date,
@@ -126,7 +126,7 @@ export class EmailService {
         subject: 'Acta de Aceptación Subida',
         template: './acta-notification',
         context: {
-          logoUrl: 'https://eventuz.com/assets/images/logo1.svg',
+          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
           providerName: data.providerName,
           invoiceNumber: data.invoiceNumber,
           date: data.date,
@@ -169,7 +169,7 @@ export class EmailService {
           'Nueva factura subida por ' + (data.createdBy || data.providerName),
         template: './invoice-notification',
         context: {
-          logoUrl: 'https://eventuz.com/assets/images/logo1.svg',
+          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
           providerName: data.providerName,
           invoiceNumber: data.invoiceNumber,
           date:
@@ -225,7 +225,7 @@ export class EmailService {
           (data.createdBy || data.providerName),
         template: './acta-notification',
         context: {
-          logoUrl: 'https://eventuz.com/assets/images/logo1.svg',
+          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
           providerName: data.providerName,
           invoiceNumber: data.invoiceNumber,
           date:
@@ -278,7 +278,7 @@ export class EmailService {
           (data.createdBy || data.providerName),
         template: './invoice-notification',
         context: {
-          logoUrl: 'https://eventuz.com/assets/images/logo1.svg',
+          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
           providerName: data.providerName,
           invoiceNumber: data.invoiceNumber,
           date: data.date,
@@ -429,7 +429,7 @@ export class EmailService {
         subject: 'Bienvenido a Nuestra Plataforma de Proveedores',
         template: './provider-welcome',
         context: {
-          logoUrl: 'https://eventuz.com/assets/images/logo1.svg',
+          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
           firstName: data.firstName,
           lastName: data.lastName,
           email: email,

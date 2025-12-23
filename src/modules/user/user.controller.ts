@@ -22,7 +22,14 @@ import { Types } from 'mongoose'
 import { UpdateUserDto } from './dto/update-user.dto'
 @Controller('user')
 export class UserController {
-  constructor(private userService: UserService) {}
+  constructor(private userService: UserService) { }
+
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.SUPER_ADMIN)
+  @Get()
+  async findAllWithClient() {
+    return await this.userService.findAllWithClient()
+  }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)

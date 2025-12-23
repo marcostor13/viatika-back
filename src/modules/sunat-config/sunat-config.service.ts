@@ -1,6 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common'
 import { InjectModel } from '@nestjs/mongoose'
-import { Model } from 'mongoose'
+import { ClientSession, Model } from 'mongoose'
 import {
   SunatConfig,
   SunatConfigDocument,
@@ -17,18 +17,20 @@ export class SunatConfigService {
     private sunatConfigModel: Model<SunatConfigDocument>
   ) { }
 
-  async create(createSunatConfigDto: CreateSunatConfigDto) {
+  async create(createSunatConfigDto: CreateSunatConfigDto, session?: ClientSession) {
     try {
-      const existingConfig = await this.sunatConfigModel
-        .findOne({ clientId: createSunatConfigDto.clientId })
-        .exec()
+      const query = this.sunatConfigModel.findOne({ clientId: createSunatConfigDto.clientId })
+      if (session) {
+        query.session(session)
+      }
+      const existingConfig = await query.exec()
       if (existingConfig) {
         throw new Error('Ya existe configuración SUNAT para esta empresa')
       }
       const sunatConfig = new this.sunatConfigModel({
         ...createSunatConfigDto,
       })
-      const result = await sunatConfig.save()
+      const result = await sunatConfig.save(session ? { session } : undefined)
       return result
     } catch (error) {
       throw error

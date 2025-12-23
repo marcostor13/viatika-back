@@ -1,94 +1,188 @@
 <!DOCTYPE html>
-<html>
+<html lang='es'>
 <head>
-    <meta charset="utf-8">
-    <title>Notificación de Decisión de Factura</title>
+    <meta charset='UTF-8' />
+    <meta name='viewport' content='width=device-width, initial-scale=1.0' />
+    <title>Decisión de Factura</title>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            max-width: 600px;
-            margin: 0 auto;
-            padding: 20px;
+      @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap');
+      
+      body {
+        margin: 0;
+        padding: 0;
+        background-color: #F4F7FE;
+        font-family: 'DM Sans', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        color: #1B2559;
+        line-height: 1.6;
+      }
+      .email-wrapper {
+        background-color: #F4F7FE;
+        padding: 40px 20px;
+      }
+      .container {
+        max-width: 600px;
+        margin: 0 auto;
+        background-color: #FFFFFF;
+        border-radius: 20px;
+        box-shadow: 0 20px 25px -5px rgba(112, 144, 176, 0.12);
+        overflow: hidden;
+      }
+      .header {
+        background-color: #FFFFFF;
+        text-align: center;
+        padding: 40px 30px 30px;
+      }
+      .header img {
+        max-width: 180px;
+        height: auto;
+        margin-bottom: 20px;
+      }
+      .header h1 {
+        margin: 0;
+        font-size: 24px;
+        font-weight: 700;
+        color: #1B2559;
+      }
+      .content {
+        padding: 30px 40px;
+        color: #1B2559;
+      }
+      .content p {
+        font-size: 16px;
+        line-height: 1.6;
+        margin-bottom: 20px;
+        color: #1B2559;
+      }
+      .details-card {
+        background-color: #F4F7FE;
+        padding: 24px;
+        border-radius: 16px;
+        margin: 30px 0;
+      }
+      .details-card ul {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+      }
+      .details-card li {
+        margin: 12px 0;
+        font-size: 14px;
+        color: #1B2559;
+      }
+      .details-card strong {
+        color: #4318FF;
+        font-weight: 700;
+      }
+      .status-badge {
+        padding: 16px 24px;
+        border-radius: 16px;
+        margin: 30px 0;
+        text-align: center;
+      }
+      .status-badge.approved {
+        background-color: #05CD99;
+        color: #FFFFFF;
+      }
+      .status-badge.rejected {
+        background-color: #EE5D50;
+        color: #FFFFFF;
+      }
+      .status-badge p {
+        margin: 8px 0;
+        font-weight: 700;
+        font-size: 16px;
+      }
+      .rejection-reason {
+        background-color: #FFF5F5;
+        border-left: 4px solid #EE5D50;
+        padding: 20px;
+        border-radius: 12px;
+        margin: 20px 0;
+      }
+      .rejection-reason strong {
+        color: #EE5D50;
+        font-weight: 700;
+        display: block;
+        margin-bottom: 10px;
+      }
+      .footer {
+        text-align: center;
+        font-size: 12px;
+        color: #A3AED0;
+        padding: 30px 40px;
+        background-color: #F4F7FE;
+        border-top: 1px solid rgba(163, 174, 208, 0.2);
+      }
+      .footer p {
+        margin: 5px 0;
+        color: #A3AED0;
+      }
+      @media (max-width: 600px) {
+        .email-wrapper {
+          padding: 20px 10px;
         }
-        .header {
-            background-color: #f8f9fa;
-            padding: 20px;
-            border-radius: 5px;
-            margin-bottom: 20px;
+        .container {
+          border-radius: 16px;
         }
         .content {
-            padding: 20px;
-            background-color: #fff;
-            border: 1px solid #ddd;
-            border-radius: 5px;
+          padding: 24px 20px;
         }
-        .footer {
-            margin-top: 20px;
-            text-align: center;
-            font-size: 12px;
-            color: #666;
+        .header {
+          padding: 30px 20px 20px;
         }
-        .status-message {
-            margin: 15px 0;
-            padding: 15px;
-            border-radius: 5px;
+        .header img {
+          max-width: 140px;
         }
-        .approved {
-            background-color: #d4edda;
-            border-left: 4px solid #28a745;
+        .header h1 {
+          font-size: 20px;
         }
-        .rejected {
-            background-color: #fff3f3;
-            border-left: 4px solid #dc3545;
+        .content p {
+          font-size: 14px;
         }
-        .rejection-reason {
-            background-color: #fff3f3;
-            padding: 15px;
-            border-left: 4px solid #dc3545;
-            margin: 15px 0;
-        }
+      }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h2>Notificación de Decisión de Factura</h2>
-    </div>
-    
-    <div class="content">
-        <p>Estimado/a {{providerName}},</p>
-        
-        <p>Le informamos sobre el estado de su factura:</p>
-        
-        <ul>
-            <li><strong>Número de Factura:</strong> {{invoiceNumber}}</li>
-            <li><strong>Fecha:</strong> {{date}}</li>
-            <li><strong>Tipo:</strong> {{type}}</li>
-        </ul>
-
-        <div class="status-message {{#if (eq status "APPROVED")}}approved{{else}}rejected{{/if}}">
-            <strong>Estado:</strong>
-            {{#if (eq status "APPROVED")}}
-            <p>La factura ha sido aprobada correctamente y está lista para el siguiente paso del proceso.</p>
-            {{else}}
-            <p>La factura ha sido rechazada por el departamento de tesorería.</p>
-            {{/if}}
+    <div class='email-wrapper'>
+        <div class='container'>
+            <div class='header'>
+                {{#if logoUrl}}
+                    <img src='{{logoUrl}}' alt='Viatika Logo' />
+                {{/if}}
+                <h1>Decisión de Factura</h1>
+            </div>
+            <div class='content'>
+                <p>Estimado/a {{providerName}},</p>
+                <p>Le informamos sobre el estado de su factura:</p>
+                <div class='details-card'>
+                    <ul>
+                        <li><strong>Número de Factura:</strong> {{invoiceNumber}}</li>
+                        <li><strong>Fecha:</strong> {{date}}</li>
+                        <li><strong>Tipo:</strong> {{type}}</li>
+                    </ul>
+                </div>
+                {{#if (eq status "APPROVED")}}
+                <div class='status-badge approved'>
+                    <p>La factura ha sido aprobada correctamente y está lista para el siguiente paso del proceso.</p>
+                </div>
+                <p>Puede proceder con el siguiente paso del proceso de pago.</p>
+                {{else}}
+                <div class='status-badge rejected'>
+                    <p>La factura ha sido rechazada por el departamento de tesorería.</p>
+                </div>
+                {{#if rejectionReason}}
+                <div class='rejection-reason'>
+                    <strong>Motivo del Rechazo:</strong>
+                    <p>{{rejectionReason}}</p>
+                </div>
+                {{/if}}
+                <p>Por favor, tome las acciones necesarias para corregir la situación y vuelva a enviar la factura.</p>
+                {{/if}}
+            </div>
+            <div class='footer'>
+                <p>© {{year}} Viatika. Todos los derechos reservados.</p>
+            </div>
         </div>
-
-        {{#if (eq status "REJECTED")}}
-        <div class="rejection-reason">
-            <strong>Motivo del Rechazo:</strong>
-            <p>{{rejectionReason}}</p>
-        </div>
-        <p>Por favor, tome las acciones necesarias para corregir la situación y vuelva a enviar la factura.</p>
-        {{else}}
-        <p>Puede proceder con el siguiente paso del proceso de pago.</p>
-        {{/if}}
-    </div>
-
-    <div class="footer">
-        <p>Este es un correo automático, por favor no responda a este mensaje.</p>
     </div>
 </body>
-</html> 
+</html>

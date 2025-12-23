@@ -46,7 +46,7 @@ interface SunatValidationMeta {
 export class ExpenseService {
   private readonly logger = new Logger(ExpenseService.name)
   private readonly openai: OpenAI
-  private readonly visionModel = 'gpt-4o'
+  private readonly visionModel = 'gpt-5.1'
 
   constructor(
     private readonly configService: ConfigService,
@@ -393,7 +393,7 @@ export class ExpenseService {
         model: this.visionModel,
         messages: this.buildVisionMessages(prompt, body.imageUrl),
         temperature: 0,
-        max_tokens: 8192,
+        max_completion_tokens: 8192,
       })
 
       const extraction = this.parseOpenAiJsonContent(
@@ -475,7 +475,7 @@ export class ExpenseService {
           },
         ],
         temperature: 0,
-        max_tokens: 8192,
+        max_completion_tokens: 8192,
       })
 
       const extraction = this.parseOpenAiJsonContent(
@@ -541,7 +541,7 @@ export class ExpenseService {
       if (typeof dataObj === 'string') {
         try {
           dataObj = JSON.parse(dataObj)
-        } catch {}
+        } catch { }
       }
       if (dataObj && dataObj.fechaEmision) {
         fechaEmisionDate = parseFechaEmision(dataObj.fechaEmision)
@@ -1016,9 +1016,8 @@ export class ExpenseService {
                   colaborador.email,
                   {
                     providerName: colaborador.name,
-                    invoiceNumber: `${invoiceData.serie || ''}-${
-                      invoiceData.correlativo || ''
-                    }`,
+                    invoiceNumber: `${invoiceData.serie || ''}-${invoiceData.correlativo || ''
+                      }`,
                     date:
                       invoiceData.fechaEmision ||
                       new Date().toISOString().split('T')[0],

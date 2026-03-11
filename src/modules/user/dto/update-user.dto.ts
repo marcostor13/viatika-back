@@ -2,6 +2,8 @@ import {
   IsString,
   IsEmail,
   IsOptional,
+  IsBoolean,
+  IsMongoId,
 } from 'class-validator'
 
 export class UpdateUserDto {
@@ -17,4 +19,15 @@ export class UpdateUserDto {
   @IsOptional()
   password?: string
 
+  @IsMongoId()
+  @IsOptional()
+  roleId?: string
+
+  @IsBoolean()
+  @IsOptional()
+  isActive?: boolean
+
+  @IsMongoId()
+  @IsOptional()
+  clientId?: string
 }

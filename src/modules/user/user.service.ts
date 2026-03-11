@@ -78,7 +78,8 @@ export class UserService {
     }
 
     async create(userData: CreateUserDto): Promise<IUserResponse> {
-        const clientId = new Types.ObjectId(userData.clientId);
+        console.log('====== create user payload received ======', userData);
+        const clientId = userData.clientId ? new Types.ObjectId(userData.clientId) : null;
         const roleId = new Types.ObjectId(userData.roleId);
 
         const issetUser = await this.userModel.findOne({ email: userData.email });
@@ -116,7 +117,17 @@ export class UserService {
     }
 
     update(id: string, updateUserDto: UpdateUserDto) {
-        return this.userModel.findByIdAndUpdate(id, updateUserDto, { new: true }).populate('roleId').populate('clientId').exec();
+        const updateData: any = { ...updateUserDto };
+        
+        if (updateData.roleId) {
+            updateData.roleId = new Types.ObjectId(updateData.roleId);
+        }
+        
+        if (updateData.clientId) {
+            updateData.clientId = new Types.ObjectId(updateData.clientId);
+        }
+
+        return this.userModel.findByIdAndUpdate(id, updateData, { new: true }).populate('roleId').populate('clientId').exec();
     }
 
     delete(id: string) {

@@ -20,6 +20,8 @@ import { ROLES } from '../auth/enums/roles.enum'
 import { CreateUserDto } from './dto/create-user.dto'
 import { Types } from 'mongoose'
 import { UpdateUserDto } from './dto/update-user.dto'
+import { ParseObjectIdPipe } from './pipes/parse-objectid.pipe'
+
 @Controller('user')
 export class UserController {
   constructor(private userService: UserService) { }
@@ -41,32 +43,32 @@ export class UserController {
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
   @Get(':clientId')
-  async findAll(@Param('clientId') clientId: string) {
-    return await this.userService.findAll(new Types.ObjectId(clientId))
+  async findAll(@Param('clientId', ParseObjectIdPipe) clientId: Types.ObjectId) {
+    return await this.userService.findAll(clientId)
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
   @Get(':id/:clientId')
-  async findOne(@Param('id') id: string, @Param('clientId') clientId: string) {
-    return await this.userService.findOne(id)
+  async findOne(@Param('id', ParseObjectIdPipe) id: Types.ObjectId, @Param('clientId', ParseObjectIdPipe) clientId: Types.ObjectId) {
+    return await this.userService.findOne(id.toString())
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
   @Patch(':id')
   async update(
-    @Param('id') id: string,
+    @Param('id', ParseObjectIdPipe) id: Types.ObjectId,
     @Param('clientId') clientId: string,
     @Body() updateUserDto: UpdateUserDto
   ) {
-    return await this.userService.update(id, updateUserDto)
+    return await this.userService.update(id.toString(), updateUserDto)
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
   @Delete(':id')
-  async delete(@Param('id') id: string) {
-    return await this.userService.delete(id)
+  async delete(@Param('id', ParseObjectIdPipe) id: Types.ObjectId) {
+    return await this.userService.delete(id.toString())
   }
 }

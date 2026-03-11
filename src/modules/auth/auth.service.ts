@@ -16,13 +16,18 @@ export class AuthService {
         if (userExists) {
             throw new BadRequestException('El usuario ya existe');
         }
-        const hashedPassword = await bcrypt.hash(password, 10);
-        if (clientId) {
-            await this.userService.create({ email, password: hashedPassword, name, roleId, clientId });
 
-        } else {
-            await this.userService.create({ email, password: hashedPassword, name, roleId, clientId: '' });
-        }
+        // Ensure clientId is handled as null if empty or missing
+        const finalClientId = (clientId && clientId !== '') ? clientId : null;
+
+        await this.userService.create({
+            email,
+            password, // UserService handles hashing
+            name,
+            roleId,
+            clientId: finalClientId as any
+        });
+
         return {
             message: 'Usuario creado correctamente',
         };

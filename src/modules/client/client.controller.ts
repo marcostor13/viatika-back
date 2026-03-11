@@ -24,7 +24,7 @@ export class ClientController {
   constructor(
     private readonly clientService: ClientService,
     private readonly clientOnboardingService: ClientOnboardingService
-  ) {}
+  ) { }
 
   @Post()
   @Roles(ROLES.SUPER_ADMIN)

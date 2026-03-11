@@ -10,8 +10,8 @@ export class AuthController {
     constructor(private authService: AuthService) { }
 
 
-    @UseGuards(AuthGuard('jwt'), RolesGuard)
-    @Roles(ROLES.SUPER_ADMIN)
+    // @UseGuards(AuthGuard('jwt'), RolesGuard)
+    // @Roles(ROLES.SUPER_ADMIN)
     @Post('register')
     async register(@Body() registerDto: RegisterDto) {
         return await this.authService.register(registerDto);

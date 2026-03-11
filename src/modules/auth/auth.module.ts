@@ -9,16 +9,21 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 import { AuthController } from './auth.controller';
 import { GoogleStrategy } from './strategies/google.strategy';
 
+import { RoleModule } from '../role/role.module';
+import { DatabaseSeederService } from './database-seeder.service';
+
 @Module({
   imports: [
     UserModule,
+    RoleModule,
     PassportModule,
     JwtModule.register({
       secret: jwtConstants.secret,
       signOptions: { expiresIn: '24h' },
     }),
   ],
-  providers: [AuthService, LocalStrategy, JwtStrategy, GoogleStrategy],
+  providers: [AuthService, LocalStrategy, JwtStrategy, GoogleStrategy, DatabaseSeederService],
   controllers: [AuthController],
+  exports: [AuthService, DatabaseSeederService],
 })
 export class AuthModule { }

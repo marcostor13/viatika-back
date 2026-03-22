@@ -19,14 +19,30 @@ export class DatabaseSeederService implements OnApplicationBootstrap {
     }
 
     private async seedRoles() {
-        const existingRoles = await this.roleService.findAll();
-        if (existingRoles.length === 0) {
-            this.logger.log('Seeding roles...');
-            const rolesToCreate = Object.values(ROLES);
-            for (const roleName of rolesToCreate) {
-                await this.roleService.create({ name: roleName });
+        const rolesToCreate = Object.values(ROLES);
+        this.logger.log('Checking and seeding roles...');
+        
+        for (const roleName of rolesToCreate) {
+            const existingRole = await this.roleService.getByName(roleName);
+            if (!existingRole) {
+                // Determine the old name to look for migration
+                let oldName = '';
+                if (roleName === ROLES.SUPER_ADMIN) oldName = 'Super';
+                else if (roleName === ROLES.ADMIN) oldName = 'Admin';
+                else if (roleName === ROLES.COLABORADOR) oldName = 'User';
+
+                const roleWithOldName = oldName ? await this.roleService.getByName(oldName) : null;
+                
+                if (roleWithOldName) {
+                    this.logger.log(`Renaming existing role '${oldName}' to '${roleName}'`);
+                    await this.roleService.update((roleWithOldName as any)._id.toString(), { name: roleName });
+                } else {
+                    this.logger.log(`Creating new role: '${roleName}'`);
+                    await this.roleService.create({ name: roleName });
+                }
+            } else {
+                this.logger.log(`Role '${roleName}' already exists.`);
             }
-            this.logger.log('Roles seeded successfully.');
         }
     }
 

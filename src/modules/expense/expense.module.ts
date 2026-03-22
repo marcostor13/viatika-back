@@ -11,6 +11,8 @@ import { UserModule } from '../user/user.module'
 import { SunatConfigModule } from '../sunat-config/sunat-config.module'
 import { HttpModule } from '@nestjs/axios'
 import { UploadModule } from '../upload/upload.module'
+import { ExpenseReportModule } from '../expense-report/expense-report.module'
+import { AuditLogModule } from '../audit-log/audit-log.module'
 
 @Module({
   imports: [
@@ -22,6 +24,8 @@ import { UploadModule } from '../upload/upload.module'
     SunatConfigModule,
     HttpModule,
     UploadModule,
+    ExpenseReportModule,
+    AuditLogModule,
   ],
   controllers: [ExpenseController],
   providers: [ExpenseService],

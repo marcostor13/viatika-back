@@ -17,6 +17,12 @@ export interface IUser {
     isActive?: boolean;
 }
 
+export interface IUserPermissions {
+    modules: string[];
+    canApproveL1: boolean;
+    canApproveL2: boolean;
+}
+
 export interface IUserResponse {
     _id: Types.ObjectId;
     email: string;
@@ -25,6 +31,11 @@ export interface IUserResponse {
     client: ClientDocument;
     password?: string;
     isActive: boolean;
+    permissions: IUserPermissions;
+    dni?: string;
+    employeeCode?: string;
+    address?: string;
+    phone?: string;
 }
 
 @Injectable()
@@ -43,6 +54,11 @@ export class UserService {
             role: user.roleId as unknown as RoleDocument,
             client: user.clientId as unknown as ClientDocument,
             isActive: user.isActive,
+            permissions: (user as any).permissions || { modules: [], canApproveL1: false, canApproveL2: false },
+            dni: (user as any).dni,
+            employeeCode: (user as any).employeeCode,
+            address: (user as any).address,
+            phone: (user as any).phone,
         }));
     }
 
@@ -59,6 +75,11 @@ export class UserService {
             client: user.clientId as unknown as ClientDocument,
             password: user.password,
             isActive: user.isActive,
+            permissions: (user as any).permissions || { modules: [], canApproveL1: false, canApproveL2: false },
+            dni: (user as any).dni,
+            employeeCode: (user as any).employeeCode,
+            address: (user as any).address,
+            phone: (user as any).phone,
         }
     }
 
@@ -74,6 +95,11 @@ export class UserService {
             role: user.roleId as unknown as RoleDocument,
             client: user.clientId as unknown as ClientDocument,
             isActive: user.isActive,
+            permissions: (user as any).permissions || { modules: [], canApproveL1: false, canApproveL2: false },
+            dni: (user as any).dni,
+            employeeCode: (user as any).employeeCode,
+            address: (user as any).address,
+            phone: (user as any).phone,
         }
     }
 
@@ -99,6 +125,11 @@ export class UserService {
             role: populatedUser.roleId as unknown as RoleDocument,
             client: populatedUser.clientId as unknown as ClientDocument,
             isActive: populatedUser.isActive,
+            permissions: (populatedUser as any).permissions || { modules: [], canApproveL1: false, canApproveL2: false },
+            dni: (populatedUser as any).dni,
+            employeeCode: (populatedUser as any).employeeCode,
+            address: (populatedUser as any).address,
+            phone: (populatedUser as any).phone,
         }
     }
 

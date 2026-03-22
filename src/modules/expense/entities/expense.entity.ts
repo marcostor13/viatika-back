@@ -10,12 +10,32 @@ export type ExpenseStatus =
   | 'sunat_not_found'
   | 'sunat_error'
 
+export type ExpenseType = 'factura' | 'planilla_movilidad' | 'otros_gastos'
+
+export interface MobilityRowCoords {
+  lat: number
+  lng: number
+}
+
+export interface MobilityRow {
+  fecha: string
+  concepto: string
+  total: number
+  clienteProveedor: string
+  origen: string
+  origenCoords?: MobilityRowCoords
+  destino: string
+  destinoCoords?: MobilityRowCoords
+  distanciaKm?: number
+  gestion: string
+}
+
 export interface ExpenseDocument extends Document {
   proyectId: Types.ObjectId
   total: number
   description: string
   categoryId: Types.ObjectId
-  file: string
+  file?: string
   data: string
   status?: ExpenseStatus
   statusDate?: Date
@@ -24,6 +44,11 @@ export interface ExpenseDocument extends Document {
   rejectionReason?: string
   clientId: string
   fechaEmision?: string
+  expenseReportId?: Types.ObjectId
+  expenseType?: ExpenseType
+  mobilityRows?: MobilityRow[]
+  declaracionJurada?: boolean
+  declaracionJuradaFirmante?: string
 }
 
 export interface GetExpenseDocument extends ExpenseDocument {
@@ -44,8 +69,8 @@ export class Expense {
   @Prop({ required: true, type: Types.ObjectId, ref: 'Category' })
   categoryId: Types.ObjectId
 
-  @Prop({ required: true })
-  file: string
+  @Prop({ required: false })
+  file?: string
 
   @Prop()
   data: string
@@ -73,6 +98,42 @@ export class Expense {
 
   @Prop({ type: String, required: false })
   fechaEmision?: string
+
+  @Prop({ type: Types.ObjectId, ref: 'ExpenseReport', required: false })
+  expenseReportId?: Types.ObjectId
+
+  @Prop({ type: String, default: 'factura', enum: ['factura', 'planilla_movilidad', 'otros_gastos'] })
+  expenseType?: ExpenseType
+
+  @Prop({
+    type: [{
+      fecha: { type: String },
+      concepto: { type: String },
+      total: { type: Number },
+      clienteProveedor: { type: String },
+      origen: { type: String },
+      origenCoords: {
+        lat: { type: Number },
+        lng: { type: Number },
+      },
+      destino: { type: String },
+      destinoCoords: {
+        lat: { type: Number },
+        lng: { type: Number },
+      },
+      distanciaKm: { type: Number },
+      gestion: { type: String },
+    }],
+    required: false,
+    default: undefined,
+  })
+  mobilityRows?: MobilityRow[]
+
+  @Prop({ type: Boolean, required: false })
+  declaracionJurada?: boolean
+
+  @Prop({ type: String, required: false })
+  declaracionJuradaFirmante?: string
 }
 
 export const ExpenseSchema = SchemaFactory.createForClass(Expense)

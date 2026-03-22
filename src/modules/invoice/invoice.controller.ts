@@ -28,6 +28,7 @@ import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express'
 import { Response } from 'express'
 import { ROLES } from '../auth/enums/roles.enum'
 import { Roles } from '../auth/decorators/roles.decorador'
+import { AuditLogService } from '../audit-log/audit-log.service'
 
 @Controller('invoices')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -35,7 +36,10 @@ import { Roles } from '../auth/decorators/roles.decorador'
 export class InvoiceController {
   private readonly logger = new Logger(InvoiceController.name)
 
-  constructor(private readonly invoiceService: InvoiceService) {}
+  constructor(
+    private readonly invoiceService: InvoiceService,
+    private readonly auditLogService: AuditLogService,
+  ) {}
 
   @Get('token-sunat')
   getToken() {
@@ -102,9 +106,18 @@ export class InvoiceController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  create(@Body() createInvoiceDto: CreateInvoiceDto, @Req() req: any) {
+  async create(@Body() createInvoiceDto: CreateInvoiceDto, @Req() req: any) {
     const clientId = req.user.clientId
-    return this.invoiceService.create(createInvoiceDto, clientId)
+    const result = await this.invoiceService.create(createInvoiceDto, clientId)
+    this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email,
+      action: 'create_invoice',
+      module: 'invoices',
+      entityId: result?._id?.toString(),
+      clientId,
+    })
+    return result
   }
 
   @Get()
@@ -147,19 +160,34 @@ export class InvoiceController {
     @Req() req: any
   ) {
     const companyId = req.user.companyId
-    return this.invoiceService.updateStatus(
-      id,
-      body.status,
-      companyId,
-      body.reason
-    )
+    const result = await this.invoiceService.updateStatus(id, body.status, companyId, body.reason)
+    const action = body.status === InvoiceStatus.APPROVED ? 'approve_invoice' : body.status === InvoiceStatus.REJECTED ? 'reject_invoice' : 'approve_invoice'
+    this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email,
+      action,
+      module: 'invoices',
+      entityId: id,
+      details: body.reason,
+      clientId: companyId,
+    })
+    return result
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  remove(@Param('id') id: string, @Req() req: any) {
+  async remove(@Param('id') id: string, @Req() req: any) {
     const companyId = req.user.companyId
-    return this.invoiceService.remove(id, companyId)
+    const result = await this.invoiceService.remove(id, companyId)
+    this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email,
+      action: 'delete_invoice',
+      module: 'invoices',
+      entityId: id,
+      clientId: companyId,
+    })
+    return result
   }
 
   @Post(':id/acta-aceptacion')

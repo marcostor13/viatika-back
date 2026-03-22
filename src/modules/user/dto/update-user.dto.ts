@@ -4,7 +4,24 @@ import {
   IsOptional,
   IsBoolean,
   IsMongoId,
+  IsArray,
+  ValidateNested,
 } from 'class-validator'
+import { Type } from 'class-transformer'
+
+export class UpdatePermissionsDto {
+  @IsArray()
+  @IsOptional()
+  modules?: string[]
+
+  @IsBoolean()
+  @IsOptional()
+  canApproveL1?: boolean
+
+  @IsBoolean()
+  @IsOptional()
+  canApproveL2?: boolean
+}
 
 export class UpdateUserDto {
   @IsString()
@@ -30,4 +47,25 @@ export class UpdateUserDto {
   @IsMongoId()
   @IsOptional()
   clientId?: string
+
+  @IsString()
+  @IsOptional()
+  dni?: string
+
+  @IsString()
+  @IsOptional()
+  employeeCode?: string
+
+  @IsString()
+  @IsOptional()
+  address?: string
+
+  @IsString()
+  @IsOptional()
+  phone?: string
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => UpdatePermissionsDto)
+  permissions?: UpdatePermissionsDto
 }

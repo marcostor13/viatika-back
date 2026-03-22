@@ -19,12 +19,16 @@ import { Roles } from '../auth/decorators/roles.decorador'
 import { ROLES } from '../auth/enums/roles.enum'
 import { CreateUserDto } from './dto/create-user.dto'
 import { Types } from 'mongoose'
-import { UpdateUserDto } from './dto/update-user.dto'
+import { UpdateUserDto, UpdatePermissionsDto } from './dto/update-user.dto'
 import { ParseObjectIdPipe } from './pipes/parse-objectid.pipe'
+import { AuditLogService } from '../audit-log/audit-log.service'
 
 @Controller('user')
 export class UserController {
-  constructor(private userService: UserService) { }
+  constructor(
+    private userService: UserService,
+    private auditLogService: AuditLogService,
+  ) { }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(ROLES.SUPER_ADMIN)
@@ -36,21 +40,31 @@ export class UserController {
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
   @Post()
-  async create(@Body() createdUserDto: CreateUserDto) {
-    return await this.userService.create(createdUserDto)
+  async create(@Body() createdUserDto: CreateUserDto, @Request() req: any) {
+    const result = await this.userService.create(createdUserDto)
+    this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email,
+      action: 'create_user',
+      module: 'usuarios',
+      entityId: (result as any)?._id?.toString(),
+      details: createdUserDto.email,
+      clientId: req.user.clientId,
+    })
+    return result
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
-  @Get(':clientId')
+  @Get('client/:clientId')
   async findAll(@Param('clientId', ParseObjectIdPipe) clientId: Types.ObjectId) {
     return await this.userService.findAll(clientId)
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
-  @Get(':id/:clientId')
-  async findOne(@Param('id', ParseObjectIdPipe) id: Types.ObjectId, @Param('clientId', ParseObjectIdPipe) clientId: Types.ObjectId) {
+  @Get('details/:id')
+  async findOne(@Param('id', ParseObjectIdPipe) id: Types.ObjectId) {
     return await this.userService.findOne(id.toString())
   }
 
@@ -59,10 +73,30 @@ export class UserController {
   @Patch(':id')
   async update(
     @Param('id', ParseObjectIdPipe) id: Types.ObjectId,
-    @Param('clientId') clientId: string,
     @Body() updateUserDto: UpdateUserDto
   ) {
     return await this.userService.update(id.toString(), updateUserDto)
+  }
+
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Patch(':id/permissions')
+  async updatePermissions(
+    @Param('id', ParseObjectIdPipe) id: Types.ObjectId,
+    @Body() permissionsDto: UpdatePermissionsDto,
+    @Request() req: any,
+  ) {
+    const result = await this.userService.update(id.toString(), { permissions: permissionsDto })
+    this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email,
+      action: 'update_permissions',
+      module: 'usuarios',
+      entityId: id.toString(),
+      details: JSON.stringify(permissionsDto),
+      clientId: req.user.clientId,
+    })
+    return result
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)

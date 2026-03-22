@@ -1,5 +1,5 @@
-import { IsString, IsOptional, IsNotEmpty, IsEnum } from 'class-validator'
-import { ExpenseStatus } from '../entities/expense.entity'
+import { IsString, IsOptional, IsNotEmpty, IsEnum, IsBoolean, IsArray, IsNumber } from 'class-validator'
+import { ExpenseStatus, ExpenseType, MobilityRow } from '../entities/expense.entity'
 
 export class CreateExpenseDto {
   @IsString()
@@ -11,14 +11,15 @@ export class CreateExpenseDto {
   categoryId: string
 
   @IsString()
-  @IsNotEmpty()
-  imageUrl: string
+  @IsOptional()
+  imageUrl?: string
 
   @IsString()
   @IsOptional()
   data?: string
 
   @IsOptional()
+  @IsNumber()
   total?: number
 
   @IsEnum([
@@ -34,10 +35,30 @@ export class CreateExpenseDto {
   status?: ExpenseStatus
 
   @IsString()
+  @IsNotEmpty()
+  clientId: string
+
+  @IsString()
   @IsOptional()
   userId?: string
 
   @IsString()
-  @IsNotEmpty()
-  clientId: string
+  @IsOptional()
+  expenseReportId?: string
+
+  @IsEnum(['factura', 'planilla_movilidad', 'otros_gastos'])
+  @IsOptional()
+  expenseType?: ExpenseType
+
+  @IsArray()
+  @IsOptional()
+  mobilityRows?: MobilityRow[]
+
+  @IsBoolean()
+  @IsOptional()
+  declaracionJurada?: boolean
+
+  @IsString()
+  @IsOptional()
+  declaracionJuradaFirmante?: string
 }

@@ -14,6 +14,9 @@ import { EmailModule } from './modules/email/email.module'
 import { SunatConfigModule } from './modules/sunat-config/sunat-config.module'
 import { ExpenseModule } from './modules/expense/expense.module'
 import { UploadModule } from './modules/upload/upload.module'
+import { ExpenseReportModule } from './modules/expense-report/expense-report.module';
+import { AdvanceModule } from './modules/advance/advance.module';
+import { AuditLogModule } from './modules/audit-log/audit-log.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -31,6 +34,9 @@ import { UploadModule } from './modules/upload/upload.module'
     SunatConfigModule,
     ExpenseModule,
     UploadModule,
+    ExpenseReportModule,
+    AdvanceModule,
+    AuditLogModule,
   ],
   controllers: [AppController],
   providers: [AppService],

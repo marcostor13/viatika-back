@@ -21,6 +21,7 @@ import { HttpService } from '@nestjs/axios'
 import { firstValueFrom } from 'rxjs'
 import { UserService } from '../user/user.service'
 import { UploadService } from '../upload/upload.service'
+import { ExpenseReportService } from '../expense-report/expense-report.service'
 
 // Tipos auxiliares
 interface ExtractedInvoiceData {
@@ -57,7 +58,8 @@ export class ExpenseService {
     private readonly userService: UserService,
     private readonly sunatConfigService: SunatConfigService,
     private readonly httpService: HttpService,
-    private readonly uploadService: UploadService
+    private readonly uploadService: UploadService,
+    private readonly expenseReportService: ExpenseReportService
   ) {
     const apiKey = this.configService.get<string>('OPENAI_API_KEY')
     if (!apiKey) {
@@ -208,6 +210,7 @@ export class ExpenseService {
       categoryId: categoryObject,
       proyectId: projectObject,
       clientId: body.clientId,
+      expenseReportId: body.expenseReportId ? new Types.ObjectId(body.expenseReportId) : undefined,
       total: data.montoTotal,
       data: JSON.stringify({ ...data, sunatValidation: validation }),
       file: body.imageUrl,
@@ -391,7 +394,7 @@ export class ExpenseService {
     try {
       const completion = await this.openai.chat.completions.create({
         model: this.visionModel,
-        messages: this.buildVisionMessages(prompt, body.imageUrl),
+        messages: this.buildVisionMessages(prompt, body.imageUrl!),
         temperature: 0,
         max_completion_tokens: 8192,
       })
@@ -415,6 +418,10 @@ export class ExpenseService {
         validation,
         expenseStatus
       )
+
+      if (body.expenseReportId) {
+        await this.expenseReportService.addExpenseToReport(body.expenseReportId, expense._id.toString());
+      }
 
       const project = await this.projectService.findOne(
         body.proyectId,
@@ -506,6 +513,10 @@ export class ExpenseService {
         expenseStatus
       )
 
+      if (body.expenseReportId) {
+        await this.expenseReportService.addExpenseToReport(body.expenseReportId, expense._id.toString());
+      }
+
       const project = await this.projectService.findOne(
         body.proyectId,
         body.clientId
@@ -532,6 +543,75 @@ export class ExpenseService {
     }
   }
 
+  async createMobilitySheet(body: CreateExpenseDto): Promise<Expense> {
+    if (!body.clientId) {
+      throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
+    }
+    if (!body.mobilityRows || body.mobilityRows.length === 0) {
+      throw new HttpException('Se requiere al menos una fila en la planilla', HttpStatus.BAD_REQUEST)
+    }
+
+    const total = body.mobilityRows.reduce((sum, row) => sum + (row.total || 0), 0)
+
+    const expense = await this.expenseRepository.create({
+      categoryId: new Types.ObjectId(body.categoryId),
+      proyectId: new Types.ObjectId(body.proyectId),
+      clientId: body.clientId,
+      expenseReportId: body.expenseReportId ? new Types.ObjectId(body.expenseReportId) : undefined,
+      total,
+      expenseType: 'planilla_movilidad',
+      mobilityRows: body.mobilityRows,
+      file: body.imageUrl,
+      status: 'pending',
+      createdBy: body.userId || 'system',
+      data: JSON.stringify({ type: 'planilla_movilidad', rows: body.mobilityRows }),
+    })
+
+    if (body.expenseReportId) {
+      await this.expenseReportService.addExpenseToReport(body.expenseReportId, (expense as any)._id.toString())
+    }
+
+    return expense
+  }
+
+  async createOtherExpense(body: CreateExpenseDto): Promise<Expense> {
+    if (!body.clientId) {
+      throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
+    }
+    if (!body.declaracionJurada) {
+      throw new HttpException('Se requiere firmar la declaración jurada', HttpStatus.BAD_REQUEST)
+    }
+    if (!body.total || body.total <= 0) {
+      throw new HttpException('Se requiere un monto válido', HttpStatus.BAD_REQUEST)
+    }
+
+    const expense = await this.expenseRepository.create({
+      categoryId: new Types.ObjectId(body.categoryId),
+      proyectId: new Types.ObjectId(body.proyectId),
+      clientId: body.clientId,
+      expenseReportId: body.expenseReportId ? new Types.ObjectId(body.expenseReportId) : undefined,
+      total: body.total,
+      description: body.data,
+      expenseType: 'otros_gastos',
+      declaracionJurada: true,
+      declaracionJuradaFirmante: body.declaracionJuradaFirmante,
+      file: body.imageUrl || undefined,
+      status: 'pending',
+      createdBy: body.userId || 'system',
+      data: JSON.stringify({
+        type: 'otros_gastos',
+        declaracionJurada: true,
+        firmante: body.declaracionJuradaFirmante,
+      }),
+    })
+
+    if (body.expenseReportId) {
+      await this.expenseReportService.addExpenseToReport(body.expenseReportId, (expense as any)._id.toString())
+    }
+
+    return expense
+  }
+
   async create(createExpenseDto: CreateExpenseDto): Promise<Expense> {
     let fechaEmisionDate: Date | undefined = undefined
     if ('fechaEmision' in createExpenseDto && createExpenseDto.fechaEmision) {
@@ -554,7 +634,13 @@ export class ExpenseService {
       fechaEmision: fechaEmisionDate,
       createdBy: createExpenseDto.userId,
     })
-    return createdExpense.save()
+    const expense = await createdExpense.save();
+
+    if (createExpenseDto.expenseReportId) {
+      await this.expenseReportService.addExpenseToReport(createExpenseDto.expenseReportId, expense._id.toString());
+    }
+
+    return expense;
   }
 
   async findAll(clientId: string, filters: any = {}): Promise<Expense[]> {

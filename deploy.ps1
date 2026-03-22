@@ -2,6 +2,7 @@
 $IMAGE_NAME = 'viatika-back'
 $SshUser = "marcostor13"
 $Ec2Host = "192.168.100.29"
+$Ec2Host = "ssh.marcostorresalarcon.com"
 
 # 1. (NUEVO) Define la ruta del proyecto en el servidor remoto
 $RemoteProjectPath = "/home/$SshUser" 

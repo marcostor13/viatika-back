@@ -25,7 +25,6 @@ export class CreateUserDto {
   roleId: string
 
   @IsString()
-
   @IsMongoId()
   @IsNotEmpty()
   clientId: string
@@ -33,4 +32,20 @@ export class CreateUserDto {
   @IsBoolean()
   @IsOptional()
   isActive?: boolean
+
+  @IsString()
+  @IsOptional()
+  dni?: string
+
+  @IsString()
+  @IsOptional()
+  employeeCode?: string
+
+  @IsString()
+  @IsOptional()
+  address?: string
+
+  @IsString()
+  @IsOptional()
+  phone?: string
 }

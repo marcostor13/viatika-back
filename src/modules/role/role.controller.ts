@@ -19,8 +19,15 @@ export class RoleController {
   }
 
   @Get()
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
   findAll() {
     return this.roleService.findAll();
+  }
+
+  @Get('for-admin')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  getForAdmin() {
+    return this.roleService.getWithSuperAdmin();
   }
 
   @Get('with-super-admin')

@@ -7,6 +7,7 @@ import { ProjectModule } from '../project/project.module'
 import { HttpModule } from '@nestjs/axios'
 import { EmailModule } from '../email/email.module'
 import { UserModule } from '../user/user.module'
+import { AuditLogModule } from '../audit-log/audit-log.module'
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { UserModule } from '../user/user.module'
     HttpModule,
     EmailModule,
     UserModule,
+    AuditLogModule,
   ],
   controllers: [InvoiceController],
   providers: [InvoiceService],

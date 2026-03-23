@@ -28,11 +28,13 @@ export class ProjectController {
   }
 
   @Get(':clientId')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
   findAll(@Param('clientId') clientId: string) {
     return this.projectService.findAll(clientId)
   }
 
   @Get(':id/:clientId')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
   findOne(@Param('id') id: string, @Param('clientId') clientId: string) {
     return this.projectService.findOne(id, clientId)
   }

@@ -1,4 +1,5 @@
 import {
+  ForbiddenException,
   HttpException,
   HttpStatus,
   Injectable,
@@ -22,6 +23,14 @@ import { firstValueFrom } from 'rxjs'
 import { UserService } from '../user/user.service'
 import { UploadService } from '../upload/upload.service'
 import { ExpenseReportService } from '../expense-report/expense-report.service'
+import { ROLES } from '../auth/enums/roles.enum'
+
+/** Usuario autenticado para autorización de gastos (PATCH/DELETE/GET). */
+export interface ExpenseActorContext {
+  userId: string
+  roleName: string
+  clientId?: string
+}
 
 // Tipos auxiliares
 interface ExtractedInvoiceData {
@@ -66,6 +75,74 @@ export class ExpenseService {
       throw new Error('OpenAI API key is not configured.')
     }
     this.openai = new OpenAI({ apiKey })
+  }
+
+  private normalizeClientId(raw: unknown): string {
+    if (raw == null) return ''
+    if (typeof raw === 'object' && raw !== null && '_id' in raw) {
+      return String((raw as { _id: unknown })._id)
+    }
+    return String(raw)
+  }
+
+  private expenseReportIdString(expense: Expense): string | null {
+    const raw = (expense as unknown as { expenseReportId?: Types.ObjectId | { _id: Types.ObjectId } | null })
+      .expenseReportId
+    if (!raw) return null
+    if (typeof raw === 'object' && '_id' in raw) {
+      return String((raw as { _id: Types.ObjectId })._id)
+    }
+    return String(raw)
+  }
+
+  private assertCompanyAccess(expense: Expense, actor: ExpenseActorContext): void {
+    if (actor.roleName === ROLES.SUPER_ADMIN) return
+    const expClient = this.normalizeClientId((expense as unknown as { clientId: unknown }).clientId)
+    const userClient = this.normalizeClientId(actor.clientId)
+    if (!userClient || expClient !== userClient) {
+      throw new ForbiddenException('No autorizado para acceder a este gasto')
+    }
+  }
+
+  private assertCanReadExpense(expense: Expense, actor: ExpenseActorContext): void {
+    this.assertCompanyAccess(expense, actor)
+    if (actor.roleName === ROLES.COLABORADOR) {
+      const ownerId = String(expense.createdBy || '').trim()
+      if (!ownerId || ownerId !== actor.userId) {
+        throw new ForbiddenException('Solo puedes ver tus propios comprobantes')
+      }
+    }
+  }
+
+  private async assertCanMutateExpense(
+    expense: Expense,
+    actor: ExpenseActorContext,
+  ): Promise<void> {
+    this.assertCanReadExpense(expense, actor)
+    if (actor.roleName !== ROLES.COLABORADOR) return
+    const status = expense.status || 'pending'
+    if (status === 'approved' || status === 'rejected') {
+      throw new ForbiddenException(
+        'No puedes modificar un comprobante ya aprobado o rechazado.',
+      )
+    }
+    const reportId = this.expenseReportIdString(expense)
+    if (reportId) {
+      const report = await this.expenseReportService.findOne(reportId)
+      if (report.status !== 'open' && report.status !== 'rejected') {
+        throw new ForbiddenException(
+          'Solo puedes editar o eliminar gastos en rendiciones abiertas o rechazadas.',
+        )
+      }
+    }
+  }
+
+  private async loadExpenseOrThrow(id: string): Promise<Expense> {
+    const expense = await this.findOne(id)
+    if (!expense) {
+      throw new NotFoundException(`Gasto con ID ${id} no encontrado`)
+    }
+    return expense
   }
 
   // Construcción del mensaje para Vision
@@ -911,12 +988,25 @@ export class ExpenseService {
       throw new NotFoundException(`Expense with ID ${id} not found`)
     }
 
+    return this.buildSunatValidationInfoPayload(expense)
+  }
+
+  async getSunatValidationInfoForActor(
+    id: string,
+    actor: ExpenseActorContext,
+  ): Promise<Record<string, unknown>> {
+    const expense = await this.loadExpenseOrThrow(id)
+    this.assertCanReadExpense(expense, actor)
+    return this.buildSunatValidationInfoPayload(expense)
+  }
+
+  private buildSunatValidationInfoPayload(expense: Expense): Record<string, unknown> {
     try {
       const data = JSON.parse(expense.data)
       const sunatValidation = data.sunatValidation
 
       return {
-        expenseId: String((expense as any)._id),
+        expenseId: String((expense as { _id?: Types.ObjectId })._id),
         status: expense.status,
         sunatValidation: sunatValidation || null,
         hasValidation: !!sunatValidation,
@@ -932,9 +1022,10 @@ export class ExpenseService {
         },
       }
     } catch (error) {
-      this.logger.error(`Error parsing expense data: ${error.message}`)
+      const err = error as Error
+      this.logger.error(`Error parsing expense data: ${err.message}`)
       return {
-        expenseId: String((expense as any)._id),
+        expenseId: String((expense as { _id?: Types.ObjectId })._id),
         status: expense.status,
         sunatValidation: null,
         hasValidation: false,
@@ -943,22 +1034,27 @@ export class ExpenseService {
     }
   }
 
+  async findOneForActor(
+    id: string,
+    actor: ExpenseActorContext,
+  ): Promise<Expense> {
+    const expense = await this.loadExpenseOrThrow(id)
+    this.assertCanReadExpense(expense, actor)
+    return expense
+  }
+
   async update(
     id: string,
-    updateExpenseDto: UpdateExpenseDto
+    updateExpenseDto: UpdateExpenseDto,
+    actor: ExpenseActorContext,
   ): Promise<Expense | null> {
     if (!/^[0-9a-fA-F]{24}$/.test(id)) {
       throw new Error(`ID de expense inválido: ${id}`)
     }
 
     const expenseIdObject = Types.ObjectId.createFromHexString(id)
-
-    if (updateExpenseDto.categoryId) {
-      const expense = await this.findOne(id)
-      if (!expense) {
-        throw new NotFoundException(`Gasto con ID ${id} no encontrado`)
-      }
-    }
+    const existing = await this.loadExpenseOrThrow(id)
+    await this.assertCanMutateExpense(existing, actor)
 
     return this.expenseRepository
       .findOneAndUpdate({ _id: expenseIdObject }, updateExpenseDto, {
@@ -1272,13 +1368,20 @@ export class ExpenseService {
     }
   }
 
-  async remove(id: string): Promise<void> {
+  async remove(id: string, actor: ExpenseActorContext): Promise<void> {
     if (!/^[0-9a-fA-F]{24}$/.test(id)) {
       throw new Error(`ID de expense inválido: ${id}`)
     }
 
-    const expenseIdObject = Types.ObjectId.createFromHexString(id)
+    const existing = await this.loadExpenseOrThrow(id)
+    await this.assertCanMutateExpense(existing, actor)
 
+    const reportId = this.expenseReportIdString(existing)
+    if (reportId) {
+      await this.expenseReportService.removeExpenseFromReport(reportId, id)
+    }
+
+    const expenseIdObject = Types.ObjectId.createFromHexString(id)
     await this.expenseRepository
       .findOneAndDelete({ _id: expenseIdObject })
       .exec()
@@ -1368,12 +1471,11 @@ export class ExpenseService {
       montoTotal?: number
       tipoComprobante?: string
     },
-    clientId: string
+    clientId: string,
+    actor: ExpenseActorContext,
   ) {
-    const expense = await this.findOne(id)
-    if (!expense) {
-      throw new NotFoundException(`Factura con ID ${id} no encontrada`)
-    }
+    const expense = await this.loadExpenseOrThrow(id)
+    await this.assertCanMutateExpense(expense, actor)
 
     try {
       const configSunat = await this.sunatConfigService.findOne(clientId)

@@ -20,12 +20,12 @@ export interface InvoiceDocument extends Document {
   companyId: string
 }
 
-export interface GetInvoiceDocument extends InvoiceDocument {
+export interface GetInvoiceDocument extends Omit<InvoiceDocument, '_id'> {
   _id: string
 }
 
 @Schema({ timestamps: true })
-export class Invoice extends Document {
+export class Invoice {
   @Prop({ required: true })
   correlativo: string
 

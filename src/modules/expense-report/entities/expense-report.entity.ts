@@ -19,6 +19,7 @@ export interface ExpenseReportDocument extends Document {
   userId: Types.ObjectId;
   clientId: Types.ObjectId;
   status: ExpenseReportStatus;
+  rejectionReason?: string;
   expenseIds: Types.ObjectId[];
   advanceIds?: Types.ObjectId[];
   settlement?: Settlement;
@@ -45,6 +46,10 @@ export class ExpenseReport {
 
   @Prop({ default: 'open' })
   status: ExpenseReportStatus;
+
+  /** Motivo cuando el administrador rechaza la rendición (visible para el colaborador) */
+  @Prop({ required: false })
+  rejectionReason?: string;
 
   @Prop({ type: [{ type: Types.ObjectId, ref: 'Expense' }], default: [] })
   expenseIds: Types.ObjectId[];

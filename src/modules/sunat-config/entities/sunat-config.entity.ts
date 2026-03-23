@@ -1,7 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose'
 import { Document, Types } from 'mongoose'
 
-export interface SunatConfigDocument extends Document {
+export interface SunatConfigDocument extends Omit<Document, '_id'> {
   _id: string
   clientId: Types.ObjectId
   clientIdSunat: string

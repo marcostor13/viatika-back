@@ -11,7 +11,7 @@ export interface CategoryDocument extends Document {
   updatedAt: Date
 }
 
-export interface GetCategoryDocument extends CategoryDocument {
+export interface GetCategoryDocument extends Omit<CategoryDocument, '_id'> {
   _id: string
   client: ClientDocument
 }

@@ -31,17 +31,20 @@ export class CategoryController {
   }
 
   @Get(':clientId')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
   findAll(@Param('clientId') clientId: string) {
     return this.categoryService.findAll(clientId)
   }
 
   @Get(':id/:clientId')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
   @UseGuards(JwtAuthGuard, RolesGuard)
   findOne(@Param('id') id: string, @Param('clientId') clientId: string) {
     return this.categoryService.findOne(id, clientId)
   }
 
   @Get('key/:key/:clientId')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
   @UseGuards(JwtAuthGuard, RolesGuard)
   findByKey(@Param('key') key: string, @Param('clientId') clientId: string) {
     return this.categoryService.findByKey(key, clientId)

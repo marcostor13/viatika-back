@@ -51,7 +51,7 @@ export interface ExpenseDocument extends Document {
   declaracionJuradaFirmante?: string
 }
 
-export interface GetExpenseDocument extends ExpenseDocument {
+export interface GetExpenseDocument extends Omit<ExpenseDocument, '_id'> {
   _id: string
 }
 

@@ -21,7 +21,8 @@ export type AuditAction =
   | 'settle_advance'
   | 'create_user'
   | 'update_user'
-  | 'update_permissions';
+  | 'update_permissions'
+  | 'update_signature';
 
 @Schema({ timestamps: true })
 export class AuditLog {

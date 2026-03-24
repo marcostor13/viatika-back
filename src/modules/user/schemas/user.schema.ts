@@ -28,6 +28,7 @@ export interface UserDocument extends Document {
     phone?: string;
     bankAccount?: BankAccount;
     permissions?: UserPermissions;
+    signature?: string;
 }
 
 @Schema({ timestamps: true })
@@ -83,6 +84,9 @@ export class User {
         default: () => ({ modules: [], canApproveL1: false, canApproveL2: false }),
     })
     permissions: UserPermissions;
+
+    @Prop()
+    signature?: string;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

@@ -12,14 +12,14 @@ export class ExpenseReportService {
     private readonly expenseReportModel: Model<ExpenseReportDocument>,
   ) {}
 
-  async create(createExpenseReportDto: CreateExpenseReportDto, createdBy: string) {
+  async create(createExpenseReportDto: CreateExpenseReportDto, createdBy: string, isCollaborator = false) {
     const report = new this.expenseReportModel({
       ...createExpenseReportDto,
       userId: new Types.ObjectId(createExpenseReportDto.userId),
       clientId: new Types.ObjectId(createExpenseReportDto.clientId),
       createdBy: new Types.ObjectId(createdBy),
       projectId: createExpenseReportDto.projectId ? new Types.ObjectId(createExpenseReportDto.projectId) : undefined,
-      status: 'open',
+      status: isCollaborator ? 'solicited' : 'open',
       expenseIds: []
     });
     return await report.save();
@@ -70,8 +70,14 @@ export class ExpenseReportService {
         'Solo se puede enviar una rendición en estado abierta o rechazada.',
       );
     }
-    if (dto.status === 'rejected' && existing.status !== 'submitted') {
-      throw new BadRequestException('Solo se pueden rechazar rendiciones ya enviadas.');
+    if (dto.status === 'solicited' && existing.status !== 'rejected') {
+      throw new BadRequestException('Solo se puede re-enviar una solicitud en estado rechazada.');
+    }
+    if (dto.status === 'open' && existing.status !== 'solicited') {
+      throw new BadRequestException('Solo se puede aprobar una solicitud en estado solicitada.');
+    }
+    if (dto.status === 'rejected' && existing.status !== 'submitted' && existing.status !== 'solicited') {
+      throw new BadRequestException('Solo se pueden rechazar rendiciones enviadas o solicitadas.');
     }
     if (dto.status === 'approved' && existing.status !== 'submitted') {
       throw new BadRequestException('Solo se pueden aprobar rendiciones enviadas.');
@@ -112,7 +118,7 @@ export class ExpenseReportService {
       $set.rejectionReason = dto.rejectionReason?.trim() || '';
     }
 
-    if (dto.status === 'submitted') {
+    if (dto.status === 'submitted' || dto.status === 'solicited') {
       $unset.rejectionReason = '';
     }
 

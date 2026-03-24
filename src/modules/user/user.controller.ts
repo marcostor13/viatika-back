@@ -105,4 +105,24 @@ export class UserController {
   async delete(@Param('id', ParseObjectIdPipe) id: Types.ObjectId) {
     return await this.userService.delete(id.toString())
   }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Patch('profile/signature')
+  async updateSignature(
+    @Body() body: { signature: string },
+    @Request() req: any
+  ) {
+    const userId = req.user._id || req.user.sub
+    const result = await this.userService.update(userId, { signature: body.signature })
+    this.auditLogService.log({
+      userId: userId,
+      userName: req.user.name || req.user.email,
+      action: 'update_signature',
+      module: 'usuarios',
+      entityId: userId,
+      details: 'El usuario actualizó su firma digital',
+      clientId: req.user.clientId,
+    })
+    return result
+  }
 }

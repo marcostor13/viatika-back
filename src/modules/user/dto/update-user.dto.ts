@@ -68,4 +68,8 @@ export class UpdateUserDto {
   @ValidateNested()
   @Type(() => UpdatePermissionsDto)
   permissions?: UpdatePermissionsDto
+
+  @IsString()
+  @IsOptional()
+  signature?: string
 }

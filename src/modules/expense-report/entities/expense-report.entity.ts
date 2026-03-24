@@ -1,7 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 
-export type ExpenseReportStatus = 'open' | 'submitted' | 'approved' | 'rejected' | 'closed';
+export type ExpenseReportStatus = 'solicited' | 'open' | 'submitted' | 'approved' | 'rejected' | 'closed';
 export type SettlementType = 'reembolso' | 'devolucion' | 'equilibrado';
 
 export interface Settlement {
@@ -10,6 +10,15 @@ export interface Settlement {
   difference: number;
   type: SettlementType;
   settledAt: Date;
+}
+
+export interface ExpenseReportBudgetItem {
+  description: string;
+  amount: number;
+  peopleCount: number;
+  fuelAmount: number;
+  daysCount: number;
+  total: number;
 }
 
 export interface ExpenseReportDocument extends Document {
@@ -25,6 +34,14 @@ export interface ExpenseReportDocument extends Document {
   settlement?: Settlement;
   createdBy: Types.ObjectId;
   projectId?: Types.ObjectId;
+  // New fields
+  accountNumber?: string;
+  idDocument?: string;
+  peopleNames?: string[];
+  location?: string;
+  startDate?: Date;
+  endDate?: Date;
+  items?: ExpenseReportBudgetItem[];
 }
 
 @Schema({ timestamps: true })
@@ -74,6 +91,40 @@ export class ExpenseReport {
     },
   })
   settlement?: Settlement;
+
+  @Prop()
+  accountNumber?: string;
+
+  @Prop()
+  idDocument?: string;
+
+  @Prop({ type: [String], default: [] })
+  peopleNames?: string[];
+
+  @Prop()
+  location?: string;
+
+  @Prop()
+  startDate?: Date;
+
+  @Prop()
+  endDate?: Date;
+
+  @Prop({
+    type: [
+      {
+        description: { type: String },
+        amount: { type: Number },
+        peopleCount: { type: Number },
+        fuelAmount: { type: Number },
+        daysCount: { type: Number },
+        total: { type: Number },
+        _id: false,
+      },
+    ],
+    default: [],
+  })
+  items?: ExpenseReportBudgetItem[];
 }
 
 export const ExpenseReportSchema = SchemaFactory.createForClass(ExpenseReport);

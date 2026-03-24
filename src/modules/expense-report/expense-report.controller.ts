@@ -16,11 +16,12 @@ export class ExpenseReportController {
   ) {}
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR)
   @Post()
   async create(@Body() createExpenseReportDto: CreateExpenseReportDto, @Request() req: any) {
     const createdBy = req.user._id;
-    const result = await this.expenseReportService.create(createExpenseReportDto, createdBy);
+    const isCollaborator = req.user.roles?.[0] === ROLES.COLABORADOR;
+    const result = await this.expenseReportService.create(createExpenseReportDto, createdBy, isCollaborator);
     this.auditLogService.log({
       userId: req.user._id || req.user.sub,
       userName: req.user.name || req.user.email || 'Usuario',

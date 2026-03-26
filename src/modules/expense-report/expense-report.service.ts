@@ -4,12 +4,18 @@ import { Model, Types } from 'mongoose';
 import { CreateExpenseReportDto } from './dto/create-expense-report.dto';
 import { UpdateExpenseReportDto } from './dto/update-expense-report.dto';
 import { ExpenseReport, ExpenseReportDocument } from './entities/expense-report.entity';
+import { EmailService } from '../email/email.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { UserService } from '../user/user.service';
 
 @Injectable()
 export class ExpenseReportService {
   constructor(
     @InjectModel(ExpenseReport.name)
     private readonly expenseReportModel: Model<ExpenseReportDocument>,
+    private readonly emailService: EmailService,
+    private readonly notificationsService: NotificationsService,
+    private readonly userService: UserService
   ) {}
 
   async create(createExpenseReportDto: CreateExpenseReportDto, createdBy: string, isCollaborator = false) {
@@ -22,13 +28,41 @@ export class ExpenseReportService {
       status: isCollaborator ? 'solicited' : 'open',
       expenseIds: []
     });
-    return await report.save();
+    const savedReport = await report.save();
+
+    console.log(`[ExpenseReportService] Created report: ${savedReport._id}. isCollaborator: ${isCollaborator}`);
+    
+    // Notificar a administradores si un colaborador crea una rendición
+    if (isCollaborator) {
+      try {
+        const admins = await this.userService.findAdminsByClient(String(savedReport.clientId));
+        console.log(`[ExpenseReportService] Admins found: ${admins.length} for client ${savedReport.clientId}`);
+        
+        const user = await this.userService.findOne(createdBy);
+        const creatorName = user.name || 'Un colaborador';
+        
+        for (const admin of admins) {
+          console.log(`[ExpenseReportService] Notifying admin: ${admin.email}`);
+          await this.notificationsService.create({
+            userId: String(admin._id),
+            title: 'Nueva Rendición Solicitada',
+            message: `${creatorName} ha creado una nueva solicitud de rendición: "${savedReport.title}"`,
+            type: 'info',
+            actionUrl: `/mis-rendiciones/${savedReport._id}/detalle` 
+          });
+        }
+      } catch (error) {
+        console.error('Error enviando notificaciones a administradores (create)', error);
+      }
+    }
+
+    return savedReport;
   }
 
   async findAllByClient(clientId: string) {
     return await this.expenseReportModel
       .find({ clientId: new Types.ObjectId(clientId) })
-      .populate('userId', 'name email')
+      .populate('userId', 'name email signature')
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 })
       .exec();
@@ -48,8 +82,11 @@ export class ExpenseReportService {
   async findOne(id: string) {
     const report = await this.expenseReportModel
       .findById(id)
-      .populate('userId', 'name email')
+      .populate('userId', 'name email signature')
       .populate('expenseIds')
+      .populate('createdBy', 'name email')
+      .populate('approvedBy', 'name email')
+      .populate('projectId', 'name')
       .exec();
       
     if (!report) {
@@ -136,7 +173,58 @@ export class ExpenseReportService {
     }
 
     // findByIdAndUpdate no hace populate: la UI necesita expenseIds como documentos
-    return this.findOne(id);
+    const fullyUpdatedReport = await this.findOne(id);
+
+    // Si la rendición fue aprobada, enviar email y notificación
+    if (dto.status === 'approved') {
+      const owner = fullyUpdatedReport.userId as any;
+      if (owner && owner.email) {
+        try {
+          await this.emailService.sendRendicionFullyApprovedEmail(owner.email, {
+            userName: owner.name || 'Colaborador',
+            title: fullyUpdatedReport.title,
+            budget: fullyUpdatedReport.budget,
+            platformUrl: `https://app.viatica.tecdidata.com/mis-rendiciones/${id}/detalle` 
+          });
+
+          await this.notificationsService.create({
+            userId: String(owner._id),
+            title: 'Rendición Aprobada',
+            message: `Tu rendición "${fullyUpdatedReport.title}" ha sido aprobada exitosamente y pasará a contabilidad.`,
+            type: 'success',
+            actionUrl: `/mis-rendiciones/${id}/detalle`
+          });
+        } catch (error) {
+          // Log pero no fallar el request de actualización
+          console.error('Error enviando notificaciones de rendición aprobada', error);
+        }
+      }
+    }
+
+    // Si la rendición fue enviada a aprobación (submitted), notificar a los administradores
+    if (dto.status === 'submitted') {
+      try {
+        const admins = await this.userService.findAdminsByClient(String(fullyUpdatedReport.clientId));
+        const user = await this.userService.findOne(String(fullyUpdatedReport.userId));
+        const creatorName = user.name || 'Un colaborador';
+
+        console.log(`[ExpenseReportService] Status changed to submitted. Notifying ${admins.length} admins.`);
+
+        for (const admin of admins) {
+          await this.notificationsService.create({
+            userId: String(admin._id),
+            title: 'Rendición Enviada',
+            message: `${creatorName} ha enviado la rendición "${fullyUpdatedReport.title}" para tu revisión.`,
+            type: 'warning',
+            actionUrl: `/mis-rendiciones/${id}/detalle`
+          });
+        }
+      } catch (error) {
+        console.error('Error enviando notificaciones a administradores (update/submitted)', error);
+      }
+    }
+
+    return fullyUpdatedReport;
   }
 
   async remove(id: string) {
@@ -179,12 +267,22 @@ export class ExpenseReportService {
     ).exec();
   }
 
+  async setApprovedBy(reportId: string, userId: string) {
+    await this.expenseReportModel.findByIdAndUpdate(
+      reportId,
+      { $set: { approvedBy: new Types.ObjectId(userId) } },
+    ).exec();
+  }
+
   async findOneWithAdvances(id: string) {
     const report = await this.expenseReportModel
       .findById(id)
-      .populate('userId', 'name email')
+      .populate('userId', 'name email signature')
       .populate('expenseIds')
       .populate('advanceIds')
+      .populate('createdBy', 'name email')
+      .populate('approvedBy', 'name email')
+      .populate('projectId', 'name')
       .exec();
     if (!report) throw new NotFoundException(`Expense report with ID ${id} not found`);
     return report;

@@ -24,6 +24,7 @@ import { UserService } from '../user/user.service'
 import { UploadService } from '../upload/upload.service'
 import { ExpenseReportService } from '../expense-report/expense-report.service'
 import { ROLES } from '../auth/enums/roles.enum'
+import { NotificationsService } from '../notifications/notifications.service'
 
 /** Usuario autenticado para autorización de gastos (PATCH/DELETE/GET). */
 export interface ExpenseActorContext {
@@ -68,7 +69,8 @@ export class ExpenseService {
     private readonly sunatConfigService: SunatConfigService,
     private readonly httpService: HttpService,
     private readonly uploadService: UploadService,
-    private readonly expenseReportService: ExpenseReportService
+    private readonly expenseReportService: ExpenseReportService,
+    private readonly notificationsService: NotificationsService
   ) {
     const apiKey = this.configService.get<string>('OPENAI_API_KEY')
     if (!apiKey) {
@@ -1078,12 +1080,6 @@ export class ExpenseService {
       )
     }
 
-    if (expense.status === 'rejected') {
-      throw new HttpException(
-        'La factura ya ha sido rechazada',
-        HttpStatus.BAD_REQUEST
-      )
-    }
 
     let validUserId = null
     let userEmail = null
@@ -1102,11 +1098,18 @@ export class ExpenseService {
       )
       .exec()
 
-    setImmediate(() => {
-      this.sendApprovalEmails(expense, validUserId, userName).catch(error => {
-        this.logger.error('Error al enviar correos de aprobación:', error)
-      })
-    })
+    if (updatedExpense && updatedExpense.createdBy) {
+      const invoiceData = updatedExpense.data ? JSON.parse(updatedExpense.data) : {}
+      const nombreComprobante = `${invoiceData.serie || ''}-${invoiceData.correlativo || ''}`
+      
+      this.notificationsService.create({
+        userId: updatedExpense.createdBy as unknown as string,
+        title: 'Comprobante Aprobado',
+        message: `Tu comprobante ${nombreComprobante} ha sido aprobado.`,
+        type: 'success',
+        actionUrl: `/mis-rendiciones/${this.expenseReportIdString(updatedExpense)}/detalle`
+      }).catch(err => this.logger.error('Error creando notificación', err))
+    }
 
     this.logger.log(`Factura ${id} aprobada exitosamente`)
     return updatedExpense
@@ -1278,17 +1281,18 @@ export class ExpenseService {
       )
       .exec()
 
-    setImmediate(() => {
-      this.sendRejectionEmails(
-        expense,
-        validUserId,
-        userName,
-        userLastName,
-        approvalDto.reason
-      ).catch(error => {
-        this.logger.error('Error al enviar correos de rechazo:', error)
-      })
-    })
+    if (updatedExpense && updatedExpense.createdBy) {
+      const invoiceData = updatedExpense.data ? JSON.parse(updatedExpense.data) : {}
+      const nombreComprobante = `${invoiceData.serie || ''}-${invoiceData.correlativo || ''}`
+      
+      this.notificationsService.create({
+        userId: updatedExpense.createdBy as unknown as string,
+        title: 'Comprobante Rechazado',
+        message: `Tu comprobante ${nombreComprobante} ha sido rechazado. Motivo: ${approvalDto.reason}`,
+        type: 'error',
+        actionUrl: `/mis-rendiciones/${this.expenseReportIdString(updatedExpense)}/detalle`
+      }).catch(err => this.logger.error('Error creando notificación de rechazo', err))
+    }
 
     this.logger.log(`Factura ${id} rechazada exitosamente`)
     return updatedExpense

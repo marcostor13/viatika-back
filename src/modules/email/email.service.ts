@@ -533,4 +533,39 @@ export class EmailService {
       // No lanzamos el error para no interrumpir el flujo
     }
   }
+
+  async sendRendicionFullyApprovedEmail(
+    email: string,
+    data: {
+      userName: string
+      title: string
+      budget: number
+      platformUrl: string
+    }
+  ) {
+    try {
+      this.logger.debug(`Enviando correo de rendición aprobada a ${email}`)
+      await this.mailerService.sendMail({
+        to: email,
+        subject: '¡Rendición de Gastos Aprobada!',
+        template: './rendicion-approved',
+        context: {
+          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          userName: data.userName,
+          title: data.title,
+          budget: `S/ ${Number(data.budget).toFixed(2)}`,
+          platformUrl: data.platformUrl,
+          year: new Date().getFullYear(),
+        },
+      })
+      this.logger.debug(
+        `Correo de rendición aprobada enviado a ${email}`
+      )
+    } catch (error) {
+      this.logger.error(
+        `Error al enviar correo de rendición aprobada a ${email}:`,
+        error
+      )
+    }
+  }
 }

@@ -20,7 +20,7 @@ export class ExpenseReportController {
   @Post()
   async create(@Body() createExpenseReportDto: CreateExpenseReportDto, @Request() req: any) {
     const createdBy = req.user._id;
-    const isCollaborator = req.user.roles?.[0] === ROLES.COLABORADOR;
+    const isCollaborator = req.user.roles?.includes(ROLES.COLABORADOR);
     const result = await this.expenseReportService.create(createExpenseReportDto, createdBy, isCollaborator);
     this.auditLogService.log({
       userId: req.user._id || req.user.sub,
@@ -62,6 +62,10 @@ export class ExpenseReportController {
   @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR)
   @Patch(':id')
   async update(@Param('id') id: string, @Body() updateExpenseReportDto: UpdateExpenseReportDto, @Request() req: any) {
+    // Si se aprueba la solicitud o la rendición, guardar quién aprobó
+    if (updateExpenseReportDto.status === 'open' || updateExpenseReportDto.status === 'approved') {
+      await this.expenseReportService.setApprovedBy(id, req.user._id);
+    }
     const result = await this.expenseReportService.update(id, updateExpenseReportDto);
     if (updateExpenseReportDto.status) {
       this.auditLogService.log({

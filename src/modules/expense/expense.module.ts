@@ -13,6 +13,7 @@ import { HttpModule } from '@nestjs/axios'
 import { UploadModule } from '../upload/upload.module'
 import { ExpenseReportModule } from '../expense-report/expense-report.module'
 import { AuditLogModule } from '../audit-log/audit-log.module'
+import { NotificationsModule } from '../notifications/notifications.module'
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { AuditLogModule } from '../audit-log/audit-log.module'
     UploadModule,
     ExpenseReportModule,
     AuditLogModule,
+    NotificationsModule,
   ],
   controllers: [ExpenseController],
   providers: [ExpenseService],

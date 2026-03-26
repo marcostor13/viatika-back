@@ -17,6 +17,7 @@ import { UploadModule } from './modules/upload/upload.module'
 import { ExpenseReportModule } from './modules/expense-report/expense-report.module';
 import { AdvanceModule } from './modules/advance/advance.module';
 import { AuditLogModule } from './modules/audit-log/audit-log.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -37,6 +38,7 @@ import { AuditLogModule } from './modules/audit-log/audit-log.module';
     ExpenseReportModule,
     AdvanceModule,
     AuditLogModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

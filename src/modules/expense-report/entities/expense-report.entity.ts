@@ -33,6 +33,7 @@ export interface ExpenseReportDocument extends Document {
   advanceIds?: Types.ObjectId[];
   settlement?: Settlement;
   createdBy: Types.ObjectId;
+  approvedBy?: Types.ObjectId;
   projectId?: Types.ObjectId;
   // New fields
   accountNumber?: string;
@@ -73,6 +74,9 @@ export class ExpenseReport {
 
   @Prop({ type: Types.ObjectId, ref: 'User', required: true })
   createdBy: Types.ObjectId;
+
+  @Prop({ type: Types.ObjectId, ref: 'User', required: false })
+  approvedBy?: Types.ObjectId;
 
   @Prop({ type: Types.ObjectId, ref: 'Project', required: false })
   projectId?: Types.ObjectId;

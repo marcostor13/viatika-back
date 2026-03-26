@@ -25,6 +25,10 @@ export class RoleService {
     return this.roleModel.find({ $or: [{ name: 'Administrador' }, { name: 'Colaborador' }] }).exec();
   }
 
+  getAdminRoles() {
+    return this.roleModel.find({ $or: [{ name: 'Administrador' }, { name: 'Superadministrador' }] }).exec();
+  }
+
   findAll() {
     return this.roleModel.find().exec();
   }

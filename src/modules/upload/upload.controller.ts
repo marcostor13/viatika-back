@@ -7,8 +7,7 @@ import {
   MaxFileSizeValidator,
   BadRequestException,
   Delete,
-  Param,
-  FileTypeValidator
+  Param
 } from '@nestjs/common';
 import { UploadService } from './upload.service';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -24,8 +23,6 @@ export class UploadController {
       new ParseFilePipe({
         validators: [
           new MaxFileSizeValidator({ maxSize: 10 * 1024 * 1024 }), // 10MB max
-          // Acepta imágenes, videos y audio por mimetype o extensión
-          new FileTypeValidator({ fileType: /(^image\/.*$)|(^video\/.*$)|(^audio\/.*$)|(\.(jpg|jpeg|png|gif|webp|bmp|svg|tiff|mp4|mov|avi|mkv|webm|mpeg|mpg|m4v|3gp|3g2|flv|wmv|ts|m2ts|ogv|mp3|wav|aac|ogg|m4a|flac|wma|aiff|opus)$)/i }),
         ],
         exceptionFactory: (errors) => {
           throw new BadRequestException(errors)

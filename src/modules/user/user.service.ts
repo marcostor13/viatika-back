@@ -4,6 +4,7 @@ import { User, UserDocument } from './schemas/user.schema';
 import { Model, Types } from 'mongoose';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { ClientDocument } from '../client/entities/client.entity';
+import { RoleService } from '../role/role.service';
 import { RoleDocument } from '../role/entities/role.entity';
 import * as bcrypt from 'bcryptjs';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -42,7 +43,8 @@ export interface IUserResponse {
 export class UserService {
 
     constructor(
-        @InjectModel(User.name) private userModel: Model<UserDocument>
+        @InjectModel(User.name) private userModel: Model<UserDocument>,
+        private readonly roleService: RoleService
     ) { }
 
     async findAllWithClient(): Promise<IUserResponse[]> {
@@ -163,6 +165,22 @@ export class UserService {
 
     delete(id: string) {
         return this.userModel.findByIdAndDelete(id).exec();
+    }
+
+    async findAdminsByClient(clientId: string): Promise<UserDocument[]> {
+        const roles = await this.roleService.getAdminRoles();
+        const roleIds = roles.map(r => (r as any)._id);
+        const superAdminRole = roles.find(r => r.name === 'Superadministrador');
+
+        return this.userModel.find({
+            $or: [
+                { clientId: new Types.ObjectId(clientId) },
+                { roleId: superAdminRole?._id, clientId: { $exists: false } },
+                { roleId: superAdminRole?._id, clientId: null }
+            ],
+            roleId: { $in: roleIds },
+            isActive: true
+        }).exec();
     }
 
 }

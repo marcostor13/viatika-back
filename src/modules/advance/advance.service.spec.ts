@@ -9,6 +9,10 @@ import { Types } from 'mongoose'
 import { AdvanceService } from './advance.service'
 import { Advance, ADVANCE_THRESHOLDS } from './entities/advance.entity'
 import { ExpenseReportService } from '../expense-report/expense-report.service'
+import { ProjectService } from '../project/project.service'
+import { CategoryService } from '../category/category.service'
+import { UserService } from '../user/user.service'
+import { EmailService } from '../email/email.service'
 import { ROLES } from '../auth/enums/roles.enum'
 
 const advanceId = new Types.ObjectId().toString()
@@ -60,6 +64,23 @@ const mockExpenseReportService = {
   updateSettlement: jest.fn().mockResolvedValue(undefined),
 }
 
+const mockProjectService = {
+  findOne: jest.fn(),
+}
+
+const mockCategoryService = {
+  findOne: jest.fn(),
+}
+
+const mockUserService = {
+  findTransactionalProfile: jest.fn(),
+  findEmailNameClient: jest.fn(),
+}
+
+const mockEmailService = {
+  sendViaticoSolicitudToCoordinator: jest.fn(),
+}
+
 describe('AdvanceService', () => {
   let service: AdvanceService
 
@@ -70,6 +91,10 @@ describe('AdvanceService', () => {
         AdvanceService,
         { provide: getModelToken(Advance.name), useValue: mockAdvanceModel },
         { provide: ExpenseReportService, useValue: mockExpenseReportService },
+        { provide: ProjectService, useValue: mockProjectService },
+        { provide: CategoryService, useValue: mockCategoryService },
+        { provide: UserService, useValue: mockUserService },
+        { provide: EmailService, useValue: mockEmailService },
       ],
     }).compile()
     service = module.get<AdvanceService>(AdvanceService)

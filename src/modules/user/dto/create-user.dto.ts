@@ -47,4 +47,8 @@ export class CreateUserDto {
   @IsString()
   @IsOptional()
   phone?: string
+
+  @IsMongoId()
+  @IsOptional()
+  coordinatorId?: string
 }

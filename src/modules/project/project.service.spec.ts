@@ -52,7 +52,13 @@ describe('ProjectService', () => {
           clientId: expect.any(Types.ObjectId),
         })
       )
-      expect(result).toEqual(mockProject)
+      expect(result).toEqual({
+        _id: mockProject._id,
+        name: mockProject.name,
+        code: undefined,
+        isActive: undefined,
+        client: mockProject.clientId,
+      })
     })
   })
 

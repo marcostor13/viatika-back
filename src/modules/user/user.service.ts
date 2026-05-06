@@ -37,6 +37,7 @@ export interface IUserResponse {
   employeeCode?: string
   address?: string
   phone?: string
+  coordinatorId?: Types.ObjectId | { _id: Types.ObjectId; name?: string; email?: string }
 }
 
 @Injectable()
@@ -105,6 +106,7 @@ export class UserService {
       .findById(id)
       .populate('roleId')
       .populate('clientId')
+      .populate('coordinatorId', 'name email')
       .exec()
     if (!user) {
       return {} as IUserResponse
@@ -125,6 +127,7 @@ export class UserService {
       employeeCode: (user as any).employeeCode,
       address: (user as any).address,
       phone: (user as any).phone,
+      coordinatorId: (user as any).coordinatorId,
     }
   }
 
@@ -140,11 +143,15 @@ export class UserService {
       throw new BadRequestException('El correo ya se encuentra registrado')
     }
     const hashedPassword = await bcrypt.hash(userData.password, 10)
+    const { coordinatorId: coordRaw, ...rest } = userData as CreateUserDto & {
+      coordinatorId?: string
+    }
     const savedUser = await this.userModel.create({
-      ...userData,
+      ...rest,
       roleId,
       clientId,
       password: hashedPassword,
+      coordinatorId: coordRaw ? new Types.ObjectId(coordRaw) : undefined,
     })
     const populatedUser = await this.userModel
       .findById(savedUser._id)
@@ -200,6 +207,12 @@ export class UserService {
       updateData.clientId = new Types.ObjectId(updateData.clientId)
     }
 
+    if ('coordinatorId' in updateUserDto && updateUserDto.coordinatorId !== undefined) {
+      updateData.coordinatorId = updateUserDto.coordinatorId
+        ? new Types.ObjectId(updateUserDto.coordinatorId)
+        : null
+    }
+
     return this.userModel
       .findByIdAndUpdate(id, updateData, { new: true })
       .populate('roleId')
@@ -209,6 +222,36 @@ export class UserService {
 
   delete(id: string) {
     return this.userModel.findByIdAndDelete(id).exec()
+  }
+
+  /** Firma y coordinador para validar solicitudes transaccionales (viáticos). */
+  async findTransactionalProfile(
+    userId: string
+  ): Promise<{ signature?: string; coordinatorId?: Types.ObjectId } | null> {
+    const u = await this.userModel
+      .findById(userId)
+      .select('signature coordinatorId')
+      .exec()
+    if (!u) return null
+    return {
+      signature: u.signature,
+      coordinatorId: u.coordinatorId,
+    }
+  }
+
+  async findEmailNameClient(
+    userId: string
+  ): Promise<{ email: string; name: string; clientId: Types.ObjectId } | null> {
+    const u = await this.userModel
+      .findById(userId)
+      .select('email name clientId')
+      .exec()
+    if (!u) return null
+    return {
+      email: u.email,
+      name: u.name,
+      clientId: u.clientId as Types.ObjectId,
+    }
   }
 
   async findAdminsByClient(clientId: string): Promise<UserDocument[]> {

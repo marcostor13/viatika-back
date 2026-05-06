@@ -28,10 +28,35 @@ export interface PaymentInfo {
   reference?: string
 }
 
+/** Detalle por categoría — Fase 2 (Funcionalidades.md §2.1) */
+export interface AdvanceLineItem {
+  categoryId: Types.ObjectId
+  importe: number
+  peopleCount: number
+  glpPerDay: number
+  days: number
+  lineTotal: number
+}
+
+/** Registro de envío de correo al coordinador (§2.2) */
+export interface CoordinatorNotificationLog {
+  recipientUserId?: Types.ObjectId
+  sentAt?: Date
+  status: 'sent' | 'failed' | 'skipped'
+  errorMessage?: string
+}
+
 export interface AdvanceDocument extends Document {
   userId: Types.ObjectId
   clientId: Types.ObjectId
   expenseReportId?: Types.ObjectId
+  projectId?: Types.ObjectId
+  place?: string
+  startDate?: Date
+  endDate?: Date
+  lines?: AdvanceLineItem[]
+  observations?: string
+  coordinatorNotification?: CoordinatorNotificationLog
   amount: number
   description: string
   status: AdvanceStatus
@@ -67,6 +92,52 @@ export class Advance {
 
   @Prop({ type: Types.ObjectId, ref: 'ExpenseReport', required: false })
   expenseReportId?: Types.ObjectId
+
+  @Prop({ type: Types.ObjectId, ref: 'Project', required: false })
+  projectId?: Types.ObjectId
+
+  @Prop({ required: false })
+  place?: string
+
+  @Prop({ type: Date, required: false })
+  startDate?: Date
+
+  @Prop({ type: Date, required: false })
+  endDate?: Date
+
+  @Prop({
+    type: [
+      {
+        categoryId: { type: Types.ObjectId, ref: 'Category', required: true },
+        importe: { type: Number, required: true },
+        peopleCount: { type: Number, required: true },
+        glpPerDay: { type: Number, required: true },
+        days: { type: Number, required: true },
+        lineTotal: { type: Number, required: true },
+        _id: false,
+      },
+    ],
+    default: undefined,
+  })
+  lines?: AdvanceLineItem[]
+
+  @Prop({ required: false })
+  observations?: string
+
+  @Prop({
+    type: {
+      recipientUserId: { type: Types.ObjectId, ref: 'User' },
+      sentAt: { type: Date },
+      status: {
+        type: String,
+        enum: ['sent', 'failed', 'skipped'],
+      },
+      errorMessage: { type: String },
+      _id: false,
+    },
+    required: false,
+  })
+  coordinatorNotification?: CoordinatorNotificationLog
 
   @Prop({ required: true, min: 0 })
   amount: number

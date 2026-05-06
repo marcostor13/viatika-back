@@ -566,4 +566,42 @@ export class EmailService {
       )
     }
   }
+
+  /** Fase 2 — nueva solicitud de viáticos al coordinador (Funcionalidades.md §2.2) */
+  async sendViaticoSolicitudToCoordinator(
+    email: string,
+    data: {
+      coordinatorName: string
+      collaboratorName: string
+      place: string
+      startDate: string
+      endDate: string
+      totalFormatted: string
+      projectLabel: string
+      plainSummary: string
+      platformUrl: string
+    }
+  ) {
+    try {
+      const subject = `Nueva solicitud de viáticos, ${data.projectLabel}`
+      this.logger.debug(`Enviando solicitud de viáticos a coordinador ${email}`)
+      await this.mailerService.sendMail({
+        to: email,
+        subject,
+        template: './viatico-solicitud-coordinator',
+        context: {
+          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          year: new Date().getFullYear(),
+          ...data,
+        },
+      })
+      this.logger.debug(`Correo de solicitud de viáticos enviado a ${email}`)
+    } catch (error) {
+      this.logger.error(
+        `Error al enviar solicitud de viáticos a ${email}:`,
+        error
+      )
+      throw error
+    }
+  }
 }

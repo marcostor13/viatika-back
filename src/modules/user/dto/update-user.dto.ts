@@ -72,4 +72,8 @@ export class UpdateUserDto {
   @IsString()
   @IsOptional()
   signature?: string
+
+  @IsMongoId()
+  @IsOptional()
+  coordinatorId?: string | null
 }

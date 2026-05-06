@@ -91,6 +91,35 @@ export class AdvanceService {
     )
   }
 
+  private isValidPaymentReceipt(
+    mimeType?: string,
+    fileName?: string,
+    sizeBytes?: number
+  ): { ok: boolean; reason?: string } {
+    const allowedMimes = ['application/pdf', 'image/jpeg', 'image/png']
+    const allowedExtensions = ['.pdf', '.jpg', '.jpeg', '.png']
+    const normalizedMime = (mimeType ?? '').toLowerCase().trim()
+    const normalizedName = (fileName ?? '').toLowerCase().trim()
+
+    const mimeAllowed = normalizedMime
+      ? allowedMimes.includes(normalizedMime)
+      : false
+    const extAllowed = allowedExtensions.some(ext => normalizedName.endsWith(ext))
+    if (!mimeAllowed && !extAllowed) {
+      return {
+        ok: false,
+        reason: 'Formato inválido. Solo se permite PDF, JPG o PNG.',
+      }
+    }
+    if (typeof sizeBytes === 'number' && sizeBytes > 10 * 1024 * 1024) {
+      return {
+        ok: false,
+        reason: 'El comprobante excede 10MB.',
+      }
+    }
+    return { ok: true }
+  }
+
   private isViaticoSolicitudPartial(dto: CreateAdvanceDto): boolean {
     const any =
       !!dto.place?.trim() ||
@@ -613,6 +642,69 @@ export class AdvanceService {
     }
   }
 
+  private async notifyViaticoPaymentRegistered(
+    advance: AdvanceDocument
+  ): Promise<void> {
+    const collabId = advance.userId.toString()
+    const collab = await this.userService.findEmailNameClient(collabId)
+    if (!collab?.email) return
+
+    const profile =
+      await this.userService.findTransactionalProfile(collabId)
+    const coordinatorId = profile?.coordinatorId?.toString?.()
+    const coordinator = coordinatorId
+      ? await this.userService.findEmailNameClient(coordinatorId)
+      : null
+
+    let projectLabel = 'Centro de costo'
+    if (advance.projectId) {
+      try {
+        const p = await this.projectService.findOne(
+          advance.projectId.toString(),
+          advance.clientId.toString()
+        )
+        projectLabel = `[${p.code} - ${p.name}]`
+      } catch {
+        /* ignore label fallback */
+      }
+    }
+
+    const platformUrl =
+      process.env.APP_PUBLIC_URL ||
+      process.env.FRONTEND_URL ||
+      'https://app.viatica.tecdidata.com'
+
+    const transferDate = advance.paymentInfo?.transferDate
+      ? new Date(advance.paymentInfo.transferDate).toISOString().slice(0, 10)
+      : new Date().toISOString().slice(0, 10)
+
+    const baseData = {
+      collaboratorName: collab.name,
+      coordinatorName: coordinator?.name,
+      projectLabel,
+      amountFormatted: Number(advance.amount).toFixed(2),
+      transferDate,
+      reference: advance.paymentInfo?.reference || '—',
+      paymentMethod: advance.paymentInfo?.method || 'transferencia_bancaria',
+      paymentReceiptUrl: advance.paymentInfo?.paymentReceiptUrl || '',
+      paymentReceiptFileName:
+        advance.paymentInfo?.paymentReceiptFileName || 'comprobante-pago-viaticos.pdf',
+      platformUrl,
+    }
+
+    await this.emailService.sendViaticoPagoRealizado(collab.email, {
+      recipientName: collab.name,
+      ...baseData,
+    })
+
+    if (coordinator?.email) {
+      await this.emailService.sendViaticoPagoRealizado(coordinator.email, {
+        recipientName: coordinator.name,
+        ...baseData,
+      })
+    }
+  }
+
   async findAllByClient(clientId: string) {
     return this.advanceModel
       .find({ clientId: new Types.ObjectId(clientId) })
@@ -807,6 +899,15 @@ export class AdvanceService {
     if (!canPay)
       throw new ForbiddenException('No tienes permiso para registrar pagos')
 
+    const receiptValidation = this.isValidPaymentReceipt(
+      dto.paymentReceiptMimeType,
+      dto.paymentReceiptFileName,
+      dto.paymentReceiptSizeBytes
+    )
+    if (!receiptValidation.ok) {
+      throw new BadRequestException(receiptValidation.reason)
+    }
+
     if (advance.budgetCommitmentRecorded && advance.projectId) {
       try {
         await this.projectService.adjustCommittedAdvanceTotal(
@@ -828,10 +929,20 @@ export class AdvanceService {
       cci: dto.cci,
       transferDate: new Date(dto.transferDate),
       reference: dto.reference,
+      paymentReceiptUrl: dto.paymentReceiptUrl,
+      paymentReceiptFileName: dto.paymentReceiptFileName,
+      paymentReceiptMimeType: dto.paymentReceiptMimeType,
+      paymentReceiptSizeBytes: dto.paymentReceiptSizeBytes,
     }
     advance.status = 'paid'
-
-    return advance.save()
+    const saved = await advance.save()
+    this.notifyViaticoPaymentRegistered(saved as AdvanceDocument).catch(
+      (err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.logger.error(`Correo pago viático ${saved._id}: ${msg}`)
+      }
+    )
+    return saved
   }
 
   async settle(id: string): Promise<Advance> {

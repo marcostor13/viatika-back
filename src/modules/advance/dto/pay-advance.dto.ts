@@ -4,6 +4,8 @@ import {
   IsOptional,
   IsEnum,
   IsDateString,
+  IsUrl,
+  IsNumber,
 } from 'class-validator'
 
 export class PayAdvanceDto {
@@ -29,4 +31,20 @@ export class PayAdvanceDto {
   @IsString()
   @IsOptional()
   reference?: string
+
+  @IsUrl()
+  @IsNotEmpty()
+  paymentReceiptUrl: string
+
+  @IsString()
+  @IsOptional()
+  paymentReceiptFileName?: string
+
+  @IsString()
+  @IsOptional()
+  paymentReceiptMimeType?: string
+
+  @IsOptional()
+  @IsNumber()
+  paymentReceiptSizeBytes?: number
 }

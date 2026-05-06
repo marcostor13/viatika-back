@@ -136,6 +136,48 @@ export class ExpenseController {
     return result
   }
 
+  @Post('cash-receipt')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  async createCashReceipt(@Body() body: CreateExpenseDto, @Request() req) {
+    const clientId = body.clientId || req.user?.clientId
+    if (!clientId)
+      throw new Error('No se pudo obtener la empresa del usuario ni del body')
+    body.clientId = clientId
+    body.userId = req.user?.sub || req.user?._id || body.userId
+    const result = await this.expenseService.createCashReceiptExpense(body)
+    this.auditLogService.log({
+      userId: req.user?._id || req.user?.sub,
+      userName: req.user?.name || req.user?.email || 'Usuario',
+      action: 'create_other_expense',
+      module: 'facturas',
+      entityId: (result as any)?._id?.toString(),
+      clientId,
+    })
+    return result
+  }
+
+  @Post('cash-voucher')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  async createCashVoucher(@Body() body: CreateExpenseDto, @Request() req) {
+    const clientId = body.clientId || req.user?.clientId
+    if (!clientId)
+      throw new Error('No se pudo obtener la empresa del usuario ni del body')
+    body.clientId = clientId
+    body.userId = req.user?.sub || req.user?._id || body.userId
+    const result = await this.expenseService.createCashVoucherExpense(body)
+    this.auditLogService.log({
+      userId: req.user?._id || req.user?.sub,
+      userName: req.user?.name || req.user?.email || 'Usuario',
+      action: 'create_other_expense',
+      module: 'facturas',
+      entityId: (result as any)?._id?.toString(),
+      clientId,
+    })
+    return result
+  }
+
   @Post()
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
   @UseGuards(JwtAuthGuard, RolesGuard)

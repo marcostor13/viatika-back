@@ -27,6 +27,13 @@ export interface ExpenseReportBudgetItem {
   total: number
 }
 
+export interface ExpenseReportAffidavit {
+  type: 'viaticos_nacionales' | 'viajes_exterior'
+  expenseIds: Types.ObjectId[]
+  generatedBy: Types.ObjectId
+  generatedAt: Date
+}
+
 export interface ExpenseReportDocument extends Document {
   title: string
   description: string
@@ -49,6 +56,7 @@ export interface ExpenseReportDocument extends Document {
   startDate?: Date
   endDate?: Date
   items?: ExpenseReportBudgetItem[]
+  affidavits?: ExpenseReportAffidavit[]
 }
 
 @Schema({ timestamps: true })
@@ -135,6 +143,24 @@ export class ExpenseReport {
     default: [],
   })
   items?: ExpenseReportBudgetItem[]
+
+  @Prop({
+    type: [
+      {
+        type: {
+          type: String,
+          enum: ['viaticos_nacionales', 'viajes_exterior'],
+          required: true,
+        },
+        expenseIds: [{ type: Types.ObjectId, ref: 'Expense', required: true }],
+        generatedBy: { type: Types.ObjectId, ref: 'User', required: true },
+        generatedAt: { type: Date, required: true },
+        _id: false,
+      },
+    ],
+    default: [],
+  })
+  affidavits?: ExpenseReportAffidavit[]
 }
 
 export const ExpenseReportSchema = SchemaFactory.createForClass(ExpenseReport)

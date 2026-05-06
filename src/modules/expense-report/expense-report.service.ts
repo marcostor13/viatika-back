@@ -14,6 +14,7 @@ import {
 import { EmailService } from '../email/email.service'
 import { NotificationsService } from '../notifications/notifications.service'
 import { UserService } from '../user/user.service'
+import { CreateAffidavitDto } from './dto/create-affidavit.dto'
 
 @Injectable()
 export class ExpenseReportService {
@@ -24,6 +25,74 @@ export class ExpenseReportService {
     private readonly notificationsService: NotificationsService,
     private readonly userService: UserService
   ) {}
+
+  private async validateBeforeSubmit(reportId: string): Promise<void> {
+    const report = await this.expenseReportModel
+      .findById(reportId)
+      .populate('expenseIds')
+      .select('expenseIds')
+      .lean()
+      .exec()
+
+    if (!report) {
+      throw new NotFoundException(`Expense report with ID ${reportId} not found`)
+    }
+
+    const expenses = Array.isArray(report.expenseIds) ? report.expenseIds : []
+    if (expenses.length === 0) {
+      throw new BadRequestException(
+        'Debe registrar al menos un gasto antes de enviar la rendición.'
+      )
+    }
+
+    const hasRejected = expenses.some(
+      (e: any) => String(e?.status || '').toLowerCase() === 'rejected'
+    )
+    if (hasRejected) {
+      throw new BadRequestException(
+        'No puede enviar la rendición mientras existan comprobantes rechazados sin corregir.'
+      )
+    }
+
+    const hasMissingFile = expenses.some((e: any) => {
+      const file = e?.file
+      return typeof file !== 'string' || !file.trim()
+    })
+    if (hasMissingFile) {
+      throw new BadRequestException(
+        'Todos los gastos deben tener comprobante adjunto antes de enviar la rendición.'
+      )
+    }
+  }
+
+  private async validateBeforeFinalApproval(reportId: string): Promise<void> {
+    const report = await this.expenseReportModel
+      .findById(reportId)
+      .populate('expenseIds')
+      .select('expenseIds')
+      .lean()
+      .exec()
+
+    if (!report) {
+      throw new NotFoundException(`Expense report with ID ${reportId} not found`)
+    }
+
+    const expenses = Array.isArray(report.expenseIds) ? report.expenseIds : []
+    if (expenses.length === 0) {
+      throw new BadRequestException(
+        'No se puede aprobar una rendición sin comprobantes registrados.'
+      )
+    }
+
+    const hasNonApproved = expenses.some(
+      (e: any) => String(e?.status || '').toLowerCase() !== 'approved'
+    )
+    if (hasNonApproved) {
+      throw new BadRequestException(
+        'Apruebe todos los gastos individuales para habilitar la aprobación final.'
+      )
+    }
+  }
 
   async create(
     createExpenseReportDto: CreateExpenseReportDto,
@@ -137,6 +206,9 @@ export class ExpenseReportService {
         'Solo se puede enviar una rendición en estado abierta o rechazada.'
       )
     }
+    if (dto.status === 'submitted') {
+      await this.validateBeforeSubmit(id)
+    }
     if (dto.status === 'solicited' && existing.status !== 'rejected') {
       throw new BadRequestException(
         'Solo se puede re-enviar una solicitud en estado rechazada.'
@@ -160,6 +232,9 @@ export class ExpenseReportService {
       throw new BadRequestException(
         'Solo se pueden aprobar rendiciones enviadas.'
       )
+    }
+    if (dto.status === 'approved') {
+      await this.validateBeforeFinalApproval(id)
     }
 
     const $set: Record<string, unknown> = {}
@@ -333,6 +408,49 @@ export class ExpenseReportService {
         $set: { approvedBy: new Types.ObjectId(userId) },
       })
       .exec()
+  }
+
+  async registerAffidavit(
+    reportId: string,
+    dto: CreateAffidavitDto,
+    generatedBy: string
+  ) {
+    const report = await this.findOne(reportId)
+    if (!report) {
+      throw new NotFoundException(`Expense report with ID ${reportId} not found`)
+    }
+    if (report.status !== 'closed') {
+      throw new BadRequestException(
+        'La declaración jurada solo puede generarse cuando la rendición está cerrada.'
+      )
+    }
+
+    const reportExpenses = (report.expenseIds || []).map((e: any) => String(e._id))
+    const missing = dto.expenseIds.filter(id => !reportExpenses.includes(String(id)))
+    if (missing.length > 0) {
+      throw new BadRequestException(
+        'Los comprobantes seleccionados no pertenecen a esta rendición.'
+      )
+    }
+
+    await this.expenseReportModel.findByIdAndUpdate(reportId, {
+      $push: {
+        affidavits: {
+          type: dto.type,
+          expenseIds: dto.expenseIds.map(id => new Types.ObjectId(id)),
+          generatedBy: new Types.ObjectId(generatedBy),
+          generatedAt: new Date(),
+        },
+      },
+    })
+
+    return {
+      reportId,
+      type: dto.type,
+      expenseIds: dto.expenseIds,
+      generatedBy,
+      generatedAt: new Date().toISOString(),
+    }
   }
 
   async findOneWithAdvances(id: string) {

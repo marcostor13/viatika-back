@@ -26,6 +26,10 @@ export interface PaymentInfo {
   cci?: string
   transferDate: Date
   reference?: string
+  paymentReceiptUrl: string
+  paymentReceiptFileName?: string
+  paymentReceiptMimeType?: string
+  paymentReceiptSizeBytes?: number
 }
 
 /** Detalle por categoría — Fase 2 (Funcionalidades.md §2.1) */
@@ -199,21 +203,20 @@ export class Advance {
       cci: { type: String },
       transferDate: { type: Date },
       reference: { type: String },
+      paymentReceiptUrl: { type: String, required: true },
+      paymentReceiptFileName: { type: String },
+      paymentReceiptMimeType: { type: String },
+      paymentReceiptSizeBytes: { type: Number },
       _id: false,
     },
   })
   paymentInfo?: PaymentInfo
 
-  @Prop({
-    type: {
-      expenseTotal: { type: Number },
-      advanceAmount: { type: Number },
-      difference: { type: Number },
-      type: { type: String, enum: ['reembolso', 'devolucion', 'equilibrado'] },
-      settledAt: { type: Date },
-      _id: false,
-    },
-  })
+  /**
+   * Se define como objeto plano para evitar conflicto de casteo con la clave
+   * interna `type` dentro de `settlement` (ej. settlement.type = 'devolucion').
+   */
+  @Prop({ type: Object })
   settlement?: {
     expenseTotal: number
     advanceAmount: number

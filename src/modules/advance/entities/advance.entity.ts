@@ -53,7 +53,7 @@ export interface AdvanceDocument extends Document {
 
 // Umbrales de aprobación multinivel
 export const ADVANCE_THRESHOLDS = {
-  L1_MAX: 500,   // Hasta S/. 500: solo nivel 1 (Admin)
+  L1_MAX: 500, // Hasta S/. 500: solo nivel 1 (Admin)
   // Más de S/. 500: nivel 1 + nivel 2 (Tesorero/SuperAdmin)
 }
 
@@ -74,7 +74,20 @@ export class Advance {
   @Prop({ required: true })
   description: string
 
-  @Prop({ type: String, default: 'pending_l1', enum: ['draft', 'pending_l1', 'pending_l2', 'approved', 'paid', 'settled', 'rejected', 'returned'] })
+  @Prop({
+    type: String,
+    default: 'pending_l1',
+    enum: [
+      'draft',
+      'pending_l1',
+      'pending_l2',
+      'approved',
+      'paid',
+      'settled',
+      'rejected',
+      'returned',
+    ],
+  })
   status: AdvanceStatus
 
   @Prop({ default: 1 })
@@ -84,20 +97,25 @@ export class Advance {
   requiredLevels: number
 
   @Prop({
-    type: [{
-      level: { type: Number },
-      approvedBy: { type: String },
-      action: { type: String, enum: ['approved', 'rejected'] },
-      notes: { type: String },
-      date: { type: Date },
-    }],
+    type: [
+      {
+        level: { type: Number },
+        approvedBy: { type: String },
+        action: { type: String, enum: ['approved', 'rejected'] },
+        notes: { type: String },
+        date: { type: Date },
+      },
+    ],
     default: [],
   })
   approvalHistory: ApprovalEntry[]
 
   @Prop({
     type: {
-      method: { type: String, enum: ['transferencia_bancaria', 'efectivo', 'cheque'] },
+      method: {
+        type: String,
+        enum: ['transferencia_bancaria', 'efectivo', 'cheque'],
+      },
       bankName: { type: String },
       accountNumber: { type: String },
       cci: { type: String },

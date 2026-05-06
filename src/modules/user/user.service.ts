@@ -1,186 +1,231 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { User, UserDocument } from './schemas/user.schema';
-import { Model, Types } from 'mongoose';
-import { UpdateUserDto } from './dto/update-user.dto';
-import { ClientDocument } from '../client/entities/client.entity';
-import { RoleService } from '../role/role.service';
-import { RoleDocument } from '../role/entities/role.entity';
-import * as bcrypt from 'bcryptjs';
-import { CreateUserDto } from './dto/create-user.dto';
+import { BadRequestException, Injectable } from '@nestjs/common'
+import { InjectModel } from '@nestjs/mongoose'
+import { User, UserDocument } from './schemas/user.schema'
+import { Model, Types } from 'mongoose'
+import { UpdateUserDto } from './dto/update-user.dto'
+import { ClientDocument } from '../client/entities/client.entity'
+import { RoleService } from '../role/role.service'
+import { RoleDocument } from '../role/entities/role.entity'
+import * as bcrypt from 'bcryptjs'
+import { CreateUserDto } from './dto/create-user.dto'
 
 export interface IUser {
-    email: string;
-    name: string;
-    password: string;
-    roleId: Types.ObjectId;
-    clientId?: Types.ObjectId;
-    isActive?: boolean;
+  email: string
+  name: string
+  password: string
+  roleId: Types.ObjectId
+  clientId?: Types.ObjectId
+  isActive?: boolean
 }
 
 export interface IUserPermissions {
-    modules: string[];
-    canApproveL1: boolean;
-    canApproveL2: boolean;
+  modules: string[]
+  canApproveL1: boolean
+  canApproveL2: boolean
 }
 
 export interface IUserResponse {
-    _id: Types.ObjectId;
-    email: string;
-    name: string;
-    role: RoleDocument;
-    client: ClientDocument;
-    password?: string;
-    isActive: boolean;
-    permissions: IUserPermissions;
-    dni?: string;
-    employeeCode?: string;
-    address?: string;
-    phone?: string;
+  _id: Types.ObjectId
+  email: string
+  name: string
+  role: RoleDocument
+  client: ClientDocument
+  password?: string
+  isActive: boolean
+  permissions: IUserPermissions
+  dni?: string
+  employeeCode?: string
+  address?: string
+  phone?: string
 }
 
 @Injectable()
 export class UserService {
+  constructor(
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
+    private readonly roleService: RoleService
+  ) {}
 
-    constructor(
-        @InjectModel(User.name) private userModel: Model<UserDocument>,
-        private readonly roleService: RoleService
-    ) { }
+  async findAllWithClient(): Promise<IUserResponse[]> {
+    const users = await this.userModel
+      .find()
+      .populate('roleId')
+      .populate('clientId')
+      .exec()
+    return users.map(user => ({
+      _id: user._id,
+      email: user.email,
+      name: user.name,
+      role: user.roleId as unknown as RoleDocument,
+      client: user.clientId as unknown as ClientDocument,
+      isActive: user.isActive,
+      permissions: (user as any).permissions || {
+        modules: [],
+        canApproveL1: false,
+        canApproveL2: false,
+      },
+      dni: (user as any).dni,
+      employeeCode: (user as any).employeeCode,
+      address: (user as any).address,
+      phone: (user as any).phone,
+    }))
+  }
 
-    async findAllWithClient(): Promise<IUserResponse[]> {
-        const users = await this.userModel.find().populate('roleId').populate('clientId').exec();
-        return users.map(user => ({
-            _id: user._id,
-            email: user.email,
-            name: user.name,
-            role: user.roleId as unknown as RoleDocument,
-            client: user.clientId as unknown as ClientDocument,
-            isActive: user.isActive,
-            permissions: (user as any).permissions || { modules: [], canApproveL1: false, canApproveL2: false },
-            dni: (user as any).dni,
-            employeeCode: (user as any).employeeCode,
-            address: (user as any).address,
-            phone: (user as any).phone,
-        }));
+  async findByEmail(email: string): Promise<IUserResponse | null> {
+    const user = await this.userModel
+      .findOne({ email })
+      .populate('roleId')
+      .populate('clientId')
+      .exec()
+    if (!user) {
+      return null
+    }
+    return {
+      _id: user._id,
+      email: user.email,
+      name: user.name,
+      role: user.roleId as unknown as RoleDocument,
+      client: user.clientId as unknown as ClientDocument,
+      password: user.password,
+      isActive: user.isActive,
+      permissions: (user as any).permissions || {
+        modules: [],
+        canApproveL1: false,
+        canApproveL2: false,
+      },
+      dni: (user as any).dni,
+      employeeCode: (user as any).employeeCode,
+      address: (user as any).address,
+      phone: (user as any).phone,
+    }
+  }
+
+  async findOne(id: string): Promise<IUserResponse> {
+    const user = await this.userModel
+      .findById(id)
+      .populate('roleId')
+      .populate('clientId')
+      .exec()
+    if (!user) {
+      return {} as IUserResponse
+    }
+    return {
+      _id: user._id,
+      email: user.email,
+      name: user.name,
+      role: user.roleId as unknown as RoleDocument,
+      client: user.clientId as unknown as ClientDocument,
+      isActive: user.isActive,
+      permissions: (user as any).permissions || {
+        modules: [],
+        canApproveL1: false,
+        canApproveL2: false,
+      },
+      dni: (user as any).dni,
+      employeeCode: (user as any).employeeCode,
+      address: (user as any).address,
+      phone: (user as any).phone,
+    }
+  }
+
+  async create(userData: CreateUserDto): Promise<IUserResponse> {
+    console.log('====== create user payload received ======', userData)
+    const clientId = userData.clientId
+      ? new Types.ObjectId(userData.clientId)
+      : null
+    const roleId = new Types.ObjectId(userData.roleId)
+
+    const issetUser = await this.userModel.findOne({ email: userData.email })
+    if (issetUser) {
+      throw new BadRequestException('El correo ya se encuentra registrado')
+    }
+    const hashedPassword = await bcrypt.hash(userData.password, 10)
+    const savedUser = await this.userModel.create({
+      ...userData,
+      roleId,
+      clientId,
+      password: hashedPassword,
+    })
+    const populatedUser = await this.userModel
+      .findById(savedUser._id)
+      .populate('roleId')
+      .populate('clientId')
+      .exec()
+    if (!populatedUser) {
+      return {} as IUserResponse
+    }
+    return {
+      _id: populatedUser._id,
+      email: populatedUser.email,
+      name: populatedUser.name,
+      role: populatedUser.roleId as unknown as RoleDocument,
+      client: populatedUser.clientId as unknown as ClientDocument,
+      isActive: populatedUser.isActive,
+      permissions: (populatedUser as any).permissions || {
+        modules: [],
+        canApproveL1: false,
+        canApproveL2: false,
+      },
+      dni: (populatedUser as any).dni,
+      employeeCode: (populatedUser as any).employeeCode,
+      address: (populatedUser as any).address,
+      phone: (populatedUser as any).phone,
+    }
+  }
+
+  async findAll(clientId: Types.ObjectId) {
+    const users = await this.userModel
+      .find({ clientId })
+      .populate('roleId')
+      .populate('clientId')
+      .exec()
+    return users.map(user => ({
+      _id: user._id,
+      email: user.email,
+      name: user.name,
+      role: user.roleId,
+      client: user.clientId,
+      isActive: user.isActive,
+    }))
+  }
+
+  update(id: string, updateUserDto: UpdateUserDto) {
+    const updateData: any = { ...updateUserDto }
+
+    if (updateData.roleId) {
+      updateData.roleId = new Types.ObjectId(updateData.roleId)
     }
 
-    async findByEmail(email: string): Promise<IUserResponse | null> {
-        const user = await this.userModel.findOne({ email }).populate('roleId').populate('clientId').exec();
-        if (!user) {
-            return null;
-        }
-        return {
-            _id: user._id,
-            email: user.email,
-            name: user.name,
-            role: user.roleId as unknown as RoleDocument,
-            client: user.clientId as unknown as ClientDocument,
-            password: user.password,
-            isActive: user.isActive,
-            permissions: (user as any).permissions || { modules: [], canApproveL1: false, canApproveL2: false },
-            dni: (user as any).dni,
-            employeeCode: (user as any).employeeCode,
-            address: (user as any).address,
-            phone: (user as any).phone,
-        }
+    if (updateData.clientId) {
+      updateData.clientId = new Types.ObjectId(updateData.clientId)
     }
 
-    async findOne(id: string): Promise<IUserResponse> {
-        const user = await this.userModel.findById(id).populate('roleId').populate('clientId').exec();
-        if (!user) {
-            return {} as IUserResponse;
-        }
-        return {
-            _id: user._id,
-            email: user.email,
-            name: user.name,
-            role: user.roleId as unknown as RoleDocument,
-            client: user.clientId as unknown as ClientDocument,
-            isActive: user.isActive,
-            permissions: (user as any).permissions || { modules: [], canApproveL1: false, canApproveL2: false },
-            dni: (user as any).dni,
-            employeeCode: (user as any).employeeCode,
-            address: (user as any).address,
-            phone: (user as any).phone,
-        }
-    }
+    return this.userModel
+      .findByIdAndUpdate(id, updateData, { new: true })
+      .populate('roleId')
+      .populate('clientId')
+      .exec()
+  }
 
-    async create(userData: CreateUserDto): Promise<IUserResponse> {
-        console.log('====== create user payload received ======', userData);
-        const clientId = userData.clientId ? new Types.ObjectId(userData.clientId) : null;
-        const roleId = new Types.ObjectId(userData.roleId);
+  delete(id: string) {
+    return this.userModel.findByIdAndDelete(id).exec()
+  }
 
-        const issetUser = await this.userModel.findOne({ email: userData.email });
-        if (issetUser) {
-            throw new BadRequestException('El correo ya se encuentra registrado');
-        }
-        const hashedPassword = await bcrypt.hash(userData.password, 10);
-        const savedUser = await this.userModel.create({ ...userData, roleId, clientId, password: hashedPassword });
-        const populatedUser = await this.userModel.findById(savedUser._id).populate('roleId').populate('clientId').exec();
-        if (!populatedUser) {
-            return {} as IUserResponse;
-        }
-        return {
-            _id: populatedUser._id,
-            email: populatedUser.email,
-            name: populatedUser.name,
-            role: populatedUser.roleId as unknown as RoleDocument,
-            client: populatedUser.clientId as unknown as ClientDocument,
-            isActive: populatedUser.isActive,
-            permissions: (populatedUser as any).permissions || { modules: [], canApproveL1: false, canApproveL2: false },
-            dni: (populatedUser as any).dni,
-            employeeCode: (populatedUser as any).employeeCode,
-            address: (populatedUser as any).address,
-            phone: (populatedUser as any).phone,
-        }
-    }
+  async findAdminsByClient(clientId: string): Promise<UserDocument[]> {
+    const roles = await this.roleService.getAdminRoles()
+    const roleIds = roles.map(r => (r as any)._id)
+    const superAdminRole = roles.find(r => r.name === 'Superadministrador')
 
-    async findAll(clientId: Types.ObjectId) {
-        const users = await this.userModel.find({ clientId }).populate('roleId').populate('clientId').exec();
-        return users.map(user =>
-        ({
-            _id: user._id,
-            email: user.email,
-            name: user.name,
-            role: user.roleId,
-            client: user.clientId,
-            isActive: user.isActive,
-        })
-        );
-    }
-
-    update(id: string, updateUserDto: UpdateUserDto) {
-        const updateData: any = { ...updateUserDto };
-        
-        if (updateData.roleId) {
-            updateData.roleId = new Types.ObjectId(updateData.roleId);
-        }
-        
-        if (updateData.clientId) {
-            updateData.clientId = new Types.ObjectId(updateData.clientId);
-        }
-
-        return this.userModel.findByIdAndUpdate(id, updateData, { new: true }).populate('roleId').populate('clientId').exec();
-    }
-
-    delete(id: string) {
-        return this.userModel.findByIdAndDelete(id).exec();
-    }
-
-    async findAdminsByClient(clientId: string): Promise<UserDocument[]> {
-        const roles = await this.roleService.getAdminRoles();
-        const roleIds = roles.map(r => (r as any)._id);
-        const superAdminRole = roles.find(r => r.name === 'Superadministrador');
-
-        return this.userModel.find({
-            $or: [
-                { clientId: new Types.ObjectId(clientId) },
-                { roleId: superAdminRole?._id, clientId: { $exists: false } },
-                { roleId: superAdminRole?._id, clientId: null }
-            ],
-            roleId: { $in: roleIds },
-            isActive: true
-        }).exec();
-    }
-
+    return this.userModel
+      .find({
+        $or: [
+          { clientId: new Types.ObjectId(clientId) },
+          { roleId: superAdminRole?._id, clientId: { $exists: false } },
+          { roleId: superAdminRole?._id, clientId: null },
+        ],
+        roleId: { $in: roleIds },
+        isActive: true,
+      })
+      .exec()
+  }
 }

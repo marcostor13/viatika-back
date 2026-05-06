@@ -1,34 +1,36 @@
-import { Injectable } from '@nestjs/common';
-import { CreateClientDto } from './dto/create-client.dto';
-import { UpdateClientDto } from './dto/update-client.dto';
-import { Client, ClientDocument } from './entities/client.entity';
-import { ClientSession, Model } from 'mongoose';
-import { InjectModel } from '@nestjs/mongoose';
+import { Injectable } from '@nestjs/common'
+import { CreateClientDto } from './dto/create-client.dto'
+import { UpdateClientDto } from './dto/update-client.dto'
+import { Client, ClientDocument } from './entities/client.entity'
+import { ClientSession, Model } from 'mongoose'
+import { InjectModel } from '@nestjs/mongoose'
 
 @Injectable()
 export class ClientService {
-  constructor(@InjectModel(Client.name) private clientModel: Model<ClientDocument>) { }
+  constructor(
+    @InjectModel(Client.name) private clientModel: Model<ClientDocument>
+  ) {}
   create(createClientDto: CreateClientDto, session?: ClientSession) {
     if (session) {
-      const client = new this.clientModel(createClientDto);
-      return client.save({ session });
+      const client = new this.clientModel(createClientDto)
+      return client.save({ session })
     }
-    return this.clientModel.create(createClientDto);
+    return this.clientModel.create(createClientDto)
   }
 
   findAll() {
-    return this.clientModel.find().exec();
+    return this.clientModel.find().exec()
   }
 
   findOne(id: string) {
-    return this.clientModel.findById(id).exec();
+    return this.clientModel.findById(id).exec()
   }
 
   update(id: string, updateClientDto: UpdateClientDto) {
-    return this.clientModel.findByIdAndUpdate(id, updateClientDto).exec();
+    return this.clientModel.findByIdAndUpdate(id, updateClientDto).exec()
   }
 
   remove(id: string) {
-    return this.clientModel.findByIdAndDelete(id).exec();
+    return this.clientModel.findByIdAndDelete(id).exec()
   }
 }

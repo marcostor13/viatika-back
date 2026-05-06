@@ -11,13 +11,36 @@ export class ProjectService {
     @InjectModel(Project.name) private projectModel: Model<ProjectDocument>
   ) {}
 
+  private generateCode(name: string): string {
+    return name
+      .toUpperCase()
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .replace(/[^A-Z0-9]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 20)
+  }
+
+  private toResponse(project: ProjectDocument) {
+    return {
+      _id: project._id,
+      name: project.name,
+      code: project.code,
+      isActive: project.isActive,
+      client: project.clientId,
+    }
+  }
+
   async create(createProjectDto: CreateProjectDto) {
     const clientId = new Types.ObjectId(createProjectDto.clientId)
+    const code = createProjectDto.code?.trim() || this.generateCode(createProjectDto.name)
     const project = await this.projectModel.create({
       ...createProjectDto,
+      code,
       clientId,
     })
-    return project
+    return this.toResponse(project)
   }
 
   async findAll(clientId: string) {
@@ -26,11 +49,7 @@ export class ProjectService {
       .find({ clientId: clientIdObject })
       .populate('clientId')
       .exec()
-    return projects.map(project => ({
-      _id: project._id,
-      name: project.name,
-      client: project.clientId,
-    }))
+    return projects.map((p) => this.toResponse(p))
   }
 
   async findOne(id: string, clientId: string) {
@@ -42,11 +61,7 @@ export class ProjectService {
     if (!project) {
       throw new NotFoundException('Proyecto no encontrado')
     }
-    return {
-      _id: project._id,
-      name: project.name,
-      client: project.clientId,
-    }
+    return this.toResponse(project)
   }
 
   async update(
@@ -68,11 +83,7 @@ export class ProjectService {
       throw new NotFoundException('Proyecto no encontrado')
     }
 
-    return {
-      _id: project._id,
-      name: project.name,
-      client: project.clientId,
-    }
+    return this.toResponse(project)
   }
 
   async remove(id: string, clientId: string) {

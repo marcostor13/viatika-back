@@ -88,8 +88,11 @@ export class ExpenseService {
   }
 
   private expenseReportIdString(expense: Expense): string | null {
-    const raw = (expense as unknown as { expenseReportId?: Types.ObjectId | { _id: Types.ObjectId } | null })
-      .expenseReportId
+    const raw = (
+      expense as unknown as {
+        expenseReportId?: Types.ObjectId | { _id: Types.ObjectId } | null
+      }
+    ).expenseReportId
     if (!raw) return null
     if (typeof raw === 'object' && '_id' in raw) {
       return String((raw as { _id: Types.ObjectId })._id)
@@ -97,16 +100,24 @@ export class ExpenseService {
     return String(raw)
   }
 
-  private assertCompanyAccess(expense: Expense, actor: ExpenseActorContext): void {
+  private assertCompanyAccess(
+    expense: Expense,
+    actor: ExpenseActorContext
+  ): void {
     if (actor.roleName === ROLES.SUPER_ADMIN) return
-    const expClient = this.normalizeClientId((expense as unknown as { clientId: unknown }).clientId)
+    const expClient = this.normalizeClientId(
+      (expense as unknown as { clientId: unknown }).clientId
+    )
     const userClient = this.normalizeClientId(actor.clientId)
     if (!userClient || expClient !== userClient) {
       throw new ForbiddenException('No autorizado para acceder a este gasto')
     }
   }
 
-  private assertCanReadExpense(expense: Expense, actor: ExpenseActorContext): void {
+  private assertCanReadExpense(
+    expense: Expense,
+    actor: ExpenseActorContext
+  ): void {
     this.assertCompanyAccess(expense, actor)
     if (actor.roleName === ROLES.COLABORADOR) {
       const ownerId = String(expense.createdBy || '').trim()
@@ -118,14 +129,14 @@ export class ExpenseService {
 
   private async assertCanMutateExpense(
     expense: Expense,
-    actor: ExpenseActorContext,
+    actor: ExpenseActorContext
   ): Promise<void> {
     this.assertCanReadExpense(expense, actor)
     if (actor.roleName !== ROLES.COLABORADOR) return
     const status = expense.status || 'pending'
     if (status === 'approved' || status === 'rejected') {
       throw new ForbiddenException(
-        'No puedes modificar un comprobante ya aprobado o rechazado.',
+        'No puedes modificar un comprobante ya aprobado o rechazado.'
       )
     }
     const reportId = this.expenseReportIdString(expense)
@@ -133,7 +144,7 @@ export class ExpenseService {
       const report = await this.expenseReportService.findOne(reportId)
       if (report.status !== 'open' && report.status !== 'rejected') {
         throw new ForbiddenException(
-          'Solo puedes editar o eliminar gastos en rendiciones abiertas o rechazadas.',
+          'Solo puedes editar o eliminar gastos en rendiciones abiertas o rechazadas.'
         )
       }
     }
@@ -289,7 +300,9 @@ export class ExpenseService {
       categoryId: categoryObject,
       proyectId: projectObject,
       clientId: body.clientId,
-      expenseReportId: body.expenseReportId ? new Types.ObjectId(body.expenseReportId) : undefined,
+      expenseReportId: body.expenseReportId
+        ? new Types.ObjectId(body.expenseReportId)
+        : undefined,
       total: data.montoTotal,
       data: JSON.stringify({ ...data, sunatValidation: validation }),
       file: body.imageUrl,
@@ -499,7 +512,10 @@ export class ExpenseService {
       )
 
       if (body.expenseReportId) {
-        await this.expenseReportService.addExpenseToReport(body.expenseReportId, expense._id.toString());
+        await this.expenseReportService.addExpenseToReport(
+          body.expenseReportId,
+          expense._id.toString()
+        )
       }
 
       const project = await this.projectService.findOne(
@@ -542,7 +558,7 @@ export class ExpenseService {
     try {
       const pdfModule = await import('pdf-parse')
       const pdfParse: (data: Buffer) => Promise<{ text: string }> =
-        (pdfModule as any).default ?? (pdfModule as any)
+        pdfModule.default ?? pdfModule
       const parsed = await pdfParse(file.buffer)
       const textFromPdf = parsed.text || ''
 
@@ -593,7 +609,10 @@ export class ExpenseService {
       )
 
       if (body.expenseReportId) {
-        await this.expenseReportService.addExpenseToReport(body.expenseReportId, expense._id.toString());
+        await this.expenseReportService.addExpenseToReport(
+          body.expenseReportId,
+          expense._id.toString()
+        )
       }
 
       const project = await this.projectService.findOne(
@@ -627,27 +646,41 @@ export class ExpenseService {
       throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
     }
     if (!body.mobilityRows || body.mobilityRows.length === 0) {
-      throw new HttpException('Se requiere al menos una fila en la planilla', HttpStatus.BAD_REQUEST)
+      throw new HttpException(
+        'Se requiere al menos una fila en la planilla',
+        HttpStatus.BAD_REQUEST
+      )
     }
 
-    const total = body.mobilityRows.reduce((sum, row) => sum + (row.total || 0), 0)
+    const total = body.mobilityRows.reduce(
+      (sum, row) => sum + (row.total || 0),
+      0
+    )
 
     const expense = await this.expenseRepository.create({
       categoryId: new Types.ObjectId(body.categoryId),
       proyectId: new Types.ObjectId(body.proyectId),
       clientId: body.clientId,
-      expenseReportId: body.expenseReportId ? new Types.ObjectId(body.expenseReportId) : undefined,
+      expenseReportId: body.expenseReportId
+        ? new Types.ObjectId(body.expenseReportId)
+        : undefined,
       total,
       expenseType: 'planilla_movilidad',
       mobilityRows: body.mobilityRows,
       file: body.imageUrl,
       status: 'pending',
       createdBy: body.userId || 'system',
-      data: JSON.stringify({ type: 'planilla_movilidad', rows: body.mobilityRows }),
+      data: JSON.stringify({
+        type: 'planilla_movilidad',
+        rows: body.mobilityRows,
+      }),
     })
 
     if (body.expenseReportId) {
-      await this.expenseReportService.addExpenseToReport(body.expenseReportId, (expense as any)._id.toString())
+      await this.expenseReportService.addExpenseToReport(
+        body.expenseReportId,
+        (expense as any)._id.toString()
+      )
     }
 
     return expense
@@ -658,17 +691,25 @@ export class ExpenseService {
       throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
     }
     if (!body.declaracionJurada) {
-      throw new HttpException('Se requiere firmar la declaración jurada', HttpStatus.BAD_REQUEST)
+      throw new HttpException(
+        'Se requiere firmar la declaración jurada',
+        HttpStatus.BAD_REQUEST
+      )
     }
     if (!body.total || body.total <= 0) {
-      throw new HttpException('Se requiere un monto válido', HttpStatus.BAD_REQUEST)
+      throw new HttpException(
+        'Se requiere un monto válido',
+        HttpStatus.BAD_REQUEST
+      )
     }
 
     const expense = await this.expenseRepository.create({
       categoryId: new Types.ObjectId(body.categoryId),
       proyectId: new Types.ObjectId(body.proyectId),
       clientId: body.clientId,
-      expenseReportId: body.expenseReportId ? new Types.ObjectId(body.expenseReportId) : undefined,
+      expenseReportId: body.expenseReportId
+        ? new Types.ObjectId(body.expenseReportId)
+        : undefined,
       total: body.total,
       description: body.data,
       expenseType: 'otros_gastos',
@@ -685,7 +726,10 @@ export class ExpenseService {
     })
 
     if (body.expenseReportId) {
-      await this.expenseReportService.addExpenseToReport(body.expenseReportId, (expense as any)._id.toString())
+      await this.expenseReportService.addExpenseToReport(
+        body.expenseReportId,
+        (expense as any)._id.toString()
+      )
     }
 
     return expense
@@ -700,7 +744,7 @@ export class ExpenseService {
       if (typeof dataObj === 'string') {
         try {
           dataObj = JSON.parse(dataObj)
-        } catch { }
+        } catch {}
       }
       if (dataObj && dataObj.fechaEmision) {
         fechaEmisionDate = parseFechaEmision(dataObj.fechaEmision)
@@ -713,13 +757,16 @@ export class ExpenseService {
       fechaEmision: fechaEmisionDate,
       createdBy: createExpenseDto.userId,
     })
-    const expense = await createdExpense.save();
+    const expense = await createdExpense.save()
 
     if (createExpenseDto.expenseReportId) {
-      await this.expenseReportService.addExpenseToReport(createExpenseDto.expenseReportId, expense._id.toString());
+      await this.expenseReportService.addExpenseToReport(
+        createExpenseDto.expenseReportId,
+        expense._id.toString()
+      )
     }
 
-    return expense;
+    return expense
   }
 
   async findAll(clientId: string, filters: any = {}): Promise<Expense[]> {
@@ -853,21 +900,35 @@ export class ExpenseService {
       }
 
       // Agregar stage para convertir fechaEmision a fecha real y filtrar
+      // Handles both dd-mm-yyyy and yyyy-mm-dd storage formats
       pipeline.push({
         $addFields: {
           fechaEmisionDate: {
             $dateFromString: {
               dateString: {
-                $concat: [
-                  { $arrayElemAt: [{ $split: ['$fechaEmision', '-'] }, 2] }, // año
-                  '-',
-                  { $arrayElemAt: [{ $split: ['$fechaEmision', '-'] }, 1] }, // mes
-                  '-',
-                  { $arrayElemAt: [{ $split: ['$fechaEmision', '-'] }, 0] }, // día
-                ],
+                $let: {
+                  vars: { parts: { $split: ['$fechaEmision', '-'] } },
+                  in: {
+                    $cond: {
+                      if: { $eq: [{ $strLenCP: { $arrayElemAt: ['$$parts', 0] } }, 4] },
+                      then: '$fechaEmision',
+                      else: {
+                        $concat: [
+                          { $arrayElemAt: ['$$parts', 2] },
+                          '-',
+                          { $arrayElemAt: ['$$parts', 1] },
+                          '-',
+                          { $arrayElemAt: ['$$parts', 0] },
+                        ],
+                      },
+                    },
+                  },
+                },
               },
               format: '%Y-%m-%d',
-              timezone: 'UTC', // Usar UTC para evitar problemas de zona horaria
+              timezone: 'UTC',
+              onError: null,
+              onNull: null,
             },
           },
         },
@@ -995,14 +1056,16 @@ export class ExpenseService {
 
   async getSunatValidationInfoForActor(
     id: string,
-    actor: ExpenseActorContext,
+    actor: ExpenseActorContext
   ): Promise<Record<string, unknown>> {
     const expense = await this.loadExpenseOrThrow(id)
     this.assertCanReadExpense(expense, actor)
     return this.buildSunatValidationInfoPayload(expense)
   }
 
-  private buildSunatValidationInfoPayload(expense: Expense): Record<string, unknown> {
+  private buildSunatValidationInfoPayload(
+    expense: Expense
+  ): Record<string, unknown> {
     try {
       const data = JSON.parse(expense.data)
       const sunatValidation = data.sunatValidation
@@ -1038,7 +1101,7 @@ export class ExpenseService {
 
   async findOneForActor(
     id: string,
-    actor: ExpenseActorContext,
+    actor: ExpenseActorContext
   ): Promise<Expense> {
     const expense = await this.loadExpenseOrThrow(id)
     this.assertCanReadExpense(expense, actor)
@@ -1048,7 +1111,7 @@ export class ExpenseService {
   async update(
     id: string,
     updateExpenseDto: UpdateExpenseDto,
-    actor: ExpenseActorContext,
+    actor: ExpenseActorContext
   ): Promise<Expense | null> {
     if (!/^[0-9a-fA-F]{24}$/.test(id)) {
       throw new Error(`ID de expense inválido: ${id}`)
@@ -1080,11 +1143,10 @@ export class ExpenseService {
       )
     }
 
-
-    let validUserId = null
-    let userEmail = null
-    let userName = null
-    let userLastName = null
+    const validUserId = null
+    const userEmail = null
+    const userName = null
+    const userLastName = null
 
     const updatedExpense = await this.expenseRepository
       .findByIdAndUpdate(
@@ -1099,16 +1161,20 @@ export class ExpenseService {
       .exec()
 
     if (updatedExpense && updatedExpense.createdBy) {
-      const invoiceData = updatedExpense.data ? JSON.parse(updatedExpense.data) : {}
+      const invoiceData = updatedExpense.data
+        ? JSON.parse(updatedExpense.data)
+        : {}
       const nombreComprobante = `${invoiceData.serie || ''}-${invoiceData.correlativo || ''}`
-      
-      this.notificationsService.create({
-        userId: updatedExpense.createdBy as unknown as string,
-        title: 'Comprobante Aprobado',
-        message: `Tu comprobante ${nombreComprobante} ha sido aprobado.`,
-        type: 'success',
-        actionUrl: `/mis-rendiciones/${this.expenseReportIdString(updatedExpense)}/detalle`
-      }).catch(err => this.logger.error('Error creando notificación', err))
+
+      this.notificationsService
+        .create({
+          userId: updatedExpense.createdBy as unknown as string,
+          title: 'Comprobante Aprobado',
+          message: `Tu comprobante ${nombreComprobante} ha sido aprobado.`,
+          type: 'success',
+          actionUrl: `/mis-rendiciones/${this.expenseReportIdString(updatedExpense)}/detalle`,
+        })
+        .catch(err => this.logger.error('Error creando notificación', err))
     }
 
     this.logger.log(`Factura ${id} aprobada exitosamente`)
@@ -1201,8 +1267,9 @@ export class ExpenseService {
                   colaborador.email,
                   {
                     providerName: colaborador.name,
-                    invoiceNumber: `${invoiceData.serie || ''}-${invoiceData.correlativo || ''
-                      }`,
+                    invoiceNumber: `${invoiceData.serie || ''}-${
+                      invoiceData.correlativo || ''
+                    }`,
                     date:
                       invoiceData.fechaEmision ||
                       new Date().toISOString().split('T')[0],
@@ -1264,9 +1331,9 @@ export class ExpenseService {
       )
     }
 
-    let validUserId = null
-    let userName = null
-    let userLastName = null
+    const validUserId = null
+    const userName = null
+    const userLastName = null
 
     const updatedExpense = await this.expenseRepository
       .findByIdAndUpdate(
@@ -1282,16 +1349,22 @@ export class ExpenseService {
       .exec()
 
     if (updatedExpense && updatedExpense.createdBy) {
-      const invoiceData = updatedExpense.data ? JSON.parse(updatedExpense.data) : {}
+      const invoiceData = updatedExpense.data
+        ? JSON.parse(updatedExpense.data)
+        : {}
       const nombreComprobante = `${invoiceData.serie || ''}-${invoiceData.correlativo || ''}`
-      
-      this.notificationsService.create({
-        userId: updatedExpense.createdBy as unknown as string,
-        title: 'Comprobante Rechazado',
-        message: `Tu comprobante ${nombreComprobante} ha sido rechazado. Motivo: ${approvalDto.reason}`,
-        type: 'error',
-        actionUrl: `/mis-rendiciones/${this.expenseReportIdString(updatedExpense)}/detalle`
-      }).catch(err => this.logger.error('Error creando notificación de rechazo', err))
+
+      this.notificationsService
+        .create({
+          userId: updatedExpense.createdBy as unknown as string,
+          title: 'Comprobante Rechazado',
+          message: `Tu comprobante ${nombreComprobante} ha sido rechazado. Motivo: ${approvalDto.reason}`,
+          type: 'error',
+          actionUrl: `/mis-rendiciones/${this.expenseReportIdString(updatedExpense)}/detalle`,
+        })
+        .catch(err =>
+          this.logger.error('Error creando notificación de rechazo', err)
+        )
     }
 
     this.logger.log(`Factura ${id} rechazada exitosamente`)
@@ -1476,7 +1549,7 @@ export class ExpenseService {
       tipoComprobante?: string
     },
     clientId: string,
-    actor: ExpenseActorContext,
+    actor: ExpenseActorContext
   ) {
     const expense = await this.loadExpenseOrThrow(id)
     await this.assertCanMutateExpense(expense, actor)

@@ -102,28 +102,34 @@ export class Expense {
   @Prop({ type: Types.ObjectId, ref: 'ExpenseReport', required: false })
   expenseReportId?: Types.ObjectId
 
-  @Prop({ type: String, default: 'factura', enum: ['factura', 'planilla_movilidad', 'otros_gastos'] })
+  @Prop({
+    type: String,
+    default: 'factura',
+    enum: ['factura', 'planilla_movilidad', 'otros_gastos'],
+  })
   expenseType?: ExpenseType
 
   @Prop({
-    type: [{
-      fecha: { type: String },
-      concepto: { type: String },
-      total: { type: Number },
-      clienteProveedor: { type: String },
-      origen: { type: String },
-      origenCoords: {
-        lat: { type: Number },
-        lng: { type: Number },
+    type: [
+      {
+        fecha: { type: String },
+        concepto: { type: String },
+        total: { type: Number },
+        clienteProveedor: { type: String },
+        origen: { type: String },
+        origenCoords: {
+          lat: { type: Number },
+          lng: { type: Number },
+        },
+        destino: { type: String },
+        destinoCoords: {
+          lat: { type: Number },
+          lng: { type: Number },
+        },
+        distanciaKm: { type: Number },
+        gestion: { type: String },
       },
-      destino: { type: String },
-      destinoCoords: {
-        lat: { type: Number },
-        lng: { type: Number },
-      },
-      distanciaKm: { type: Number },
-      gestion: { type: String },
-    }],
+    ],
     required: false,
     default: undefined,
   })

@@ -1,88 +1,94 @@
-import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document, Types } from 'mongoose';
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose'
+import { Document, Types } from 'mongoose'
 
-export type ExpenseReportStatus = 'solicited' | 'open' | 'submitted' | 'approved' | 'rejected' | 'closed';
-export type SettlementType = 'reembolso' | 'devolucion' | 'equilibrado';
+export type ExpenseReportStatus =
+  | 'solicited'
+  | 'open'
+  | 'submitted'
+  | 'approved'
+  | 'rejected'
+  | 'closed'
+export type SettlementType = 'reembolso' | 'devolucion' | 'equilibrado'
 
 export interface Settlement {
-  advanceTotal: number;
-  expenseTotal: number;
-  difference: number;
-  type: SettlementType;
-  settledAt: Date;
+  advanceTotal: number
+  expenseTotal: number
+  difference: number
+  type: SettlementType
+  settledAt: Date
 }
 
 export interface ExpenseReportBudgetItem {
-  description: string;
-  amount: number;
-  peopleCount: number;
-  fuelAmount: number;
-  daysCount: number;
-  total: number;
+  description: string
+  amount: number
+  peopleCount: number
+  fuelAmount: number
+  daysCount: number
+  total: number
 }
 
 export interface ExpenseReportDocument extends Document {
-  title: string;
-  description: string;
-  budget: number;
-  userId: Types.ObjectId;
-  clientId: Types.ObjectId;
-  status: ExpenseReportStatus;
-  rejectionReason?: string;
-  expenseIds: Types.ObjectId[];
-  advanceIds?: Types.ObjectId[];
-  settlement?: Settlement;
-  createdBy: Types.ObjectId;
-  approvedBy?: Types.ObjectId;
-  projectId?: Types.ObjectId;
+  title: string
+  description: string
+  budget: number
+  userId: Types.ObjectId
+  clientId: Types.ObjectId
+  status: ExpenseReportStatus
+  rejectionReason?: string
+  expenseIds: Types.ObjectId[]
+  advanceIds?: Types.ObjectId[]
+  settlement?: Settlement
+  createdBy: Types.ObjectId
+  approvedBy?: Types.ObjectId
+  projectId?: Types.ObjectId
   // New fields
-  accountNumber?: string;
-  idDocument?: string;
-  peopleNames?: string[];
-  location?: string;
-  startDate?: Date;
-  endDate?: Date;
-  items?: ExpenseReportBudgetItem[];
+  accountNumber?: string
+  idDocument?: string
+  peopleNames?: string[]
+  location?: string
+  startDate?: Date
+  endDate?: Date
+  items?: ExpenseReportBudgetItem[]
 }
 
 @Schema({ timestamps: true })
 export class ExpenseReport {
   @Prop({ required: true })
-  title: string;
+  title: string
 
   @Prop()
-  description: string;
+  description: string
 
   @Prop({ required: true, default: 0 })
-  budget: number;
+  budget: number
 
   @Prop({ required: true, type: Types.ObjectId, ref: 'User' })
-  userId: Types.ObjectId;
+  userId: Types.ObjectId
 
   @Prop({ required: true, type: Types.ObjectId, ref: 'Client' })
-  clientId: Types.ObjectId;
+  clientId: Types.ObjectId
 
   @Prop({ default: 'open' })
-  status: ExpenseReportStatus;
+  status: ExpenseReportStatus
 
   /** Motivo cuando el administrador rechaza la rendición (visible para el colaborador) */
   @Prop({ required: false })
-  rejectionReason?: string;
+  rejectionReason?: string
 
   @Prop({ type: [{ type: Types.ObjectId, ref: 'Expense' }], default: [] })
-  expenseIds: Types.ObjectId[];
+  expenseIds: Types.ObjectId[]
 
   @Prop({ type: Types.ObjectId, ref: 'User', required: true })
-  createdBy: Types.ObjectId;
+  createdBy: Types.ObjectId
 
   @Prop({ type: Types.ObjectId, ref: 'User', required: false })
-  approvedBy?: Types.ObjectId;
+  approvedBy?: Types.ObjectId
 
   @Prop({ type: Types.ObjectId, ref: 'Project', required: false })
-  projectId?: Types.ObjectId;
+  projectId?: Types.ObjectId
 
   @Prop({ type: [{ type: Types.ObjectId, ref: 'Advance' }], default: [] })
-  advanceIds?: Types.ObjectId[];
+  advanceIds?: Types.ObjectId[]
 
   @Prop({
     type: {
@@ -94,25 +100,25 @@ export class ExpenseReport {
       _id: false,
     },
   })
-  settlement?: Settlement;
+  settlement?: Settlement
 
   @Prop()
-  accountNumber?: string;
+  accountNumber?: string
 
   @Prop()
-  idDocument?: string;
+  idDocument?: string
 
   @Prop({ type: [String], default: [] })
-  peopleNames?: string[];
+  peopleNames?: string[]
 
   @Prop()
-  location?: string;
+  location?: string
 
   @Prop()
-  startDate?: Date;
+  startDate?: Date
 
   @Prop()
-  endDate?: Date;
+  endDate?: Date
 
   @Prop({
     type: [
@@ -128,7 +134,7 @@ export class ExpenseReport {
     ],
     default: [],
   })
-  items?: ExpenseReportBudgetItem[];
+  items?: ExpenseReportBudgetItem[]
 }
 
-export const ExpenseReportSchema = SchemaFactory.createForClass(ExpenseReport);
+export const ExpenseReportSchema = SchemaFactory.createForClass(ExpenseReport)

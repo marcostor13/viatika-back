@@ -1,7 +1,6 @@
-import { NestFactory } from '@nestjs/core';
-import { AppModule } from './app.module';
+import { NestFactory } from '@nestjs/core'
+import { AppModule } from './app.module'
 import * as dns from 'node:dns'
-
 
 /**
  * En algunos entornos Windows, Node resuelve SRV de `mongodb+srv://` contra DNS que
@@ -18,13 +17,13 @@ function applyOptionalNodeDnsServers(): void {
 
 async function bootstrap() {
   applyOptionalNodeDnsServers()
-  const app = await NestFactory.create(AppModule);
-  app.setGlobalPrefix('api');
+  const app = await NestFactory.create(AppModule)
+  app.setGlobalPrefix('api')
   app.enableCors({
     origin: '*',
     methods: ['GET', 'POST', 'PATCH', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization'],
-  });
-  await app.listen(process.env.PORT ?? 3000);
+  })
+  await app.listen(process.env.PORT ?? 3000)
 }
-bootstrap();
+bootstrap()

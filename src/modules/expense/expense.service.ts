@@ -910,7 +910,7 @@ export class ExpenseService {
                   vars: { parts: { $split: ['$fechaEmision', '-'] } },
                   in: {
                     $cond: {
-                      if: { $eq: [{ $strLenCP: { $arrayElemAt: ['$$parts', 0] } }, 4] },
+                      if: { $eq: [{ $strLenCP: { $ifNull: [{ $arrayElemAt: ['$$parts', 0] }, ''] } }, 4] },
                       then: '$fechaEmision',
                       else: {
                         $concat: [

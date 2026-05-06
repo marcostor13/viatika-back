@@ -24,6 +24,7 @@ export type AuditAction =
   | 'update_user'
   | 'update_permissions'
   | 'update_signature'
+  | 'generate_affidavit'
 
 @Schema({ timestamps: true })
 export class AuditLog {

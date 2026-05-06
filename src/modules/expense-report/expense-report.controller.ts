@@ -1,5 +1,6 @@
 import {
   Controller,
+  ForbiddenException,
   Get,
   Post,
   Body,
@@ -13,6 +14,7 @@ import {
 import { ExpenseReportService } from './expense-report.service'
 import { CreateExpenseReportDto } from './dto/create-expense-report.dto'
 import { UpdateExpenseReportDto } from './dto/update-expense-report.dto'
+import { CreateAffidavitDto } from './dto/create-affidavit.dto'
 import { AuthGuard } from '@nestjs/passport'
 import { RolesGuard } from '../auth/guards/roles.guard'
 import { Roles } from '../auth/decorators/roles.decorador'
@@ -87,6 +89,33 @@ export class ExpenseReportController {
     @Body() updateExpenseReportDto: UpdateExpenseReportDto,
     @Request() req: any
   ) {
+    const status = updateExpenseReportDto.status
+    const role = req.user?.roles?.[0]
+    const isCollaborator = role === ROLES.COLABORADOR
+    const isAdminOrSuperAdmin =
+      role === ROLES.ADMIN || role === ROLES.SUPER_ADMIN
+
+    if (
+      isCollaborator &&
+      (status === 'open' ||
+        status === 'approved' ||
+        status === 'rejected' ||
+        status === 'closed')
+    ) {
+      throw new ForbiddenException(
+        'No tienes permisos para aprobar/rechazar rendiciones.'
+      )
+    }
+
+    if (
+      (status === 'open' || status === 'approved' || status === 'closed') &&
+      !isAdminOrSuperAdmin
+    ) {
+      throw new ForbiddenException(
+        'Solo un aprobador puede cambiar a este estado.'
+      )
+    }
+
     // Si se aprueba la solicitud o la rendición, guardar quién aprobó
     if (
       updateExpenseReportDto.status === 'open' ||
@@ -123,6 +152,34 @@ export class ExpenseReportController {
       action: 'delete_rendicion',
       module: 'rendiciones',
       entityId: id,
+      clientId: req.user.clientId,
+    })
+    return result
+  }
+
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Post(':id/affidavit')
+  async createAffidavit(
+    @Param('id') id: string,
+    @Body() dto: CreateAffidavitDto,
+    @Request() req: any
+  ) {
+    const result = await this.expenseReportService.registerAffidavit(
+      id,
+      dto,
+      req.user._id || req.user.sub
+    )
+    this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email || 'Usuario',
+      action: 'generate_affidavit',
+      module: 'rendiciones',
+      entityId: id,
+      details: JSON.stringify({
+        type: dto.type,
+        expenseIds: dto.expenseIds,
+      }),
       clientId: req.user.clientId,
     })
     return result

@@ -665,4 +665,49 @@ export class EmailService {
       throw error
     }
   }
+
+  /** Fase 4 — pago de viáticos registrado para colaborador y coordinador. */
+  async sendViaticoPagoRealizado(
+    email: string,
+    data: {
+      recipientName: string
+      collaboratorName: string
+      coordinatorName?: string
+      projectLabel: string
+      amountFormatted: string
+      transferDate: string
+      reference?: string
+      paymentMethod: string
+      paymentReceiptUrl: string
+      paymentReceiptFileName?: string
+      platformUrl: string
+    }
+  ) {
+    try {
+      const subject = `Viáticos aprobados y pagados — ${data.projectLabel}`
+      await this.mailerService.sendMail({
+        to: email,
+        subject,
+        template: './viatico-pago-realizado',
+        attachments: data.paymentReceiptUrl
+          ? [
+              {
+                filename:
+                  data.paymentReceiptFileName || 'comprobante-pago-viaticos.pdf',
+                path: data.paymentReceiptUrl,
+              },
+            ]
+          : [],
+        context: {
+          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          year: new Date().getFullYear(),
+          ...data,
+        },
+      })
+      this.logger.debug(`Correo de pago viático enviado a ${email}`)
+    } catch (error) {
+      this.logger.error(`Error correo pago viático a ${email}:`, error)
+      throw error
+    }
+  }
 }

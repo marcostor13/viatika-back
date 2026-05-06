@@ -89,6 +89,7 @@ const mockEmailService = {
   sendViaticoSolicitudToCoordinator: jest.fn(),
   sendViaticoRechazoColaborador: jest.fn().mockResolvedValue(undefined),
   sendViaticoAprobacionContabilidad: jest.fn().mockResolvedValue(undefined),
+  sendViaticoPagoRealizado: jest.fn().mockResolvedValue(undefined),
 }
 
 describe('AdvanceService', () => {
@@ -337,17 +338,45 @@ describe('AdvanceService', () => {
       cci: '00212341234',
       transferDate: new Date().toISOString(),
       reference: 'REF001',
+      paymentReceiptUrl: 'https://files.example.com/receipts/viatico-001.pdf',
+      paymentReceiptFileName: 'viatico-001.pdf',
+      paymentReceiptMimeType: 'application/pdf',
+      paymentReceiptSizeBytes: 1024,
     }
 
-    it('registers payment and sets status=paid', async () => {
-      const advance = makeMockAdvance({ status: 'approved' })
+    it('registers payment with receipt, sets status=paid and notifies collaborator/coordinator', async () => {
+      const advance = makeMockAdvance({
+        status: 'approved',
+        projectId: new Types.ObjectId().toString(),
+      })
+      mockUserService.findEmailNameClient
+        .mockResolvedValueOnce({
+          name: 'Colaborador Test',
+          email: 'colab@test.com',
+          clientId: new Types.ObjectId(clientId),
+        })
+        .mockResolvedValueOnce({
+          name: 'Coordinador Test',
+          email: 'coord@test.com',
+          clientId: new Types.ObjectId(clientId),
+        })
+      mockUserService.findTransactionalProfile.mockResolvedValue({
+        coordinatorId: new Types.ObjectId(),
+      })
+      mockProjectService.findOne.mockResolvedValue({
+        code: 'CC-001',
+        name: 'Proyecto Demo',
+      })
       mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       await service.registerPayment(advanceId, dto, ROLES.SUPER_ADMIN)
+      await new Promise(resolve => setImmediate(resolve))
       expect(advance.status).toBe('paid')
       expect(advance.paymentInfo).toMatchObject({
         method: 'transferencia_bancaria',
         bankName: 'BCP',
+        paymentReceiptUrl: dto.paymentReceiptUrl,
       })
+      expect(mockEmailService.sendViaticoPagoRealizado).toHaveBeenCalledTimes(2)
     })
 
     it('throws BadRequestException when advance is not approved', async () => {
@@ -364,6 +393,23 @@ describe('AdvanceService', () => {
       await expect(
         service.registerPayment(advanceId, dto, ROLES.ADMIN)
       ).rejects.toThrow(ForbiddenException)
+    })
+
+    it('throws BadRequestException when receipt format is invalid', async () => {
+      const advance = makeMockAdvance({ status: 'approved' })
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
+      await expect(
+        service.registerPayment(
+          advanceId,
+          {
+            ...dto,
+            paymentReceiptUrl: 'https://files.example.com/receipts/viatico-001.exe',
+            paymentReceiptFileName: 'viatico-001.exe',
+            paymentReceiptMimeType: 'application/x-msdownload',
+          },
+          ROLES.SUPER_ADMIN
+        )
+      ).rejects.toThrow(BadRequestException)
     })
   })
 

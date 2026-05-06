@@ -1,4 +1,3 @@
 export class SendCodeDto {
-    email: string;
+  email: string
 }
-

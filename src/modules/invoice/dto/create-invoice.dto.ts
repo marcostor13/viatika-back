@@ -69,40 +69,33 @@ export class CreateInvoiceDto {
   @IsNotEmpty()
   items: InvoiceItemDto[]
 
-
   @IsNumber()
   @Min(0)
   @IsNotEmpty()
   subtotal: number
-
 
   @IsNumber()
   @Min(0)
   @IsNotEmpty()
   taxRate: number
 
-
   @IsNumber()
   @Min(0)
   @IsNotEmpty()
   taxAmount: number
-
 
   @IsNumber()
   @Min(0)
   @IsNotEmpty()
   total: number
 
-
   @IsEnum(['PENDING', 'APPROVED', 'REJECTED'])
   @IsOptional()
   status?: string
 
-
   @IsString()
   @IsOptional()
   notes?: string
-
 
   @IsBoolean()
   @IsOptional()

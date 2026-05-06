@@ -1,9 +1,4 @@
-import {
-  IsString,
-  IsOptional,
-  IsEnum,
-  IsNumber
-} from 'class-validator'
+import { IsString, IsOptional, IsEnum, IsNumber } from 'class-validator'
 import { ExpenseStatus } from '../entities/expense.entity'
 
 export class UpdateExpenseDto {

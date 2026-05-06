@@ -27,8 +27,8 @@ import { AuditLogService } from '../audit-log/audit-log.service'
 export class UserController {
   constructor(
     private userService: UserService,
-    private auditLogService: AuditLogService,
-  ) { }
+    private auditLogService: AuditLogService
+  ) {}
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(ROLES.SUPER_ADMIN)
@@ -57,7 +57,9 @@ export class UserController {
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
   @Get('client/:clientId')
-  async findAll(@Param('clientId', ParseObjectIdPipe) clientId: Types.ObjectId) {
+  async findAll(
+    @Param('clientId', ParseObjectIdPipe) clientId: Types.ObjectId
+  ) {
     return await this.userService.findAll(clientId)
   }
 
@@ -84,9 +86,11 @@ export class UserController {
   async updatePermissions(
     @Param('id', ParseObjectIdPipe) id: Types.ObjectId,
     @Body() permissionsDto: UpdatePermissionsDto,
-    @Request() req: any,
+    @Request() req: any
   ) {
-    const result = await this.userService.update(id.toString(), { permissions: permissionsDto })
+    const result = await this.userService.update(id.toString(), {
+      permissions: permissionsDto,
+    })
     this.auditLogService.log({
       userId: req.user._id || req.user.sub,
       userName: req.user.name || req.user.email,
@@ -113,7 +117,9 @@ export class UserController {
     @Request() req: any
   ) {
     const userId = req.user._id || req.user.sub
-    const result = await this.userService.update(userId, { signature: body.signature })
+    const result = await this.userService.update(userId, {
+      signature: body.signature,
+    })
     this.auditLogService.log({
       userId: userId,
       userName: req.user.name || req.user.email,

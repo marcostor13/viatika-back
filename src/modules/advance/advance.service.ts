@@ -7,7 +7,11 @@ import {
 } from '@nestjs/common'
 import { InjectModel } from '@nestjs/mongoose'
 import { Model, Types } from 'mongoose'
-import { Advance, AdvanceDocument, ADVANCE_THRESHOLDS } from './entities/advance.entity'
+import {
+  Advance,
+  AdvanceDocument,
+  ADVANCE_THRESHOLDS,
+} from './entities/advance.entity'
 import { CreateAdvanceDto } from './dto/create-advance.dto'
 import { ApproveAdvanceDto, RejectAdvanceDto } from './dto/approve-advance.dto'
 import { PayAdvanceDto } from './dto/pay-advance.dto'
@@ -21,7 +25,7 @@ export class AdvanceService {
   constructor(
     @InjectModel(Advance.name)
     private readonly advanceModel: Model<AdvanceDocument>,
-    private readonly expenseReportService: ExpenseReportService,
+    private readonly expenseReportService: ExpenseReportService
   ) {}
 
   async create(dto: CreateAdvanceDto): Promise<Advance> {
@@ -33,7 +37,9 @@ export class AdvanceService {
     const advance = await this.advanceModel.create({
       userId: new Types.ObjectId(dto.userId),
       clientId: new Types.ObjectId(dto.clientId),
-      expenseReportId: dto.expenseReportId ? new Types.ObjectId(dto.expenseReportId) : undefined,
+      expenseReportId: dto.expenseReportId
+        ? new Types.ObjectId(dto.expenseReportId)
+        : undefined,
       amount: dto.amount,
       description: dto.description,
       status: 'pending_l1',
@@ -43,7 +49,10 @@ export class AdvanceService {
     })
 
     if (dto.expenseReportId) {
-      await this.expenseReportService.addAdvanceToReport(dto.expenseReportId, (advance as any)._id.toString())
+      await this.expenseReportService.addAdvanceToReport(
+        dto.expenseReportId,
+        (advance as any)._id.toString()
+      )
     }
 
     return advance
@@ -87,20 +96,31 @@ export class AdvanceService {
       .populate('userId', 'name email bankAccount')
       .populate('expenseReportId', 'title status budget')
       .exec()
-    if (!advance) throw new NotFoundException(`Anticipo con ID ${id} no encontrado`)
+    if (!advance)
+      throw new NotFoundException(`Anticipo con ID ${id} no encontrado`)
     return advance
   }
 
-  async approveL1(id: string, dto: ApproveAdvanceDto, userRole: string, userPermissions?: any): Promise<Advance> {
+  async approveL1(
+    id: string,
+    dto: ApproveAdvanceDto,
+    userRole: string,
+    userPermissions?: any
+  ): Promise<Advance> {
     const advance = await this.advanceModel.findById(id)
     if (!advance) throw new NotFoundException(`Anticipo ${id} no encontrado`)
 
     if (advance.status !== 'pending_l1') {
-      throw new BadRequestException(`El anticipo no está en estado de aprobación nivel 1 (estado actual: ${advance.status})`)
+      throw new BadRequestException(
+        `El anticipo no está en estado de aprobación nivel 1 (estado actual: ${advance.status})`
+      )
     }
 
-    const canApproveL1 = [ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(userRole as ROLES) || userPermissions?.canApproveL1 === true
-    if (!canApproveL1) throw new ForbiddenException('No tienes permiso para aprobar en nivel 1')
+    const canApproveL1 =
+      [ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(userRole as ROLES) ||
+      userPermissions?.canApproveL1 === true
+    if (!canApproveL1)
+      throw new ForbiddenException('No tienes permiso para aprobar en nivel 1')
 
     advance.approvalHistory.push({
       level: 1,
@@ -120,16 +140,25 @@ export class AdvanceService {
     return advance.save()
   }
 
-  async approveL2(id: string, dto: ApproveAdvanceDto, userRole: string, userPermissions?: any): Promise<Advance> {
+  async approveL2(
+    id: string,
+    dto: ApproveAdvanceDto,
+    userRole: string,
+    userPermissions?: any
+  ): Promise<Advance> {
     const advance = await this.advanceModel.findById(id)
     if (!advance) throw new NotFoundException(`Anticipo ${id} no encontrado`)
 
     if (advance.status !== 'pending_l2') {
-      throw new BadRequestException(`El anticipo no está en estado de aprobación nivel 2 (estado actual: ${advance.status})`)
+      throw new BadRequestException(
+        `El anticipo no está en estado de aprobación nivel 2 (estado actual: ${advance.status})`
+      )
     }
 
-    const canApproveL2 = userRole === ROLES.SUPER_ADMIN || userPermissions?.canApproveL2 === true
-    if (!canApproveL2) throw new ForbiddenException('No tienes permiso para aprobar en nivel 2')
+    const canApproveL2 =
+      userRole === ROLES.SUPER_ADMIN || userPermissions?.canApproveL2 === true
+    if (!canApproveL2)
+      throw new ForbiddenException('No tienes permiso para aprobar en nivel 2')
 
     advance.approvalHistory.push({
       level: 2,
@@ -144,17 +173,28 @@ export class AdvanceService {
     return advance.save()
   }
 
-  async reject(id: string, dto: RejectAdvanceDto, userRole: string, userPermissions?: any): Promise<Advance> {
+  async reject(
+    id: string,
+    dto: RejectAdvanceDto,
+    userRole: string,
+    userPermissions?: any
+  ): Promise<Advance> {
     const advance = await this.advanceModel.findById(id)
     if (!advance) throw new NotFoundException(`Anticipo ${id} no encontrado`)
 
     const rejectableStatuses = ['pending_l1', 'pending_l2']
     if (!rejectableStatuses.includes(advance.status)) {
-      throw new BadRequestException(`No se puede rechazar un anticipo en estado "${advance.status}"`)
+      throw new BadRequestException(
+        `No se puede rechazar un anticipo en estado "${advance.status}"`
+      )
     }
 
-    const canReject = [ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(userRole as ROLES) || userPermissions?.canApproveL1 === true || userPermissions?.canApproveL2 === true
-    if (!canReject) throw new ForbiddenException('No tienes permiso para rechazar anticipos')
+    const canReject =
+      [ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(userRole as ROLES) ||
+      userPermissions?.canApproveL1 === true ||
+      userPermissions?.canApproveL2 === true
+    if (!canReject)
+      throw new ForbiddenException('No tienes permiso para rechazar anticipos')
 
     advance.approvalHistory.push({
       level: advance.status === 'pending_l2' ? 2 : 1,
@@ -170,16 +210,25 @@ export class AdvanceService {
     return advance.save()
   }
 
-  async registerPayment(id: string, dto: PayAdvanceDto, userRole: string, userPermissions?: any): Promise<Advance> {
+  async registerPayment(
+    id: string,
+    dto: PayAdvanceDto,
+    userRole: string,
+    userPermissions?: any
+  ): Promise<Advance> {
     const advance = await this.advanceModel.findById(id)
     if (!advance) throw new NotFoundException(`Anticipo ${id} no encontrado`)
 
     if (advance.status !== 'approved') {
-      throw new BadRequestException(`Solo se puede registrar pago de anticipos aprobados (estado actual: ${advance.status})`)
+      throw new BadRequestException(
+        `Solo se puede registrar pago de anticipos aprobados (estado actual: ${advance.status})`
+      )
     }
 
-    const canPay = userRole === ROLES.SUPER_ADMIN || userPermissions?.canApproveL2 === true
-    if (!canPay) throw new ForbiddenException('No tienes permiso para registrar pagos')
+    const canPay =
+      userRole === ROLES.SUPER_ADMIN || userPermissions?.canApproveL2 === true
+    if (!canPay)
+      throw new ForbiddenException('No tienes permiso para registrar pagos')
 
     advance.paymentInfo = {
       method: dto.method,
@@ -199,16 +248,25 @@ export class AdvanceService {
     if (!advance) throw new NotFoundException(`Anticipo ${id} no encontrado`)
 
     if (advance.status !== 'paid') {
-      throw new BadRequestException(`Solo se puede liquidar anticipos pagados (estado actual: ${advance.status})`)
+      throw new BadRequestException(
+        `Solo se puede liquidar anticipos pagados (estado actual: ${advance.status})`
+      )
     }
 
     let expenseTotal = 0
     if (advance.expenseReportId) {
       try {
-        const report = await this.expenseReportService.findOneWithAdvances(advance.expenseReportId.toString())
-        expenseTotal = (report.expenseIds as any[]).reduce((sum, e) => sum + (e.total || 0), 0)
+        const report = await this.expenseReportService.findOneWithAdvances(
+          advance.expenseReportId.toString()
+        )
+        expenseTotal = (report.expenseIds as any[]).reduce(
+          (sum, e) => sum + (e.total || 0),
+          0
+        )
       } catch (err) {
-        this.logger.warn('No se pudo obtener la rendición para calcular liquidación')
+        this.logger.warn(
+          'No se pudo obtener la rendición para calcular liquidación'
+        )
       }
     }
 
@@ -238,7 +296,13 @@ export class AdvanceService {
     if (advance.expenseReportId) {
       await this.expenseReportService.updateSettlement(
         advance.expenseReportId.toString(),
-        { advanceTotal: advanceAmount, expenseTotal, difference, type, settledAt: new Date() }
+        {
+          advanceTotal: advanceAmount,
+          expenseTotal,
+          difference,
+          type,
+          settledAt: new Date(),
+        }
       )
     }
 
@@ -250,7 +314,9 @@ export class AdvanceService {
     if (!advance) throw new NotFoundException(`Anticipo ${id} no encontrado`)
 
     if (advance.status !== 'settled' && advance.status !== 'paid') {
-      throw new BadRequestException(`Solo se puede registrar devolución de anticipos pagados o liquidados`)
+      throw new BadRequestException(
+        `Solo se puede registrar devolución de anticipos pagados o liquidados`
+      )
     }
 
     advance.returnedAmount = returnedAmount
@@ -260,16 +326,38 @@ export class AdvanceService {
   }
 
   async getStats(clientId: string) {
-    const [pending_l1, pending_l2, approved, paid, settled] = await Promise.all([
-      this.advanceModel.countDocuments({ clientId: new Types.ObjectId(clientId), status: 'pending_l1' }),
-      this.advanceModel.countDocuments({ clientId: new Types.ObjectId(clientId), status: 'pending_l2' }),
-      this.advanceModel.countDocuments({ clientId: new Types.ObjectId(clientId), status: 'approved' }),
-      this.advanceModel.countDocuments({ clientId: new Types.ObjectId(clientId), status: 'paid' }),
-      this.advanceModel.countDocuments({ clientId: new Types.ObjectId(clientId), status: 'settled' }),
-    ])
+    const [pending_l1, pending_l2, approved, paid, settled] = await Promise.all(
+      [
+        this.advanceModel.countDocuments({
+          clientId: new Types.ObjectId(clientId),
+          status: 'pending_l1',
+        }),
+        this.advanceModel.countDocuments({
+          clientId: new Types.ObjectId(clientId),
+          status: 'pending_l2',
+        }),
+        this.advanceModel.countDocuments({
+          clientId: new Types.ObjectId(clientId),
+          status: 'approved',
+        }),
+        this.advanceModel.countDocuments({
+          clientId: new Types.ObjectId(clientId),
+          status: 'paid',
+        }),
+        this.advanceModel.countDocuments({
+          clientId: new Types.ObjectId(clientId),
+          status: 'settled',
+        }),
+      ]
+    )
 
     const totalAmountResult = await this.advanceModel.aggregate([
-      { $match: { clientId: new Types.ObjectId(clientId), status: { $in: ['approved', 'paid', 'settled'] } } },
+      {
+        $match: {
+          clientId: new Types.ObjectId(clientId),
+          status: { $in: ['approved', 'paid', 'settled'] },
+        },
+      },
       { $group: { _id: null, total: { $sum: '$amount' } } },
     ])
 

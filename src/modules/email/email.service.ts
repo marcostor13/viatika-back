@@ -558,9 +558,7 @@ export class EmailService {
           year: new Date().getFullYear(),
         },
       })
-      this.logger.debug(
-        `Correo de rendición aprobada enviado a ${email}`
-      )
+      this.logger.debug(`Correo de rendición aprobada enviado a ${email}`)
     } catch (error) {
       this.logger.error(
         `Error al enviar correo de rendición aprobada a ${email}:`,

@@ -30,7 +30,7 @@ export class ExpenseController {
 
   constructor(
     private readonly expenseService: ExpenseService,
-    private readonly auditLogService: AuditLogService,
+    private readonly auditLogService: AuditLogService
   ) {}
 
   private toActorContext(user: {
@@ -99,7 +99,8 @@ export class ExpenseController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   async createMobilitySheet(@Body() body: CreateExpenseDto, @Request() req) {
     const clientId = body.clientId || req.user?.clientId
-    if (!clientId) throw new Error('No se pudo obtener la empresa del usuario ni del body')
+    if (!clientId)
+      throw new Error('No se pudo obtener la empresa del usuario ni del body')
     body.clientId = clientId
     body.userId = req.user?.sub || req.user?._id || body.userId
     const result = await this.expenseService.createMobilitySheet(body)
@@ -119,7 +120,8 @@ export class ExpenseController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   async createOtherExpense(@Body() body: CreateExpenseDto, @Request() req) {
     const clientId = body.clientId || req.user?.clientId
-    if (!clientId) throw new Error('No se pudo obtener la empresa del usuario ni del body')
+    if (!clientId)
+      throw new Error('No se pudo obtener la empresa del usuario ni del body')
     body.clientId = clientId
     body.userId = req.user?.sub || req.user?._id || body.userId
     const result = await this.expenseService.createOtherExpense(body)
@@ -175,18 +177,29 @@ export class ExpenseController {
   @Get('invoice/:id/sunat-validation')
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
   @UseGuards(JwtAuthGuard, RolesGuard)
-  getSunatValidation(@Param('id') id: string, @Request() req: { user: { _id?: string; roles?: string[]; clientId?: string } }) {
+  getSunatValidation(
+    @Param('id') id: string,
+    @Request()
+    req: { user: { _id?: string; roles?: string[]; clientId?: string } }
+  ) {
     return this.expenseService.getSunatValidationInfoForActor(
       id,
-      this.toActorContext(req.user),
+      this.toActorContext(req.user)
     )
   }
 
   @Get('invoice/:id')
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
   @UseGuards(JwtAuthGuard, RolesGuard)
-  findOne(@Param('id') id: string, @Request() req: { user: { _id?: string; roles?: string[]; clientId?: string } }) {
-    return this.expenseService.findOneForActor(id, this.toActorContext(req.user))
+  findOne(
+    @Param('id') id: string,
+    @Request()
+    req: { user: { _id?: string; roles?: string[]; clientId?: string } }
+  ) {
+    return this.expenseService.findOneForActor(
+      id,
+      this.toActorContext(req.user)
+    )
   }
 
   @Get(':clientId')
@@ -211,9 +224,14 @@ export class ExpenseController {
   update(
     @Param('id') id: string,
     @Body() updateExpenseDto: UpdateExpenseDto,
-    @Request() req: { user: { _id?: string; roles?: string[]; clientId?: string } },
+    @Request()
+    req: { user: { _id?: string; roles?: string[]; clientId?: string } }
   ) {
-    return this.expenseService.update(id, updateExpenseDto, this.toActorContext(req.user))
+    return this.expenseService.update(
+      id,
+      updateExpenseDto,
+      this.toActorContext(req.user)
+    )
   }
 
   @Patch('invoice/:id/approve')
@@ -263,7 +281,10 @@ export class ExpenseController {
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
   @UseGuards(JwtAuthGuard, RolesGuard)
   async remove(@Param('id') id: string, @Request() req) {
-    const result = await this.expenseService.remove(id, this.toActorContext(req.user))
+    const result = await this.expenseService.remove(
+      id,
+      this.toActorContext(req.user)
+    )
     this.auditLogService.log({
       userId: req.user?._id || req.user?.sub,
       userName: req.user?.name || req.user?.email || 'Usuario',
@@ -300,7 +321,7 @@ export class ExpenseController {
       id,
       body,
       clientId,
-      this.toActorContext(req.user),
+      this.toActorContext(req.user)
     )
   }
 }

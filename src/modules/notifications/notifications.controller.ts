@@ -1,4 +1,13 @@
-import { Controller, Get, Post, Body, Patch, Param, UseGuards, Req } from '@nestjs/common'
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  UseGuards,
+  Req,
+} from '@nestjs/common'
 import { NotificationsService } from './notifications.service'
 import { CreateNotificationDto } from './dto/create-notification.dto'
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard'
@@ -16,15 +25,21 @@ export class NotificationsController {
   @Get()
   findAll(@Req() req: any) {
     const userId = req.user['userId'] || req.user['_id'] || req.user['id']
-    console.log(`[NotificationsController] Getting notifications for userId (from tag): ${userId}`);
+    console.log(
+      `[NotificationsController] Getting notifications for userId (from tag): ${userId}`
+    )
     return this.notificationsService.findByUser(userId)
   }
 
   @Get('unread-count')
   getUnreadCount(@Req() req: any) {
     const userId = req.user['userId'] || req.user['_id'] || req.user['id']
-    console.log(`[NotificationsController] Getting unread count for userId: ${userId}`);
-    return this.notificationsService.getUnreadCount(userId).then(count => ({ count }))
+    console.log(
+      `[NotificationsController] Getting unread count for userId: ${userId}`
+    )
+    return this.notificationsService
+      .getUnreadCount(userId)
+      .then(count => ({ count }))
   }
 
   @Get(':id')

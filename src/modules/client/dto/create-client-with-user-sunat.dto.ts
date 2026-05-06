@@ -31,5 +31,3 @@ export class CreateClientWithUserDto {
   @IsNotEmpty()
   adminUser: CreateClientAdminUserDto
 }
-
-

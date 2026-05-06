@@ -9,7 +9,7 @@ import {
   UseGuards,
   HttpException,
   HttpStatus,
-  Logger
+  Logger,
 } from '@nestjs/common'
 import { SunatConfigService } from './sunat-config.service'
 import { CreateSunatConfigDto } from './dto/create-sunat-config.dto'
@@ -19,19 +19,16 @@ import { RolesGuard } from '../auth/guards/roles.guard'
 import { ROLES } from '../auth/enums/roles.enum'
 import { Roles } from '../auth/decorators/roles.decorador'
 
-
 @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
 @Controller('sunat-config')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class SunatConfigController {
   private readonly logger = new Logger(SunatConfigController.name)
 
-  constructor(private readonly sunatConfigService: SunatConfigService) { }
+  constructor(private readonly sunatConfigService: SunatConfigService) {}
 
   @Post()
-  async create(
-    @Body() createSunatConfigDto: CreateSunatConfigDto,
-  ) {
+  async create(@Body() createSunatConfigDto: CreateSunatConfigDto) {
     return this.sunatConfigService.create(createSunatConfigDto)
   }
 
@@ -87,7 +84,6 @@ export class SunatConfigController {
   async remove(@Param('id') _id: string) {
     try {
       this.logger.log('Recibida solicitud para eliminar configuración SUNAT')
-
 
       const config = await this.sunatConfigService.remove(_id)
 

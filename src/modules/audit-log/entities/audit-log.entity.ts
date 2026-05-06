@@ -1,7 +1,7 @@
-import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document } from 'mongoose';
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose'
+import { Document } from 'mongoose'
 
-export type AuditLogDocument = AuditLog & Document;
+export type AuditLogDocument = AuditLog & Document
 
 export type AuditAction =
   | 'login'
@@ -22,35 +22,35 @@ export type AuditAction =
   | 'create_user'
   | 'update_user'
   | 'update_permissions'
-  | 'update_signature';
+  | 'update_signature'
 
 @Schema({ timestamps: true })
 export class AuditLog {
   @Prop({ required: true })
-  userId: string;
+  userId: string
 
   @Prop({ required: true })
-  userName: string;
+  userName: string
 
   @Prop({ required: true })
-  action: AuditAction;
+  action: AuditAction
 
   @Prop({ required: true })
-  module: string;
+  module: string
 
   @Prop()
-  entityId?: string;
+  entityId?: string
 
   @Prop()
-  details?: string;
+  details?: string
 
   @Prop()
-  clientId?: string;
+  clientId?: string
 
   @Prop()
-  ip?: string;
+  ip?: string
 
-  createdAt: Date;
+  createdAt: Date
 }
 
-export const AuditLogSchema = SchemaFactory.createForClass(AuditLog);
+export const AuditLogSchema = SchemaFactory.createForClass(AuditLog)

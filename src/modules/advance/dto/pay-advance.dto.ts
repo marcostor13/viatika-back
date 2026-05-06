@@ -1,4 +1,10 @@
-import { IsString, IsNotEmpty, IsOptional, IsEnum, IsDateString } from 'class-validator'
+import {
+  IsString,
+  IsNotEmpty,
+  IsOptional,
+  IsEnum,
+  IsDateString,
+} from 'class-validator'
 
 export class PayAdvanceDto {
   @IsEnum(['transferencia_bancaria', 'efectivo', 'cheque'])

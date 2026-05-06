@@ -1,5 +1,17 @@
-import { IsString, IsOptional, IsNotEmpty, IsEnum, IsBoolean, IsArray, IsNumber } from 'class-validator'
-import { ExpenseStatus, ExpenseType, MobilityRow } from '../entities/expense.entity'
+import {
+  IsString,
+  IsOptional,
+  IsNotEmpty,
+  IsEnum,
+  IsBoolean,
+  IsArray,
+  IsNumber,
+} from 'class-validator'
+import {
+  ExpenseStatus,
+  ExpenseType,
+  MobilityRow,
+} from '../entities/expense.entity'
 
 export class CreateExpenseDto {
   @IsString()

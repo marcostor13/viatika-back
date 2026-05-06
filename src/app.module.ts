@@ -14,10 +14,11 @@ import { EmailModule } from './modules/email/email.module'
 import { SunatConfigModule } from './modules/sunat-config/sunat-config.module'
 import { ExpenseModule } from './modules/expense/expense.module'
 import { UploadModule } from './modules/upload/upload.module'
-import { ExpenseReportModule } from './modules/expense-report/expense-report.module';
-import { AdvanceModule } from './modules/advance/advance.module';
-import { AuditLogModule } from './modules/audit-log/audit-log.module';
-import { NotificationsModule } from './modules/notifications/notifications.module';
+import { ExpenseReportModule } from './modules/expense-report/expense-report.module'
+import { AdvanceModule } from './modules/advance/advance.module'
+import { AuditLogModule } from './modules/audit-log/audit-log.module'
+import { NotificationsModule } from './modules/notifications/notifications.module'
+import { AiModule } from './modules/ai/ai.module'
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -39,8 +40,9 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     AdvanceModule,
     AuditLogModule,
     NotificationsModule,
+    AiModule,
   ],
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule { }
+export class AppModule {}

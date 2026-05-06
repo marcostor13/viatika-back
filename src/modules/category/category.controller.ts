@@ -7,6 +7,7 @@ import {
   Param,
   Delete,
   UseGuards,
+  Query,
 } from '@nestjs/common'
 import { CategoryService } from './category.service'
 import { CreateCategoryDto } from './dto/create-category.dto'
@@ -17,12 +18,11 @@ import { ROLES } from '../auth/enums/roles.enum'
 import { Roles } from '../auth/decorators/roles.decorador'
 import { AuthGuard } from '@nestjs/passport'
 
-
 @UseGuards(AuthGuard('jwt'), RolesGuard)
 @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
 @Controller('category')
 export class CategoryController {
-  constructor(private readonly categoryService: CategoryService) { }
+  constructor(private readonly categoryService: CategoryService) {}
 
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -30,10 +30,25 @@ export class CategoryController {
     return this.categoryService.create(createCategoryDto)
   }
 
+  @Get(':clientId/flat')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  findAllFlat(@Param('clientId') clientId: string) {
+    return this.categoryService.findAllFlat(clientId)
+  }
+
   @Get(':clientId')
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
-  findAll(@Param('clientId') clientId: string) {
-    return this.categoryService.findAll(clientId)
+  findAll(
+    @Param('clientId') clientId: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('search') search?: string
+  ) {
+    return this.categoryService.findAll(clientId, {
+      page: page ? parseInt(page, 10) : undefined,
+      limit: limit ? parseInt(limit, 10) : undefined,
+      search,
+    })
   }
 
   @Get(':id/:clientId')

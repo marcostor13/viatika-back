@@ -22,4 +22,4 @@ import { AuditLogModule } from '../audit-log/audit-log.module'
   providers: [InvoiceService],
   exports: [InvoiceService],
 })
-export class InvoiceModule { }
+export class InvoiceModule {}

@@ -567,6 +567,67 @@ export class EmailService {
     }
   }
 
+  /** Fase 3 — rechazo al colaborador (Funcionalidades.md §3.1) */
+  async sendViaticoRechazoColaborador(
+    email: string,
+    data: {
+      collaboratorName: string
+      projectLabel: string
+      rejectionReason: string
+      platformUrl: string
+    }
+  ) {
+    try {
+      const subject = `Rechazo de solicitud de viáticos — ${data.projectLabel}`
+      await this.mailerService.sendMail({
+        to: email,
+        subject,
+        template: './viatico-rechazo-colaborador',
+        context: {
+          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          year: new Date().getFullYear(),
+          ...data,
+        },
+      })
+      this.logger.debug(`Correo rechazo viático enviado a ${email}`)
+    } catch (error) {
+      this.logger.error(`Error rechazo viático a ${email}:`, error)
+      throw error
+    }
+  }
+
+  /** Fase 3 — aprobación a contabilidad / tesorería (Funcionalidades.md §3.2) */
+  async sendViaticoAprobacionContabilidad(
+    email: string,
+    data: {
+      recipientName: string
+      urgent: boolean
+      urgentBanner: string
+      emailTitle: string
+      detailBody: string
+      platformUrl: string
+    }
+  ) {
+    try {
+      const prefix = data.urgent ? '[🔴 URGENTE] ' : ''
+      const subject = `${prefix}Solicitud de viáticos aprobada`
+      await this.mailerService.sendMail({
+        to: email,
+        subject,
+        template: './viatico-aprobacion-contabilidad',
+        context: {
+          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          year: new Date().getFullYear(),
+          ...data,
+        },
+      })
+      this.logger.debug(`Correo aprobación viático (contabilidad) enviado a ${email}`)
+    } catch (error) {
+      this.logger.error(`Error aprobación viático a ${email}:`, error)
+      throw error
+    }
+  }
+
   /** Fase 2 — nueva solicitud de viáticos al coordinador (Funcionalidades.md §2.2) */
   async sendViaticoSolicitudToCoordinator(
     email: string,

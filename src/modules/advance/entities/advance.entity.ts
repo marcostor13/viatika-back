@@ -14,7 +14,7 @@ export type AdvanceStatus =
 export interface ApprovalEntry {
   level: number
   approvedBy: string
-  action: 'approved' | 'rejected'
+  action: 'approved' | 'rejected' | 'resubmitted'
   notes?: string
   date: Date
 }
@@ -74,6 +74,10 @@ export interface AdvanceDocument extends Document {
   rejectedBy?: string
   rejectionReason?: string
   returnedAmount?: number
+  /** Incrementa en cada reenvío tras rechazo (Fase 3). */
+  solicitudVersion?: number
+  /** Monto contabilizado en compromiso presupuestal del centro de costo hasta el pago. */
+  budgetCommitmentRecorded?: boolean
 }
 
 // Umbrales de aprobación multinivel
@@ -172,7 +176,10 @@ export class Advance {
       {
         level: { type: Number },
         approvedBy: { type: String },
-        action: { type: String, enum: ['approved', 'rejected'] },
+        action: {
+          type: String,
+          enum: ['approved', 'rejected', 'resubmitted'],
+        },
         notes: { type: String },
         date: { type: Date },
       },
@@ -223,6 +230,12 @@ export class Advance {
 
   @Prop({ type: Number, required: false })
   returnedAmount?: number
+
+  @Prop({ type: Number, default: 1 })
+  solicitudVersion?: number
+
+  @Prop({ type: Boolean, default: false })
+  budgetCommitmentRecorded?: boolean
 }
 
 export const AdvanceSchema = SchemaFactory.createForClass(Advance)

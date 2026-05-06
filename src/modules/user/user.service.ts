@@ -254,6 +254,53 @@ export class UserService {
     }
   }
 
+  /** Datos para plantillas de correo viáticos (área/cargo no modelados aún). */
+  async findCollaboratorViaticoNotifyProfile(
+    userId: string
+  ): Promise<{ name: string; dni?: string; employeeCode?: string } | null> {
+    const u = await this.userModel
+      .findById(userId)
+      .select('name dni employeeCode')
+      .exec()
+    if (!u) return null
+    return {
+      name: u.name,
+      dni: u.dni,
+      employeeCode: u.employeeCode,
+    }
+  }
+
+  /**
+   * Destinatarios notificación solicitud aprobada → contabilidad/tesorería (Fase 3).
+   * Administradores del cliente + usuarios con módulo `tesoreria`.
+   */
+  async findViaticoAccountingNotifyRecipients(
+    clientId: string
+  ): Promise<{ email: string; name: string }[]> {
+    const adminRoles = await this.roleService.getAdminRoles()
+    const adminRoleIds = adminRoles.map(r => (r as any)._id)
+    const users = await this.userModel
+      .find({
+        clientId: new Types.ObjectId(clientId),
+        isActive: true,
+        $or: [
+          { roleId: { $in: adminRoleIds } },
+          { 'permissions.modules': 'tesoreria' },
+        ],
+      })
+      .select('email name')
+      .exec()
+    const seen = new Set<string>()
+    const out: { email: string; name: string }[] = []
+    for (const u of users) {
+      const em = u.email?.trim().toLowerCase()
+      if (!em || seen.has(em)) continue
+      seen.add(em)
+      out.push({ email: u.email, name: u.name })
+    }
+    return out
+  }
+
   async findAdminsByClient(clientId: string): Promise<UserDocument[]> {
     const roles = await this.roleService.getAdminRoles()
     const roleIds = roles.map(r => (r as any)._id)

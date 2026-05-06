@@ -1,4 +1,4 @@
-import { IsString, IsOptional } from 'class-validator'
+import { IsString, IsOptional, MinLength } from 'class-validator'
 
 export class ApproveAdvanceDto {
   @IsString()
@@ -11,6 +11,9 @@ export class ApproveAdvanceDto {
 
 export class RejectAdvanceDto {
   @IsString()
+  @MinLength(10, {
+    message: 'La observación de rechazo debe tener al menos 10 caracteres.',
+  })
   rejectionReason: string
 
   // Seteado desde el JWT

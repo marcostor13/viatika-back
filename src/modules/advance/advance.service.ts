@@ -18,6 +18,7 @@ import {
 } from './dto/create-advance.dto'
 import { ApproveAdvanceDto, RejectAdvanceDto } from './dto/approve-advance.dto'
 import { PayAdvanceDto } from './dto/pay-advance.dto'
+import { ResubmitAdvanceDto } from './dto/resubmit-advance.dto'
 import { ExpenseReportService } from '../expense-report/expense-report.service'
 import { ROLES } from '../auth/enums/roles.enum'
 import { ProjectService } from '../project/project.service'
@@ -78,6 +79,18 @@ export class AdvanceService {
     )
   }
 
+  /** Fecha inicio del viaje es hoy o mañana (zona horaria del servidor). */
+  private isViaticoTravelStartUrgent(start?: Date): boolean {
+    if (!start) return false
+    const s = this.startOfDay(new Date(start))
+    const t = this.startOfDay(new Date())
+    const tomorrow = new Date(t)
+    tomorrow.setDate(tomorrow.getDate() + 1)
+    return (
+      s.getTime() === t.getTime() || s.getTime() === tomorrow.getTime()
+    )
+  }
+
   private isViaticoSolicitudPartial(dto: CreateAdvanceDto): boolean {
     const any =
       !!dto.place?.trim() ||
@@ -116,16 +129,33 @@ export class AdvanceService {
     return advance
   }
 
-  private async createViaticoSolicitud(dto: CreateAdvanceDto): Promise<Advance> {
-    const profile = await this.userService.findTransactionalProfile(dto.userId!)
-    if (!profile?.signature?.trim()) {
-      throw new ForbiddenException(
-        'Debe registrar su firma digital en el perfil antes de solicitar viáticos.'
-      )
-    }
-
-    const start = this.startOfDay(new Date(dto.startDate!))
-    const end = this.startOfDay(new Date(dto.endDate!))
+  /** Validación compartida: nueva solicitud y reenvío tras rechazo (Fase 3). */
+  private async validateViaticoBusinessRulesAndLines(
+    dto: {
+      place: string
+      startDate: string
+      endDate: string
+      projectId: string
+      lines: CreateAdvanceLineDto[]
+      observations?: string
+      amount: number
+    },
+    clientId: string
+  ): Promise<{
+    lineDocs: {
+      categoryId: Types.ObjectId
+      importe: number
+      peopleCount: number
+      glpPerDay: number
+      days: number
+      lineTotal: number
+    }[]
+    roundedSum: number
+    description: string
+    requiredLevels: number
+  }> {
+    const start = this.startOfDay(new Date(dto.startDate))
+    const end = this.startOfDay(new Date(dto.endDate))
     if (end < start) {
       throw new BadRequestException(
         'La fecha fin debe ser mayor o igual a la fecha inicio.'
@@ -142,7 +172,7 @@ export class AdvanceService {
       }
     }
 
-    await this.projectService.findOne(dto.projectId!, dto.clientId!)
+    await this.projectService.findOne(dto.projectId, clientId)
 
     const lineDocs: {
       categoryId: Types.ObjectId
@@ -154,8 +184,8 @@ export class AdvanceService {
     }[] = []
 
     let sum = 0
-    for (const line of dto.lines!) {
-      const cat = await this.categoryService.findOne(line.categoryId, dto.clientId!)
+    for (const line of dto.lines) {
+      const cat = await this.categoryService.findOne(line.categoryId, clientId)
       if (!cat.isActive) {
         throw new BadRequestException(
           `La categoría "${cat.name}" está inactiva y no puede usarse en la solicitud.`
@@ -185,13 +215,38 @@ export class AdvanceService {
       )
     }
 
-    const metaDesc = `Viático: ${dto.place!.trim()} (${dto.startDate!.slice(0, 10)} → ${dto.endDate!.slice(0, 10)})`
+    const metaDesc = `Viático: ${dto.place.trim()} (${dto.startDate.slice(0, 10)} → ${dto.endDate.slice(0, 10)})`
     const description = dto.observations?.trim()
       ? `${metaDesc} | ${dto.observations.trim()}`
       : metaDesc
 
     const requiredLevels =
       roundedSum > ADVANCE_THRESHOLDS.L1_MAX ? 2 : 1
+
+    return { lineDocs, roundedSum, description, requiredLevels }
+  }
+
+  private async createViaticoSolicitud(dto: CreateAdvanceDto): Promise<Advance> {
+    const profile = await this.userService.findTransactionalProfile(dto.userId!)
+    if (!profile?.signature?.trim()) {
+      throw new ForbiddenException(
+        'Debe registrar su firma digital en el perfil antes de solicitar viáticos.'
+      )
+    }
+
+    const { lineDocs, roundedSum, description, requiredLevels } =
+      await this.validateViaticoBusinessRulesAndLines(
+        {
+          place: dto.place!,
+          startDate: dto.startDate!,
+          endDate: dto.endDate!,
+          projectId: dto.projectId!,
+          lines: dto.lines!,
+          observations: dto.observations,
+          amount: dto.amount,
+        },
+        dto.clientId!
+      )
 
     const advance = await this.advanceModel.create({
       userId: new Types.ObjectId(dto.userId),
@@ -211,6 +266,8 @@ export class AdvanceService {
       approvalLevel: 0,
       requiredLevels,
       approvalHistory: [],
+      solicitudVersion: 1,
+      budgetCommitmentRecorded: false,
     })
 
     if (dto.expenseReportId) {
@@ -361,6 +418,201 @@ export class AdvanceService {
     }
   }
 
+  private async notifyCollaboratorViaticoRejected(
+    advance: AdvanceDocument,
+    rejectionReason: string
+  ): Promise<void> {
+    const uid = advance.userId.toString()
+    const collab = await this.userService.findEmailNameClient(uid)
+    if (!collab?.email) return
+    const profile =
+      await this.userService.findCollaboratorViaticoNotifyProfile(uid)
+    let projectLabel = 'Centro de costo'
+    if (advance.projectId) {
+      try {
+        const p = await this.projectService.findOne(
+          advance.projectId.toString(),
+          advance.clientId.toString()
+        )
+        projectLabel = `[${p.code} - ${p.name}]`
+      } catch {
+        /* ignore */
+      }
+    }
+    const platformUrl =
+      process.env.APP_PUBLIC_URL ||
+      process.env.FRONTEND_URL ||
+      'https://app.viatica.tecdidata.com'
+    await this.emailService.sendViaticoRechazoColaborador(collab.email, {
+      collaboratorName: profile?.name ?? collab.name,
+      projectLabel,
+      rejectionReason,
+      platformUrl,
+    })
+  }
+
+  private buildViaticoAccountingDetailBody(
+    advance: AdvanceDocument,
+    collaboratorMeta: { name: string; dni?: string; employeeCode?: string },
+    approverName: string,
+    approvedAt: Date
+  ): string {
+    const project = advance.projectId as unknown
+    let cc = '—'
+    if (project && typeof project === 'object' && project !== null) {
+      const pr = project as { code?: string; name?: string }
+      if (pr.code !== undefined || pr.name !== undefined) {
+        cc = `[${pr.code ?? '—'} - ${pr.name ?? '—'}]`
+      }
+    }
+    const start =
+      advance.startDate instanceof Date
+        ? advance.startDate.toISOString().slice(0, 10)
+        : advance.startDate
+          ? String(advance.startDate).slice(0, 10)
+          : '—'
+    const end =
+      advance.endDate instanceof Date
+        ? advance.endDate.toISOString().slice(0, 10)
+        : advance.endDate
+          ? String(advance.endDate).slice(0, 10)
+          : '—'
+    const lines = advance.lines ?? []
+    const breakdown: string[] = []
+    for (const row of lines) {
+      const cat = (row as { categoryId?: unknown }).categoryId
+      const catName =
+        cat && typeof cat === 'object' && cat !== null && 'name' in cat
+          ? String((cat as { name?: string }).name)
+          : 'Categoría'
+      breakdown.push(`  • ${catName}: S/ ${Number(row.lineTotal).toFixed(2)}`)
+    }
+    const apprDate = approvedAt.toISOString().slice(0, 16).replace('T', ' ')
+    return [
+      `SOLICITANTE`,
+      `  Nombre: ${collaboratorMeta.name}`,
+      `  Documento: ${collaboratorMeta.dni ?? '—'}`,
+      `  Área: —`,
+      `  Cargo / código: ${collaboratorMeta.employeeCode ?? '—'}`,
+      ``,
+      `APROBADOR`,
+      `  Nombre: ${approverName}`,
+      `  Fecha y hora: ${apprDate}`,
+      ``,
+      `DETALLE`,
+      `  Centro de costo: ${cc}`,
+      `  Lugar: ${advance.place ?? '—'}`,
+      `  Fechas viaje: ${start} al ${end}`,
+      `  Monto total aprobado: S/ ${Number(advance.amount).toFixed(2)}`,
+      ``,
+      `Desglose por categoría:`,
+      breakdown.join('\n') || '  (sin líneas)',
+      ``,
+      `Compromiso presupuestal: S/ ${Number(advance.amount).toFixed(2)} registrados en compromiso del centro de costo (hasta registro de pago en tesorería).`,
+    ].join('\n')
+  }
+
+  private async notifyAccountingViaticoApproved(
+    advance: AdvanceDocument
+  ): Promise<void> {
+    const recipients =
+      await this.userService.findViaticoAccountingNotifyRecipients(
+        advance.clientId.toString()
+      )
+    if (!recipients.length) {
+      this.logger.warn(
+        `Aprobación viático ${advance._id}: sin destinatarios contabilidad/tesorería`
+      )
+      return
+    }
+
+    const populated = await this.advanceModel
+      .findById(advance._id)
+      .populate('projectId')
+      .populate({ path: 'lines.categoryId', select: 'name key' })
+      .exec()
+    const doc = (populated ?? advance) as AdvanceDocument
+
+    const collabId = advance.userId.toString()
+    const collabProfile =
+      await this.userService.findCollaboratorViaticoNotifyProfile(collabId)
+    const lastAppr = [...doc.approvalHistory]
+      .reverse()
+      .find(h => h.action === 'approved')
+    let approverName = '—'
+    if (lastAppr?.approvedBy) {
+      const ap = await this.userService.findEmailNameClient(lastAppr.approvedBy)
+      approverName = ap?.name ?? lastAppr.approvedBy
+    }
+
+    const urgent = this.isViaticoTravelStartUrgent(doc.startDate)
+    const platformUrl =
+      process.env.APP_PUBLIC_URL ||
+      process.env.FRONTEND_URL ||
+      'https://app.viatica.tecdidata.com'
+
+    const detailBody = this.buildViaticoAccountingDetailBody(
+      doc,
+      {
+        name: collabProfile?.name ?? 'Colaborador',
+        dni: collabProfile?.dni,
+        employeeCode: collabProfile?.employeeCode,
+      },
+      approverName,
+      lastAppr?.date ?? new Date()
+    )
+
+    const emailTitle = urgent
+      ? 'Solicitud aprobada — inicio de viaje próximo'
+      : 'Solicitud de viáticos aprobada'
+
+    for (const r of recipients) {
+      try {
+        await this.emailService.sendViaticoAprobacionContabilidad(r.email, {
+          recipientName: r.name,
+          urgent,
+          urgentBanner:
+            'URGENTE: la fecha de inicio del viaje es hoy o mañana. Priorizar gestión de desembolso.',
+          emailTitle,
+          detailBody,
+          platformUrl,
+        })
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.logger.error(`Correo contabilidad viático a ${r.email}: ${msg}`)
+      }
+    }
+  }
+
+  /** Fase 3: compromiso en centro de costo + correo a contabilidad/tesorería. */
+  private async onViaticoAdvanceFullyApproved(
+    saved: AdvanceDocument
+  ): Promise<void> {
+    if (saved.projectId && !saved.budgetCommitmentRecorded) {
+      try {
+        await this.projectService.adjustCommittedAdvanceTotal(
+          saved.projectId.toString(),
+          saved.clientId.toString(),
+          saved.amount
+        )
+        await this.advanceModel.updateOne(
+          { _id: saved._id },
+          { $set: { budgetCommitmentRecorded: true } }
+        )
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.logger.error(`Compromiso presupuestal viático ${saved._id}: ${msg}`)
+      }
+    }
+
+    try {
+      await this.notifyAccountingViaticoApproved(saved)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      this.logger.error(`Notificación contabilidad viático ${saved._id}: ${msg}`)
+    }
+  }
+
   async findAllByClient(clientId: string) {
     return this.advanceModel
       .find({ clientId: new Types.ObjectId(clientId) })
@@ -448,7 +700,11 @@ export class AdvanceService {
       advance.status = 'pending_l2'
     }
 
-    return advance.save()
+    const saved = await advance.save()
+    if (saved.status === 'approved') {
+      await this.onViaticoAdvanceFullyApproved(saved as AdvanceDocument)
+    }
+    return saved
   }
 
   async approveL2(
@@ -481,7 +737,9 @@ export class AdvanceService {
     advance.approvalLevel = 2
     advance.status = 'approved'
 
-    return advance.save()
+    const saved = await advance.save()
+    await this.onViaticoAdvanceFullyApproved(saved as AdvanceDocument)
+    return saved
   }
 
   async reject(
@@ -518,7 +776,15 @@ export class AdvanceService {
     advance.rejectedBy = dto.rejectedBy
     advance.rejectionReason = dto.rejectionReason
 
-    return advance.save()
+    const saved = await advance.save()
+    this.notifyCollaboratorViaticoRejected(
+      saved as AdvanceDocument,
+      dto.rejectionReason
+    ).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err)
+      this.logger.error(`Correo rechazo viático colaborador: ${msg}`)
+    })
+    return saved
   }
 
   async registerPayment(
@@ -540,6 +806,20 @@ export class AdvanceService {
       userRole === ROLES.SUPER_ADMIN || userPermissions?.canApproveL2 === true
     if (!canPay)
       throw new ForbiddenException('No tienes permiso para registrar pagos')
+
+    if (advance.budgetCommitmentRecorded && advance.projectId) {
+      try {
+        await this.projectService.adjustCommittedAdvanceTotal(
+          advance.projectId.toString(),
+          advance.clientId.toString(),
+          -advance.amount
+        )
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.logger.error(`Libera compromiso viático ${advance._id}: ${msg}`)
+      }
+      advance.budgetCommitmentRecorded = false
+    }
 
     advance.paymentInfo = {
       method: dto.method,
@@ -634,6 +914,102 @@ export class AdvanceService {
     advance.status = 'returned'
 
     return advance.save()
+  }
+
+  /**
+   * Fase 3 — colaborador corrige y reenvía; conserva historial y aumenta versión.
+   */
+  async resubmitRejected(
+    id: string,
+    dto: ResubmitAdvanceDto,
+    actingUserId: string,
+    clientId: string
+  ): Promise<Advance> {
+    const advance = await this.advanceModel.findById(id)
+    if (!advance) throw new NotFoundException(`Anticipo ${id} no encontrado`)
+
+    if (advance.status !== 'rejected') {
+      throw new BadRequestException(
+        'Solo pueden reenviarse solicitudes en estado rechazado.'
+      )
+    }
+
+    if (advance.userId.toString() !== actingUserId) {
+      throw new ForbiddenException(
+        'Solo el colaborador solicitante puede corregir y reenviar esta solicitud.'
+      )
+    }
+
+    if (advance.clientId.toString() !== clientId) {
+      throw new ForbiddenException(
+        'La solicitud no pertenece a su organización.'
+      )
+    }
+
+    const profile =
+      await this.userService.findTransactionalProfile(actingUserId)
+    if (!profile?.signature?.trim()) {
+      throw new ForbiddenException(
+        'Debe registrar su firma digital en el perfil antes de reenviar viáticos.'
+      )
+    }
+
+    const { lineDocs, roundedSum, description, requiredLevels } =
+      await this.validateViaticoBusinessRulesAndLines(
+        {
+          place: dto.place,
+          startDate: dto.startDate,
+          endDate: dto.endDate,
+          projectId: dto.projectId,
+          lines: dto.lines,
+          observations: dto.observations,
+          amount: dto.amount,
+        },
+        clientId
+      )
+
+    advance.place = dto.place.trim()
+    advance.startDate = new Date(dto.startDate)
+    advance.endDate = new Date(dto.endDate)
+    advance.projectId = new Types.ObjectId(dto.projectId)
+    advance.lines = lineDocs
+    advance.observations = dto.observations?.trim()
+    advance.amount = roundedSum
+    advance.description = description
+    advance.status = 'pending_l1'
+    advance.approvalLevel = 0
+    advance.requiredLevels = requiredLevels
+    advance.rejectedBy = undefined
+    advance.rejectionReason = undefined
+    advance.budgetCommitmentRecorded = false
+    advance.solicitudVersion = (advance.solicitudVersion || 1) + 1
+
+    advance.approvalHistory.push({
+      level: 0,
+      approvedBy: actingUserId,
+      action: 'resubmitted',
+      notes: 'Solicitud corregida y reenviada tras rechazo',
+      date: new Date(),
+    })
+
+    await advance.save()
+
+    await this.notifyCoordinatorViatico(
+      advance as AdvanceDocument,
+      actingUserId,
+      clientId
+    )
+
+    const refreshed = await this.advanceModel
+      .findById(advance._id)
+      .populate('projectId')
+      .populate({
+        path: 'lines.categoryId',
+        select: 'name key limit isActive',
+      })
+      .exec()
+
+    return refreshed as Advance
   }
 
   async getStats(clientId: string) {

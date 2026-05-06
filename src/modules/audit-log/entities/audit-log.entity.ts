@@ -17,6 +17,7 @@ export type AuditAction =
   | 'approve_advance_l1'
   | 'approve_advance_l2'
   | 'reject_advance'
+  | 'resubmit_advance'
   | 'pay_advance'
   | 'settle_advance'
   | 'create_user'

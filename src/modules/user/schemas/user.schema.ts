@@ -29,6 +29,7 @@ export interface UserDocument extends Document {
   bankAccount?: BankAccount
   permissions?: UserPermissions
   signature?: string
+  coordinatorId?: Types.ObjectId
 }
 
 @Schema({ timestamps: true })
@@ -87,6 +88,10 @@ export class User {
 
   @Prop()
   signature?: string
+
+  /** Coordinador / aprobador asignado (Fase 2 — solicitud de viáticos) */
+  @Prop({ type: Types.ObjectId, ref: 'User', required: false })
+  coordinatorId?: Types.ObjectId
 }
 
 export const UserSchema = SchemaFactory.createForClass(User)

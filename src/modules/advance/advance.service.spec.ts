@@ -9,6 +9,10 @@ import { Types } from 'mongoose'
 import { AdvanceService } from './advance.service'
 import { Advance, ADVANCE_THRESHOLDS } from './entities/advance.entity'
 import { ExpenseReportService } from '../expense-report/expense-report.service'
+import { ProjectService } from '../project/project.service'
+import { CategoryService } from '../category/category.service'
+import { UserService } from '../user/user.service'
+import { EmailService } from '../email/email.service'
 import { ROLES } from '../auth/enums/roles.enum'
 
 const advanceId = new Types.ObjectId().toString()
@@ -50,6 +54,7 @@ const mockAdvanceModel = {
   create: jest.fn(),
   find: jest.fn(),
   findById: jest.fn(),
+  updateOne: jest.fn().mockResolvedValue({ acknowledged: true }),
   countDocuments: jest.fn(),
   aggregate: jest.fn(),
 }
@@ -58,6 +63,32 @@ const mockExpenseReportService = {
   addAdvanceToReport: jest.fn().mockResolvedValue(undefined),
   findOneWithAdvances: jest.fn(),
   updateSettlement: jest.fn().mockResolvedValue(undefined),
+}
+
+const mockProjectService = {
+  findOne: jest.fn(),
+  adjustCommittedAdvanceTotal: jest.fn().mockResolvedValue(undefined),
+}
+
+const mockCategoryService = {
+  findOne: jest.fn(),
+}
+
+const mockUserService = {
+  findTransactionalProfile: jest.fn(),
+  findEmailNameClient: jest.fn(),
+  findCollaboratorViaticoNotifyProfile: jest.fn().mockResolvedValue({
+    name: 'Colaborador',
+    dni: '12345678',
+    employeeCode: 'EMP01',
+  }),
+  findViaticoAccountingNotifyRecipients: jest.fn().mockResolvedValue([]),
+}
+
+const mockEmailService = {
+  sendViaticoSolicitudToCoordinator: jest.fn(),
+  sendViaticoRechazoColaborador: jest.fn().mockResolvedValue(undefined),
+  sendViaticoAprobacionContabilidad: jest.fn().mockResolvedValue(undefined),
 }
 
 describe('AdvanceService', () => {
@@ -70,6 +101,10 @@ describe('AdvanceService', () => {
         AdvanceService,
         { provide: getModelToken(Advance.name), useValue: mockAdvanceModel },
         { provide: ExpenseReportService, useValue: mockExpenseReportService },
+        { provide: ProjectService, useValue: mockProjectService },
+        { provide: CategoryService, useValue: mockCategoryService },
+        { provide: UserService, useValue: mockUserService },
+        { provide: EmailService, useValue: mockEmailService },
       ],
     }).compile()
     service = module.get<AdvanceService>(AdvanceService)
@@ -163,8 +198,8 @@ describe('AdvanceService', () => {
 
     it('approves at L1 and sets status=approved when requiredLevels=1', async () => {
       const advance = makeMockAdvance({ requiredLevels: 1 })
-      advance.save.mockResolvedValue({ ...advance, status: 'approved' })
-      mockAdvanceModel.findById.mockResolvedValue(advance)
+      advance.save.mockResolvedValue(advance)
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       const result = await service.approveL1(advanceId, dto, ROLES.ADMIN)
       expect(advance.status).toBe('approved')
       expect(advance.approvalHistory).toHaveLength(1)
@@ -174,14 +209,14 @@ describe('AdvanceService', () => {
 
     it('sets status=pending_l2 when requiredLevels=2', async () => {
       const advance = makeMockAdvance({ requiredLevels: 2 })
-      mockAdvanceModel.findById.mockResolvedValue(advance)
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       await service.approveL1(advanceId, dto, ROLES.ADMIN)
       expect(advance.status).toBe('pending_l2')
     })
 
     it('throws ForbiddenException for Colaborador without canApproveL1', async () => {
       const advance = makeMockAdvance()
-      mockAdvanceModel.findById.mockResolvedValue(advance)
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       await expect(
         service.approveL1(advanceId, dto, ROLES.COLABORADOR)
       ).rejects.toThrow(ForbiddenException)
@@ -189,7 +224,7 @@ describe('AdvanceService', () => {
 
     it('allows approval via canApproveL1 permission', async () => {
       const advance = makeMockAdvance({ requiredLevels: 1 })
-      mockAdvanceModel.findById.mockResolvedValue(advance)
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       await service.approveL1(advanceId, dto, ROLES.COLABORADOR, {
         canApproveL1: true,
       })
@@ -198,14 +233,14 @@ describe('AdvanceService', () => {
 
     it('throws BadRequestException when status is not pending_l1', async () => {
       const advance = makeMockAdvance({ status: 'approved' })
-      mockAdvanceModel.findById.mockResolvedValue(advance)
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       await expect(
         service.approveL1(advanceId, dto, ROLES.ADMIN)
       ).rejects.toThrow(BadRequestException)
     })
 
     it('throws NotFoundException when advance not found', async () => {
-      mockAdvanceModel.findById.mockResolvedValue(null)
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(null))
       await expect(
         service.approveL1(advanceId, dto, ROLES.ADMIN)
       ).rejects.toThrow(NotFoundException)
@@ -221,7 +256,7 @@ describe('AdvanceService', () => {
         status: 'pending_l2',
         requiredLevels: 2,
       })
-      mockAdvanceModel.findById.mockResolvedValue(advance)
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       await service.approveL2(advanceId, dto, ROLES.SUPER_ADMIN)
       expect(advance.status).toBe('approved')
       expect(advance.approvalLevel).toBe(2)
@@ -229,7 +264,7 @@ describe('AdvanceService', () => {
 
     it('throws ForbiddenException for Admin without canApproveL2', async () => {
       const advance = makeMockAdvance({ status: 'pending_l2' })
-      mockAdvanceModel.findById.mockResolvedValue(advance)
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       await expect(
         service.approveL2(advanceId, dto, ROLES.ADMIN)
       ).rejects.toThrow(ForbiddenException)
@@ -237,7 +272,7 @@ describe('AdvanceService', () => {
 
     it('allows approval via canApproveL2 permission', async () => {
       const advance = makeMockAdvance({ status: 'pending_l2' })
-      mockAdvanceModel.findById.mockResolvedValue(advance)
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       await service.approveL2(advanceId, dto, ROLES.COLABORADOR, {
         canApproveL2: true,
       })
@@ -246,7 +281,7 @@ describe('AdvanceService', () => {
 
     it('throws BadRequestException when status is not pending_l2', async () => {
       const advance = makeMockAdvance({ status: 'pending_l1' })
-      mockAdvanceModel.findById.mockResolvedValue(advance)
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       await expect(
         service.approveL2(advanceId, dto, ROLES.SUPER_ADMIN)
       ).rejects.toThrow(BadRequestException)
@@ -257,27 +292,28 @@ describe('AdvanceService', () => {
   describe('reject', () => {
     const dto = {
       rejectedBy: 'admin@test.com',
-      rejectionReason: 'Invalid amount',
+      rejectionReason:
+        'El monto solicitado no está justificado según la política interna.',
     }
 
     it('rejects a pending_l1 advance', async () => {
       const advance = makeMockAdvance({ status: 'pending_l1' })
-      mockAdvanceModel.findById.mockResolvedValue(advance)
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       await service.reject(advanceId, dto, ROLES.ADMIN)
       expect(advance.status).toBe('rejected')
-      expect(advance.rejectionReason).toBe('Invalid amount')
+      expect(advance.rejectionReason).toBe(dto.rejectionReason)
     })
 
     it('rejects a pending_l2 advance', async () => {
       const advance = makeMockAdvance({ status: 'pending_l2' })
-      mockAdvanceModel.findById.mockResolvedValue(advance)
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       await service.reject(advanceId, dto, ROLES.ADMIN)
       expect(advance.status).toBe('rejected')
     })
 
     it('throws BadRequestException for non-rejectable status', async () => {
       const advance = makeMockAdvance({ status: 'approved' })
-      mockAdvanceModel.findById.mockResolvedValue(advance)
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       await expect(service.reject(advanceId, dto, ROLES.ADMIN)).rejects.toThrow(
         BadRequestException
       )
@@ -285,7 +321,7 @@ describe('AdvanceService', () => {
 
     it('throws ForbiddenException for Colaborador without reject permissions', async () => {
       const advance = makeMockAdvance({ status: 'pending_l1' })
-      mockAdvanceModel.findById.mockResolvedValue(advance)
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       await expect(
         service.reject(advanceId, dto, ROLES.COLABORADOR)
       ).rejects.toThrow(ForbiddenException)
@@ -305,7 +341,7 @@ describe('AdvanceService', () => {
 
     it('registers payment and sets status=paid', async () => {
       const advance = makeMockAdvance({ status: 'approved' })
-      mockAdvanceModel.findById.mockResolvedValue(advance)
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       await service.registerPayment(advanceId, dto, ROLES.SUPER_ADMIN)
       expect(advance.status).toBe('paid')
       expect(advance.paymentInfo).toMatchObject({
@@ -316,7 +352,7 @@ describe('AdvanceService', () => {
 
     it('throws BadRequestException when advance is not approved', async () => {
       const advance = makeMockAdvance({ status: 'pending_l1' })
-      mockAdvanceModel.findById.mockResolvedValue(advance)
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       await expect(
         service.registerPayment(advanceId, dto, ROLES.SUPER_ADMIN)
       ).rejects.toThrow(BadRequestException)
@@ -324,7 +360,7 @@ describe('AdvanceService', () => {
 
     it('throws ForbiddenException for Admin without canApproveL2', async () => {
       const advance = makeMockAdvance({ status: 'approved' })
-      mockAdvanceModel.findById.mockResolvedValue(advance)
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       await expect(
         service.registerPayment(advanceId, dto, ROLES.ADMIN)
       ).rejects.toThrow(ForbiddenException)
@@ -339,7 +375,7 @@ describe('AdvanceService', () => {
         amount: 500,
         expenseReportId: new Types.ObjectId(reportId),
       })
-      mockAdvanceModel.findById.mockResolvedValue(advance)
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       mockExpenseReportService.findOneWithAdvances.mockResolvedValue({
         expenseIds: [{ total: 300 }],
       })
@@ -355,7 +391,7 @@ describe('AdvanceService', () => {
         amount: 200,
         expenseReportId: new Types.ObjectId(reportId),
       })
-      mockAdvanceModel.findById.mockResolvedValue(advance)
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       mockExpenseReportService.findOneWithAdvances.mockResolvedValue({
         expenseIds: [{ total: 500 }],
       })
@@ -370,7 +406,7 @@ describe('AdvanceService', () => {
         amount: 300,
         expenseReportId: new Types.ObjectId(reportId),
       })
-      mockAdvanceModel.findById.mockResolvedValue(advance)
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       mockExpenseReportService.findOneWithAdvances.mockResolvedValue({
         expenseIds: [{ total: 300 }],
       })
@@ -380,7 +416,7 @@ describe('AdvanceService', () => {
 
     it('throws BadRequestException when advance is not paid', async () => {
       const advance = makeMockAdvance({ status: 'approved' })
-      mockAdvanceModel.findById.mockResolvedValue(advance)
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       await expect(service.settle(advanceId)).rejects.toThrow(
         BadRequestException
       )
@@ -391,7 +427,7 @@ describe('AdvanceService', () => {
   describe('registerReturn', () => {
     it('sets status=returned and records returned amount', async () => {
       const advance = makeMockAdvance({ status: 'settled' })
-      mockAdvanceModel.findById.mockResolvedValue(advance)
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       await service.registerReturn(advanceId, 100)
       expect(advance.status).toBe('returned')
       expect(advance.returnedAmount).toBe(100)
@@ -399,14 +435,14 @@ describe('AdvanceService', () => {
 
     it('allows return from paid status', async () => {
       const advance = makeMockAdvance({ status: 'paid' })
-      mockAdvanceModel.findById.mockResolvedValue(advance)
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       await service.registerReturn(advanceId, 50)
       expect(advance.status).toBe('returned')
     })
 
     it('throws BadRequestException for invalid status', async () => {
       const advance = makeMockAdvance({ status: 'pending_l1' })
-      mockAdvanceModel.findById.mockResolvedValue(advance)
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       await expect(service.registerReturn(advanceId, 100)).rejects.toThrow(
         BadRequestException
       )

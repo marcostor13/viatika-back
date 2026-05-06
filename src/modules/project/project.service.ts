@@ -29,6 +29,35 @@ export class ProjectService {
       code: project.code,
       isActive: project.isActive,
       client: project.clientId,
+      committedAdvanceTotal: project.committedAdvanceTotal ?? 0,
+    }
+  }
+
+  /** Delta positivo al aprobar; negativo al registrar pago (Fase 3). */
+  async adjustCommittedAdvanceTotal(
+    projectId: string,
+    clientId: string,
+    delta: number
+  ): Promise<void> {
+    if (!delta) return
+    const clientIdObject = new Types.ObjectId(clientId)
+    const updated = await this.projectModel
+      .findOneAndUpdate(
+        {
+          _id: new Types.ObjectId(projectId),
+          clientId: clientIdObject,
+        },
+        { $inc: { committedAdvanceTotal: delta } },
+        { new: true }
+      )
+      .exec()
+    if (!updated) {
+      throw new NotFoundException('Proyecto no encontrado')
+    }
+    const total = updated.committedAdvanceTotal ?? 0
+    if (total < 0) {
+      updated.committedAdvanceTotal = 0
+      await updated.save()
     }
   }
 

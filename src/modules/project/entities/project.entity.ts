@@ -7,6 +7,8 @@ export interface ProjectDocument extends Document {
   code: string
   isActive: boolean
   clientId: Types.ObjectId
+  /** Suma de montos de solicitudes aprobadas pendientes de pago (Fase 3 — compromiso). */
+  committedAdvanceTotal?: number
 }
 
 export interface GetProjectDocument {
@@ -30,6 +32,9 @@ export class Project {
 
   @Prop({ required: true, type: Types.ObjectId, ref: 'Client' })
   clientId: Types.ObjectId
+
+  @Prop({ type: Number, default: 0 })
+  committedAdvanceTotal: number
 }
 
 export const ProjectSchema = SchemaFactory.createForClass(Project)

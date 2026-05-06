@@ -4,7 +4,37 @@ import {
   IsOptional,
   IsNumber,
   Min,
+  IsMongoId,
+  IsArray,
+  ValidateNested,
+  IsDateString,
 } from 'class-validator'
+import { Type } from 'class-transformer'
+
+export class CreateAdvanceLineDto {
+  @IsMongoId()
+  categoryId: string
+
+  @IsNumber()
+  @Min(0)
+  importe: number
+
+  @IsNumber()
+  @Min(1)
+  peopleCount: number
+
+  @IsNumber()
+  @Min(0)
+  glpPerDay: number
+
+  @IsNumber()
+  @Min(1)
+  days: number
+
+  @IsNumber()
+  @Min(0)
+  lineTotal: number
+}
 
 export class CreateAdvanceDto {
   @IsNumber()
@@ -19,7 +49,34 @@ export class CreateAdvanceDto {
   @IsOptional()
   expenseReportId?: string
 
-  // Seteados desde el JWT
+  /** Lugar del viaje / destino (Fase 2) */
+  @IsString()
+  @IsOptional()
+  place?: string
+
+  @IsDateString()
+  @IsOptional()
+  startDate?: string
+
+  @IsDateString()
+  @IsOptional()
+  endDate?: string
+
+  @IsMongoId()
+  @IsOptional()
+  projectId?: string
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateAdvanceLineDto)
+  lines?: CreateAdvanceLineDto[]
+
+  @IsString()
+  @IsOptional()
+  observations?: string
+
+  /** Seteados desde el JWT en el controlador */
   userId?: string
   clientId?: string
 }

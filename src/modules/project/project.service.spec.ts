@@ -11,6 +11,9 @@ const projectId = new Types.ObjectId().toString()
 const mockProject = {
   _id: new Types.ObjectId(projectId),
   name: 'Test Project',
+  code: 'CC-001',
+  isActive: true,
+  committedAdvanceTotal: 0,
   clientId: { _id: new Types.ObjectId(clientId), name: 'Test Client' },
 }
 
@@ -52,7 +55,14 @@ describe('ProjectService', () => {
           clientId: expect.any(Types.ObjectId),
         })
       )
-      expect(result).toEqual(mockProject)
+      expect(result).toEqual({
+        _id: mockProject._id,
+        name: mockProject.name,
+        code: mockProject.code,
+        isActive: mockProject.isActive,
+        committedAdvanceTotal: mockProject.committedAdvanceTotal,
+        client: mockProject.clientId,
+      })
     })
   })
 
@@ -67,6 +77,9 @@ describe('ProjectService', () => {
         {
           _id: mockProject._id,
           name: mockProject.name,
+          code: mockProject.code,
+          isActive: mockProject.isActive,
+          committedAdvanceTotal: mockProject.committedAdvanceTotal,
           client: mockProject.clientId,
         },
       ])
@@ -86,6 +99,9 @@ describe('ProjectService', () => {
       expect(result).toEqual({
         _id: mockProject._id,
         name: mockProject.name,
+        code: mockProject.code,
+        isActive: mockProject.isActive,
+        committedAdvanceTotal: mockProject.committedAdvanceTotal,
         client: mockProject.clientId,
       })
     })
@@ -110,6 +126,9 @@ describe('ProjectService', () => {
       expect(result).toEqual({
         _id: updated._id,
         name: 'Updated',
+        code: updated.code,
+        isActive: updated.isActive,
+        committedAdvanceTotal: updated.committedAdvanceTotal,
         client: updated.clientId,
       })
     })
@@ -134,6 +153,43 @@ describe('ProjectService', () => {
       await expect(service.remove(projectId, clientId)).rejects.toThrow(
         NotFoundException
       )
+    })
+  })
+
+  describe('adjustCommittedAdvanceTotal', () => {
+    it('increments committed budget with positive delta', async () => {
+      const updatedDoc = {
+        ...mockProject,
+        committedAdvanceTotal: 250,
+        save: jest.fn().mockResolvedValue(undefined),
+      }
+      mockProjectModel.findOneAndUpdate.mockReturnValue(makeQuery(updatedDoc))
+
+      await service.adjustCommittedAdvanceTotal(projectId, clientId, 250)
+
+      expect(mockProjectModel.findOneAndUpdate).toHaveBeenCalledWith(
+        {
+          _id: expect.any(Types.ObjectId),
+          clientId: expect.any(Types.ObjectId),
+        },
+        { $inc: { committedAdvanceTotal: 250 } },
+        { new: true }
+      )
+      expect(updatedDoc.save).not.toHaveBeenCalled()
+    })
+
+    it('clamps to zero when delta would make total negative', async () => {
+      const updatedDoc = {
+        ...mockProject,
+        committedAdvanceTotal: -10,
+        save: jest.fn().mockResolvedValue(undefined),
+      }
+      mockProjectModel.findOneAndUpdate.mockReturnValue(makeQuery(updatedDoc))
+
+      await service.adjustCommittedAdvanceTotal(projectId, clientId, -50)
+
+      expect(updatedDoc.committedAdvanceTotal).toBe(0)
+      expect(updatedDoc.save).toHaveBeenCalled()
     })
   })
 })

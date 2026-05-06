@@ -37,6 +37,7 @@ export interface IUserResponse {
   employeeCode?: string
   address?: string
   phone?: string
+  coordinatorId?: Types.ObjectId | { _id: Types.ObjectId; name?: string; email?: string }
 }
 
 @Injectable()
@@ -105,6 +106,7 @@ export class UserService {
       .findById(id)
       .populate('roleId')
       .populate('clientId')
+      .populate('coordinatorId', 'name email')
       .exec()
     if (!user) {
       return {} as IUserResponse
@@ -125,6 +127,7 @@ export class UserService {
       employeeCode: (user as any).employeeCode,
       address: (user as any).address,
       phone: (user as any).phone,
+      coordinatorId: (user as any).coordinatorId,
     }
   }
 
@@ -140,11 +143,15 @@ export class UserService {
       throw new BadRequestException('El correo ya se encuentra registrado')
     }
     const hashedPassword = await bcrypt.hash(userData.password, 10)
+    const { coordinatorId: coordRaw, ...rest } = userData as CreateUserDto & {
+      coordinatorId?: string
+    }
     const savedUser = await this.userModel.create({
-      ...userData,
+      ...rest,
       roleId,
       clientId,
       password: hashedPassword,
+      coordinatorId: coordRaw ? new Types.ObjectId(coordRaw) : undefined,
     })
     const populatedUser = await this.userModel
       .findById(savedUser._id)
@@ -200,6 +207,12 @@ export class UserService {
       updateData.clientId = new Types.ObjectId(updateData.clientId)
     }
 
+    if ('coordinatorId' in updateUserDto && updateUserDto.coordinatorId !== undefined) {
+      updateData.coordinatorId = updateUserDto.coordinatorId
+        ? new Types.ObjectId(updateUserDto.coordinatorId)
+        : null
+    }
+
     return this.userModel
       .findByIdAndUpdate(id, updateData, { new: true })
       .populate('roleId')
@@ -209,6 +222,83 @@ export class UserService {
 
   delete(id: string) {
     return this.userModel.findByIdAndDelete(id).exec()
+  }
+
+  /** Firma y coordinador para validar solicitudes transaccionales (viáticos). */
+  async findTransactionalProfile(
+    userId: string
+  ): Promise<{ signature?: string; coordinatorId?: Types.ObjectId } | null> {
+    const u = await this.userModel
+      .findById(userId)
+      .select('signature coordinatorId')
+      .exec()
+    if (!u) return null
+    return {
+      signature: u.signature,
+      coordinatorId: u.coordinatorId,
+    }
+  }
+
+  async findEmailNameClient(
+    userId: string
+  ): Promise<{ email: string; name: string; clientId: Types.ObjectId } | null> {
+    const u = await this.userModel
+      .findById(userId)
+      .select('email name clientId')
+      .exec()
+    if (!u) return null
+    return {
+      email: u.email,
+      name: u.name,
+      clientId: u.clientId as Types.ObjectId,
+    }
+  }
+
+  /** Datos para plantillas de correo viáticos (área/cargo no modelados aún). */
+  async findCollaboratorViaticoNotifyProfile(
+    userId: string
+  ): Promise<{ name: string; dni?: string; employeeCode?: string } | null> {
+    const u = await this.userModel
+      .findById(userId)
+      .select('name dni employeeCode')
+      .exec()
+    if (!u) return null
+    return {
+      name: u.name,
+      dni: u.dni,
+      employeeCode: u.employeeCode,
+    }
+  }
+
+  /**
+   * Destinatarios notificación solicitud aprobada → contabilidad/tesorería (Fase 3).
+   * Administradores del cliente + usuarios con módulo `tesoreria`.
+   */
+  async findViaticoAccountingNotifyRecipients(
+    clientId: string
+  ): Promise<{ email: string; name: string }[]> {
+    const adminRoles = await this.roleService.getAdminRoles()
+    const adminRoleIds = adminRoles.map(r => (r as any)._id)
+    const users = await this.userModel
+      .find({
+        clientId: new Types.ObjectId(clientId),
+        isActive: true,
+        $or: [
+          { roleId: { $in: adminRoleIds } },
+          { 'permissions.modules': 'tesoreria' },
+        ],
+      })
+      .select('email name')
+      .exec()
+    const seen = new Set<string>()
+    const out: { email: string; name: string }[] = []
+    for (const u of users) {
+      const em = u.email?.trim().toLowerCase()
+      if (!em || seen.has(em)) continue
+      seen.add(em)
+      out.push({ email: u.email, name: u.name })
+    }
+    return out
   }
 
   async findAdminsByClient(clientId: string): Promise<UserDocument[]> {

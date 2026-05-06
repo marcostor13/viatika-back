@@ -12,6 +12,7 @@ import {
 import { AdvanceService } from './advance.service'
 import { CreateAdvanceDto } from './dto/create-advance.dto'
 import { ApproveAdvanceDto, RejectAdvanceDto } from './dto/approve-advance.dto'
+import { ResubmitAdvanceDto } from './dto/resubmit-advance.dto'
 import { PayAdvanceDto } from './dto/pay-advance.dto'
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard'
 import { RolesGuard } from '../auth/guards/roles.guard'
@@ -148,6 +149,37 @@ export class AdvanceController {
       module: 'tesoreria',
       entityId: id,
       details: dto.rejectionReason,
+      clientId: req.user.clientId,
+    })
+    return result
+  }
+
+  /** Reenvío tras rechazo — solo el colaborador dueño (Fase 3). */
+  @Patch(':id/resubmit')
+  @Roles(ROLES.COLABORADOR, ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  async resubmit(
+    @Param('id') id: string,
+    @Body() dto: ResubmitAdvanceDto,
+    @Request() req
+  ) {
+    const userId = req.user?.sub || req.user?._id
+    const rawClient = req.user?.clientId
+    const clientId =
+      rawClient?._id?.toString?.() ??
+      rawClient?.toString?.() ??
+      String(rawClient ?? '')
+    const result = await this.advanceService.resubmitRejected(
+      id,
+      dto,
+      userId,
+      clientId
+    )
+    this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email,
+      action: 'resubmit_advance',
+      module: 'tesoreria',
+      entityId: id,
       clientId: req.user.clientId,
     })
     return result

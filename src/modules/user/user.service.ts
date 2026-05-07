@@ -35,6 +35,8 @@ export interface IUserResponse {
   permissions: IUserPermissions
   dni?: string
   employeeCode?: string
+  area?: string
+  cargo?: string
   address?: string
   phone?: string
   coordinatorId?: Types.ObjectId | { _id: Types.ObjectId; name?: string; email?: string }
@@ -47,7 +49,7 @@ export class UserService {
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     private readonly roleService: RoleService
-  ) {}
+  ) { }
 
   async findAllWithClient(): Promise<IUserResponse[]> {
     const users = await this.userModel
@@ -69,6 +71,8 @@ export class UserService {
       },
       dni: (user as any).dni,
       employeeCode: (user as any).employeeCode,
+      area: (user as any).area,
+      cargo: (user as any).cargo,
       address: (user as any).address,
       phone: (user as any).phone,
     }))
@@ -98,6 +102,8 @@ export class UserService {
       },
       dni: (user as any).dni,
       employeeCode: (user as any).employeeCode,
+      area: (user as any).area,
+      cargo: (user as any).cargo,
       address: (user as any).address,
       phone: (user as any).phone,
       mustChangePassword: !!(user as any).mustChangePassword,
@@ -129,6 +135,8 @@ export class UserService {
       },
       dni: (user as any).dni,
       employeeCode: (user as any).employeeCode,
+      area: (user as any).area,
+      cargo: (user as any).cargo,
       address: (user as any).address,
       phone: (user as any).phone,
       coordinatorId: (user as any).coordinatorId,
@@ -184,6 +192,8 @@ export class UserService {
       },
       dni: (populatedUser as any).dni,
       employeeCode: (populatedUser as any).employeeCode,
+      area: (populatedUser as any).area,
+      cargo: (populatedUser as any).cargo,
       address: (populatedUser as any).address,
       phone: (populatedUser as any).phone,
       temporaryPassword,
@@ -302,25 +312,33 @@ export class UserService {
     }
   }
 
-  /** Datos para plantillas de correo viáticos (área/cargo no modelados aún). */
+  /** Datos para plantillas de correo viáticos (Fase 3 — nombre, documento, área, cargo). */
   async findCollaboratorViaticoNotifyProfile(
     userId: string
-  ): Promise<{ name: string; dni?: string; employeeCode?: string } | null> {
+  ): Promise<{
+    name: string
+    dni?: string
+    employeeCode?: string
+    area?: string
+    cargo?: string
+  } | null> {
     const u = await this.userModel
       .findById(userId)
-      .select('name dni employeeCode')
+      .select('name dni employeeCode area cargo')
       .exec()
     if (!u) return null
     return {
       name: u.name,
       dni: u.dni,
       employeeCode: u.employeeCode,
+      area: u.area,
+      cargo: u.cargo,
     }
   }
 
   /**
    * Destinatarios notificación solicitud aprobada → contabilidad/tesorería (Fase 3).
-   * Administradores del cliente + usuarios con módulo `tesoreria`.
+   * Administradores del cliente + módulos `tesoreria` o `contabilidad`.
    */
   async findViaticoAccountingNotifyRecipients(
     clientId: string
@@ -335,7 +353,8 @@ export class UserService {
         isActive: true,
         $or: [
           { roleId: { $in: roleIds } },
-          { 'permissions.modules': { $in: ['tesoreria', 'pagos'] } },
+          { 'permissions.modules': 'tesoreria' },
+          { 'permissions.modules': 'contabilidad' },
         ],
       })
       .select('email name')

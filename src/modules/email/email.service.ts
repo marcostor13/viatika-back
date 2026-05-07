@@ -7,6 +7,52 @@ export class EmailService {
 
   constructor(private readonly mailerService: MailerService) {}
 
+  /**
+   * URL pública del front (local vs prod vía env).
+   * Preferir `APP_PUBLIC_URL` o `FRONTEND_URL` en `.env`.
+   */
+  getPublicAppBaseUrl(): string {
+    const raw = (
+      process.env.APP_PUBLIC_URL ||
+      process.env.FRONTEND_URL ||
+      ''
+    ).trim()
+    if (raw) {
+      return raw.replace(/\/+$/, '')
+    }
+    return process.env.NODE_ENV === 'production'
+      ? 'https://app.viatica.tecdidata.com'
+      : 'http://localhost:4200'
+  }
+
+  /** Ruta absoluta en el front, p. ej. `/tesoreria` → `https://…/tesoreria` */
+  buildAppUrl(path?: string): string {
+    const base = this.getPublicAppBaseUrl()
+    if (!path?.trim()) return base
+    const p = path.trim()
+    if (/^https?:\/\//i.test(p)) {
+      return p.replace(/\/+$/, '')
+    }
+    const suffix = p.startsWith('/') ? p : `/${p}`
+    return `${base}${suffix}`
+  }
+
+  getLogoUrl(): string {
+    const logo = process.env.APP_LOGO_URL?.trim()
+    if (logo) return logo
+    return this.buildAppUrl('/logo.svg')
+  }
+
+  /** `platformUrl` en plantillas: absoluta del caller o base + ruta relativa. */
+  resolvePlatformHref(url?: string | null): string {
+    const s = url?.trim()
+    if (!s) return this.getPublicAppBaseUrl()
+    if (/^https?:\/\//i.test(s)) {
+      return s.replace(/\/+$/, '')
+    }
+    return this.buildAppUrl(s)
+  }
+
   getCode() {
     const code = Math.floor(100000 + Math.random() * 900000).toString()
     return code
@@ -20,7 +66,7 @@ export class EmailService {
         subject: 'Confirma tu correo en Nuestra App',
         template: './confirmation', // se añade automáticamente la extensión (.hbs)
         context: {
-          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          logoUrl: this.getLogoUrl(),
           verificationCode: this.getCode(),
           year: new Date().getFullYear(),
         },
@@ -53,7 +99,7 @@ export class EmailService {
         subject: 'Nueva Factura Subida',
         template: './invoice-notification',
         context: {
-          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          logoUrl: this.getLogoUrl(),
           providerName: data.providerName,
           invoiceNumber: data.invoiceNumber,
           date: data.date,
@@ -126,7 +172,7 @@ export class EmailService {
         subject: 'Acta de Aceptación Subida',
         template: './acta-notification',
         context: {
-          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          logoUrl: this.getLogoUrl(),
           providerName: data.providerName,
           invoiceNumber: data.invoiceNumber,
           date: data.date,
@@ -169,7 +215,7 @@ export class EmailService {
           'Nueva factura subida por ' + (data.createdBy || data.providerName),
         template: './invoice-notification',
         context: {
-          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          logoUrl: this.getLogoUrl(),
           providerName: data.providerName,
           invoiceNumber: data.invoiceNumber,
           date:
@@ -225,7 +271,7 @@ export class EmailService {
           (data.createdBy || data.providerName),
         template: './acta-notification',
         context: {
-          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          logoUrl: this.getLogoUrl(),
           providerName: data.providerName,
           invoiceNumber: data.invoiceNumber,
           date:
@@ -278,7 +324,7 @@ export class EmailService {
           (data.createdBy || data.providerName),
         template: './invoice-notification',
         context: {
-          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          logoUrl: this.getLogoUrl(),
           providerName: data.providerName,
           invoiceNumber: data.invoiceNumber,
           date: data.date,
@@ -429,7 +475,7 @@ export class EmailService {
         subject: 'Bienvenido a Nuestra Plataforma de Proveedores',
         template: './provider-welcome',
         context: {
-          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          logoUrl: this.getLogoUrl(),
           firstName: data.firstName,
           lastName: data.lastName,
           email: email,
@@ -540,7 +586,7 @@ export class EmailService {
       userName: string
       title: string
       budget: number
-      platformUrl: string
+      platformUrl?: string
     }
   ) {
     try {
@@ -550,11 +596,11 @@ export class EmailService {
         subject: '¡Rendición de Gastos Aprobada!',
         template: './rendicion-approved',
         context: {
-          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          logoUrl: this.getLogoUrl(),
           userName: data.userName,
           title: data.title,
           budget: `S/ ${Number(data.budget).toFixed(2)}`,
-          platformUrl: data.platformUrl,
+          platformUrl: this.resolvePlatformHref(data.platformUrl),
           year: new Date().getFullYear(),
         },
       })
@@ -572,21 +618,26 @@ export class EmailService {
     email: string,
     data: {
       collaboratorName: string
+      collaboratorDocument: string
+      collaboratorArea: string
+      collaboratorCargo: string
       projectLabel: string
       rejectionReason: string
-      platformUrl: string
+      platformUrl?: string
     }
   ) {
     try {
-      const subject = `Rechazo de solicitud de viáticos — ${data.projectLabel}`
+      const subject = `Rechazo de solicitud de viáticos - ${data.projectLabel}`
+      const { platformUrl, ...rest } = data
       await this.mailerService.sendMail({
         to: email,
         subject,
         template: './viatico-rechazo-colaborador',
         context: {
-          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          logoUrl: this.getLogoUrl(),
           year: new Date().getFullYear(),
-          ...data,
+          ...rest,
+          platformUrl: this.resolvePlatformHref(platformUrl),
         },
       })
       this.logger.debug(`Correo rechazo viático enviado a ${email}`)
@@ -605,20 +656,24 @@ export class EmailService {
       urgentBanner: string
       emailTitle: string
       detailBody: string
-      platformUrl: string
+      /** Etiqueta N° centro de costo ej. `[CODE - Nombre]` (Fase 3). */
+      projectLabel: string
+      platformUrl?: string
     }
   ) {
     try {
       const prefix = data.urgent ? '[🔴 URGENTE] ' : ''
-      const subject = `${prefix}Solicitud de viáticos aprobada`
+      const subject = `${prefix}Solicitud aprobada - ${data.projectLabel}`
+      const { platformUrl, ...rest } = data
       await this.mailerService.sendMail({
         to: email,
         subject,
         template: './viatico-aprobacion-contabilidad',
         context: {
-          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          logoUrl: this.getLogoUrl(),
           year: new Date().getFullYear(),
-          ...data,
+          ...rest,
+          platformUrl: this.resolvePlatformHref(platformUrl),
         },
       })
       this.logger.debug(`Correo aprobación viático (contabilidad) enviado a ${email}`)
@@ -640,12 +695,13 @@ export class EmailService {
       totalFormatted: string
       projectLabel: string
       plainSummary: string
-      platformUrl: string
+      platformUrl?: string
     }
   ) {
     try {
       const subject = `Nueva solicitud de viáticos, ${data.projectLabel}`
       this.logger.debug(`Enviando solicitud de viáticos a coordinador ${email}`)
+      const { platformUrl, ...rest } = data
       await this.mailerService.sendMail({
         to: email,
         subject,
@@ -658,9 +714,10 @@ export class EmailService {
           },
         ],
         context: {
-          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          logoUrl: this.getLogoUrl(),
           year: new Date().getFullYear(),
-          ...data,
+          ...rest,
+          platformUrl: this.resolvePlatformHref(platformUrl),
         },
       })
       this.logger.debug(`Correo de solicitud de viáticos enviado a ${email}`)
@@ -685,18 +742,20 @@ export class EmailService {
       projectLabel: string
       plainSummary: string
       cancelReason?: string
-      platformUrl: string
+      platformUrl?: string
     }
   ) {
     try {
+      const { platformUrl, ...rest } = data
       await this.mailerService.sendMail({
         to: email,
         subject: `Solicitud de viáticos cancelada — ${data.projectLabel}`,
         template: './viatico-cancelacion-coordinator',
         context: {
-          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          logoUrl: this.getLogoUrl(),
           year: new Date().getFullYear(),
-          ...data,
+          ...rest,
+          platformUrl: this.resolvePlatformHref(platformUrl),
         },
       })
       this.logger.debug(`Correo cancelación viático enviado a ${email}`)
@@ -720,17 +779,18 @@ export class EmailService {
   ) {
     try {
       const subject = `Rendición «${data.reportLabel}» requiere reembolso de S/ ${data.amountFormatted} a ${data.collaboratorName}`
+      const { detailUrl, ...rest } = data
       await this.mailerService.sendMail({
         to: email,
         subject,
         template: './rendicion-reembolso-contabilidad',
         context: {
-          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          logoUrl: this.getLogoUrl(),
           year: new Date().getFullYear(),
-          ...data,
+          ...rest,
+          detailUrl: this.resolvePlatformHref(detailUrl),
         },
       })
-      this.logger.debug(`Correo reembolso pendiente (contabilidad) enviado a ${email}`)
     } catch (error) {
       this.logger.error(`Error correo reembolso contabilidad a ${email}:`, error)
       throw error
@@ -751,11 +811,12 @@ export class EmailService {
       paymentMethod: string
       paymentReceiptUrl: string
       paymentReceiptFileName?: string
-      platformUrl: string
+      platformUrl?: string
     }
   ) {
     try {
       const subject = `Reembolso de gastos registrado — ${data.reportTitle}`
+      const { platformUrl, ...rest } = data
       await this.mailerService.sendMail({
         to: email,
         subject,
@@ -771,9 +832,10 @@ export class EmailService {
             ]
           : [],
         context: {
-          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          logoUrl: this.getLogoUrl(),
           year: new Date().getFullYear(),
-          ...data,
+          ...rest,
+          platformUrl: this.resolvePlatformHref(platformUrl),
         },
       })
       this.logger.debug(`Correo reembolso pagado enviado a ${email}`)
@@ -797,11 +859,12 @@ export class EmailService {
       paymentMethod: string
       paymentReceiptUrl: string
       paymentReceiptFileName?: string
-      platformUrl: string
+      platformUrl?: string
     }
   ) {
     try {
       const subject = `Viáticos aprobados y pagados — ${data.projectLabel}`
+      const { platformUrl, ...rest } = data
       await this.mailerService.sendMail({
         to: email,
         subject,
@@ -816,9 +879,10 @@ export class EmailService {
             ]
           : [],
         context: {
-          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          logoUrl: this.getLogoUrl(),
           year: new Date().getFullYear(),
-          ...data,
+          ...rest,
+          platformUrl: this.resolvePlatformHref(platformUrl),
         },
       })
       this.logger.debug(`Correo de pago viático enviado a ${email}`)
@@ -839,7 +903,7 @@ export class EmailService {
         to: email,
         subject: `Rendición Cerrada Definitivamente — ${data.reportTitle}`,
         template: './rendicion-cerrada',
-        context: { logoUrl: 'https://app.viatica.tecdidata.com/logo.svg', year: new Date().getFullYear(), ...data },
+        context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data },
       })
     } catch (error) {
       this.logger.error(`Error correo rendición cerrada a ${email}:`, error)
@@ -855,7 +919,7 @@ export class EmailService {
         to: email,
         subject: `Rendición cancelada por el colaborador — ${data.reportTitle}`,
         template: './rendicion-cancelada',
-        context: { logoUrl: 'https://app.viatica.tecdidata.com/logo.svg', year: new Date().getFullYear(), ...data },
+        context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data },
       })
     } catch (error) {
       this.logger.error(`Error correo rendición cancelada a ${email}:`, error)
@@ -873,7 +937,7 @@ export class EmailService {
         to: email,
         subject: `DEVOLUCIÓN PENDIENTE — Anticipo N° ${data.advanceId} — Monto S/ ${data.amountDue}`,
         template: './devolucion-pendiente',
-        context: { logoUrl: 'https://app.viatica.tecdidata.com/logo.svg', year: new Date().getFullYear(), ...data },
+        context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data },
       })
     } catch (error) {
       this.logger.error(`Error correo devolución pendiente a ${email}:`, error)
@@ -889,7 +953,7 @@ export class EmailService {
         to: email,
         subject: `Devolución validada — Anticipo N° ${data.advanceId}`,
         template: './devolucion-validada',
-        context: { logoUrl: 'https://app.viatica.tecdidata.com/logo.svg', year: new Date().getFullYear(), ...data },
+        context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data },
       })
     } catch (error) {
       this.logger.error(`Error correo devolución validada a ${email}:`, error)
@@ -905,7 +969,7 @@ export class EmailService {
         to: email,
         subject: `Comprobante de devolución rechazado — Anticipo N° ${data.advanceId}`,
         template: './devolucion-rechazada',
-        context: { logoUrl: 'https://app.viatica.tecdidata.com/logo.svg', year: new Date().getFullYear(), ...data },
+        context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data },
       })
     } catch (error) {
       this.logger.error(`Error correo devolución rechazada a ${email}:`, error)
@@ -923,7 +987,7 @@ export class EmailService {
         to: email,
         subject: `Reembolso Directo Abierto — Código ${data.code}`,
         template: './reembolso-directo-abierto',
-        context: { logoUrl: 'https://app.viatica.tecdidata.com/logo.svg', year: new Date().getFullYear(), ...data },
+        context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data },
       })
     } catch (error) {
       this.logger.error(`Error correo reembolso directo abierto a ${email}:`, error)
@@ -939,7 +1003,7 @@ export class EmailService {
         to: email,
         subject: `Pago Registrado — Reembolso Directo ${data.code}`,
         template: './reembolso-directo-pagado',
-        context: { logoUrl: 'https://app.viatica.tecdidata.com/logo.svg', year: new Date().getFullYear(), ...data },
+        context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data },
       })
     } catch (error) {
       this.logger.error(`Error correo reembolso directo pagado a ${email}:`, error)
@@ -957,7 +1021,7 @@ export class EmailService {
         to: email,
         subject: `Caja Chica Creada — ${data.code}`,
         template: './caja-chica-creada',
-        context: { logoUrl: 'https://app.viatica.tecdidata.com/logo.svg', year: new Date().getFullYear(), ...data },
+        context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data },
       })
     } catch (error) {
       this.logger.error(`Error correo caja chica creada a ${email}:`, error)
@@ -973,7 +1037,7 @@ export class EmailService {
         to: email,
         subject: `Caja Chica Fondeada y Activa — ${data.code}`,
         template: './caja-chica-fondeada',
-        context: { logoUrl: 'https://app.viatica.tecdidata.com/logo.svg', year: new Date().getFullYear(), ...data },
+        context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data },
       })
     } catch (error) {
       this.logger.error(`Error correo caja chica fondeada a ${email}:`, error)

@@ -10,6 +10,8 @@
     .logo { max-width: 150px; height: auto; }
     .content { padding: 30px; }
     .heading { color: #991b1b; font-size: 22px; margin-bottom: 16px; }
+    .meta-table { background-color: #f8fafc; border-radius: 6px; padding: 12px 15px; margin: 16px 0; font-size: 14px; border-left: 4px solid #94a3b8; }
+    .meta-row { margin: 4px 0; }
     .obs-box { background-color: #fefce8; border-radius: 6px; padding: 15px; margin: 20px 0; border-left: 4px solid #eab308; white-space: pre-wrap; font-size: 14px; }
     .btn-container { text-align: center; margin-top: 24px; }
     .btn { display: inline-block; background-color: #0ea5e9; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 6px; font-weight: bold; }
@@ -25,11 +27,18 @@
       <h1 class="heading">Rechazo de solicitud de viáticos</h1>
       <p>Estimado/a <strong>{{collaboratorName}}</strong>,</p>
       <p>Su solicitud de viáticos asociada al centro de costo <strong>{{projectLabel}}</strong> ha sido <strong>rechazada</strong>.</p>
+      <div class="meta-table">
+        <div class="meta-row"><strong>Solicitante — datos de consistencia:</strong></div>
+        <div class="meta-row">Nombre completo: <strong>{{collaboratorName}}</strong></div>
+        <div class="meta-row">Documento: <strong>{{collaboratorDocument}}</strong></div>
+        <div class="meta-row">Área: <strong>{{collaboratorArea}}</strong></div>
+        <div class="meta-row">Cargo: <strong>{{collaboratorCargo}}</strong></div>
+      </div>
       <p><strong>Observación del aprobador:</strong></p>
       <div class="obs-box">{{rejectionReason}}</div>
-      <p>Puede revisar los detalles, corregir la información y <strong>reenviar</strong> la solicitud desde la plataforma (Mis rendiciones). El historial de acciones quedará registrado.</p>
+      <p>Use el siguiente enlace para revisar la solicitud, corregir la información y <strong>reenviarla</strong>. El historial de acciones quedará registrado.</p>
       <div class="btn-container">
-        <a href="{{platformUrl}}" class="btn">Ir a la plataforma</a>
+        <a href="{{platformUrl}}" class="btn">Revisar / editar solicitud</a>
       </div>
     </div>
     <div class="footer">

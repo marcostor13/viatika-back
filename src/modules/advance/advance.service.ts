@@ -43,7 +43,7 @@ export class AdvanceService {
     private readonly userService: UserService,
     private readonly emailService: EmailService,
     private readonly notificationsService: NotificationsService
-  ) {}
+  ) { }
 
   async create(dto: CreateAdvanceDto): Promise<Advance> {
     if (!dto.clientId) throw new BadRequestException('clientId es requerido')
@@ -72,6 +72,18 @@ export class AdvanceService {
     const x = new Date(d)
     x.setHours(0, 0, 0, 0)
     return x
+  }
+
+  /** Valor único línea para correos/tablas texto (Fase 3). */
+  private viaticoNotifyField(value?: string): string {
+    const t = (value ?? '').trim()
+    return t.length > 0 ? t : '—'
+  }
+
+  private viaticoCargoDisplay(cargo?: string, employeeCode?: string): string {
+    const c = (cargo ?? '').trim()
+    if (c.length) return c
+    return this.viaticoNotifyField(employeeCode)
   }
 
   private isViaticoSolicitud(dto: CreateAdvanceDto): boolean {
@@ -375,11 +387,7 @@ export class AdvanceService {
       `Monto total: S/ ${totalFormatted}`,
     ].join('\n')
 
-    const platformUrl =
-      process.env.HOST ||
-      process.env.APP_PUBLIC_URL ||
-      process.env.FRONTEND_URL ||
-      'http://localhost:4200'
+    const platformUrl = this.emailService.buildAppUrl('/tesoreria')
     const manualResendUrl = `/advance/${advanceId}/resend-coordinator-email`
 
     const setNotif = async (payload: {
@@ -440,16 +448,25 @@ export class AdvanceService {
       return
     }
 
-    // In-app notification for coordinator — always fire regardless of email outcome
-    this.notificationsService.create({
-      userId: coordId.toString(),
-      title: 'Nueva solicitud de viáticos pendiente',
-      message: `${collaborator.name} solicitó viáticos para ${projectLabel} — S/ ${totalFormatted}. Ingresa a Tesorería para revisar.`,
-      type: 'info',
-      actionUrl: '/viaticos',
-    }).catch((err: unknown) => {
-      this.logger.error(`In-app notif viático ${advanceId}: ${err instanceof Error ? err.message : String(err)}`)
-    })
+    // In-app notification for coordinator — ensure it is persisted and log explicit failures.
+    try {
+      await this.notificationsService.create({
+        userId: coordId.toString(),
+        title: 'Nueva solicitud de viáticos pendiente',
+        message: `${collaborator.name} solicitó viáticos para ${projectLabel} — S/ ${totalFormatted}. Ingresa a Tesorería para revisar.`,
+        type: 'info',
+        actionUrl: '/tesoreria',
+        metadata: {
+          advanceId,
+          collaboratorUserId,
+          event: 'viatico_submitted',
+        },
+      })
+    } catch (err: unknown) {
+      this.logger.error(
+        `In-app notif viático ${advanceId}: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
 
     try {
       await this.emailService.sendViaticoSolicitudToCoordinator(
@@ -514,17 +531,23 @@ export class AdvanceService {
           advance.projectId.toString(),
           advance.clientId.toString()
         )
-        projectLabel = `[${p.code} - ${p.name}]`
+        projectLabel = `${p.code} - ${p.name}`
       } catch {
         /* ignore */
       }
     }
-    const platformUrl =
-      process.env.APP_PUBLIC_URL ||
-      process.env.FRONTEND_URL ||
-      'https://app.viatica.tecdidata.com'
+    const aid = String(advance._id)
+    const platformUrl = this.emailService.buildAppUrl(
+      `/mis-rendiciones?viaticoAdvanceId=${encodeURIComponent(aid)}`
+    )
     await this.emailService.sendViaticoRechazoColaborador(collab.email, {
       collaboratorName: profile?.name ?? collab.name,
+      collaboratorDocument: this.viaticoNotifyField(profile?.dni),
+      collaboratorArea: this.viaticoNotifyField(profile?.area),
+      collaboratorCargo: this.viaticoCargoDisplay(
+        profile?.cargo,
+        profile?.employeeCode
+      ),
       projectLabel,
       rejectionReason,
       platformUrl,
@@ -533,8 +556,20 @@ export class AdvanceService {
 
   private buildViaticoAccountingDetailBody(
     advance: AdvanceDocument,
-    collaboratorMeta: { name: string; dni?: string; employeeCode?: string },
-    approverName: string,
+    collaboratorMeta: {
+      name: string
+      dni?: string
+      employeeCode?: string
+      area?: string
+      cargo?: string
+    },
+    approverMeta: {
+      name: string
+      dni?: string
+      area?: string
+      cargo?: string
+      employeeCode?: string
+    },
     approvedAt: Date
   ): string {
     const project = advance.projectId as unknown
@@ -542,7 +577,7 @@ export class AdvanceService {
     if (project && typeof project === 'object' && project !== null) {
       const pr = project as { code?: string; name?: string }
       if (pr.code !== undefined || pr.name !== undefined) {
-        cc = `[${pr.code ?? '—'} - ${pr.name ?? '—'}]`
+        cc = `${pr.code ?? '—'} - ${pr.name ?? '—'}`
       }
     }
     const start =
@@ -571,12 +606,15 @@ export class AdvanceService {
     return [
       `SOLICITANTE`,
       `  Nombre: ${collaboratorMeta.name}`,
-      `  Documento: ${collaboratorMeta.dni ?? '—'}`,
-      `  Área: —`,
-      `  Cargo / código: ${collaboratorMeta.employeeCode ?? '—'}`,
+      `  Documento: ${this.viaticoNotifyField(collaboratorMeta.dni)}`,
+      `  Área: ${this.viaticoNotifyField(collaboratorMeta.area)}`,
+      `  Cargo: ${this.viaticoCargoDisplay(collaboratorMeta.cargo, collaboratorMeta.employeeCode)}`,
       ``,
       `APROBADOR`,
-      `  Nombre: ${approverName}`,
+      `  Nombre: ${approverMeta.name}`,
+      `  Documento: ${this.viaticoNotifyField(approverMeta.dni)}`,
+      `  Área: ${this.viaticoNotifyField(approverMeta.area)}`,
+      `  Cargo: ${this.viaticoCargoDisplay(approverMeta.cargo, approverMeta.employeeCode)}`,
       `  Fecha y hora: ${apprDate}`,
       ``,
       `DETALLE`,
@@ -614,22 +652,54 @@ export class AdvanceService {
     const doc = (populated ?? advance) as AdvanceDocument
 
     const collabId = advance.userId.toString()
+    let projectLabelSubject = '— - —'
+    if (doc.projectId && typeof doc.projectId === 'object' && doc.projectId !== null) {
+      const pr = doc.projectId as { code?: string; name?: string }
+      if (pr.code !== undefined || pr.name !== undefined) {
+        projectLabelSubject = `${pr.code ?? '—'} - ${pr.name ?? '—'}`
+      }
+    }
+
     const collabProfile =
       await this.userService.findCollaboratorViaticoNotifyProfile(collabId)
     const lastAppr = [...doc.approvalHistory]
       .reverse()
       .find(h => h.action === 'approved')
-    let approverName = '—'
+    let approverMeta = {
+      name: '—' as string,
+      dni: undefined as string | undefined,
+      area: undefined as string | undefined,
+      cargo: undefined as string | undefined,
+      employeeCode: undefined as string | undefined,
+    }
     if (lastAppr?.approvedBy) {
-      const ap = await this.userService.findEmailNameClient(lastAppr.approvedBy)
-      approverName = ap?.name ?? lastAppr.approvedBy
+      const apprId = String(lastAppr.approvedBy)
+      const ap = await this.userService.findEmailNameClient(apprId)
+      const baseName = ap?.name ?? apprId
+      const apprProfile =
+        await this.userService.findCollaboratorViaticoNotifyProfile(apprId)
+      approverMeta = apprProfile
+        ? {
+          name:
+            (apprProfile.name ?? '').trim().length > 0
+              ? (apprProfile.name ?? '').trim()
+              : baseName,
+          dni: apprProfile.dni,
+          area: apprProfile.area,
+          cargo: apprProfile.cargo,
+          employeeCode: apprProfile.employeeCode,
+        }
+        : {
+          name: baseName,
+          dni: undefined,
+          area: undefined,
+          cargo: undefined,
+          employeeCode: undefined,
+        }
     }
 
     const urgent = this.isViaticoTravelStartUrgent(doc.startDate)
-    const platformUrl =
-      process.env.APP_PUBLIC_URL ||
-      process.env.FRONTEND_URL ||
-      'https://app.viatica.tecdidata.com'
+    const platformUrl = this.emailService.buildAppUrl('/tesoreria')
 
     const detailBody = this.buildViaticoAccountingDetailBody(
       doc,
@@ -637,8 +707,10 @@ export class AdvanceService {
         name: collabProfile?.name ?? 'Colaborador',
         dni: collabProfile?.dni,
         employeeCode: collabProfile?.employeeCode,
+        area: collabProfile?.area,
+        cargo: collabProfile?.cargo,
       },
-      approverName,
+      approverMeta,
       lastAppr?.date ?? new Date()
     )
 
@@ -646,15 +718,18 @@ export class AdvanceService {
       ? 'Solicitud aprobada — inicio de viaje próximo'
       : 'Solicitud de viáticos aprobada'
 
+    const urgentBanner =
+      '🟥 URGENTE: la fecha de inicio del viaje es hoy o mañana. Priorizar gestión de desembolso.'
+
     for (const r of recipients) {
       try {
         await this.emailService.sendViaticoAprobacionContabilidad(r.email, {
           recipientName: r.name,
           urgent,
-          urgentBanner:
-            'URGENTE: la fecha de inicio del viaje es hoy o mañana. Priorizar gestión de desembolso.',
+          urgentBanner,
           emailTitle,
           detailBody,
+          projectLabel: projectLabelSubject,
           platformUrl,
         })
       } catch (err: unknown) {
@@ -720,10 +795,7 @@ export class AdvanceService {
       }
     }
 
-    const platformUrl =
-      process.env.APP_PUBLIC_URL ||
-      process.env.FRONTEND_URL ||
-      'https://app.viatica.tecdidata.com'
+    const platformUrl = this.emailService.buildAppUrl('/mis-rendiciones')
 
     const transferDate = advance.paymentInfo?.transferDate
       ? new Date(advance.paymentInfo.transferDate).toISOString().slice(0, 10)
@@ -913,7 +985,7 @@ export class AdvanceService {
         message: `Tu solicitud de viáticos por S/ ${Number(saved.amount).toFixed(2)} fue aprobada. El pago está siendo procesado.`,
         type: 'success',
         actionUrl: '/mis-rendiciones',
-      }).catch(() => {})
+      }).catch(() => { })
     } else {
       this.notificationsService.create({
         userId: saved.userId.toString(),
@@ -921,7 +993,7 @@ export class AdvanceService {
         message: `Tu solicitud de viáticos por S/ ${Number(saved.amount).toFixed(2)} fue aprobada en el primer nivel y está pendiente de aprobación final.`,
         type: 'info',
         actionUrl: '/mis-rendiciones',
-      }).catch(() => {})
+      }).catch(() => { })
     }
     return saved
   }
@@ -964,7 +1036,7 @@ export class AdvanceService {
       message: `Tu solicitud de viáticos por S/ ${Number(saved.amount).toFixed(2)} fue aprobada completamente. El pago está siendo procesado.`,
       type: 'success',
       actionUrl: '/mis-rendiciones',
-    }).catch(() => {})
+    }).catch(() => { })
     return saved
   }
 
@@ -1016,7 +1088,7 @@ export class AdvanceService {
       message: `Tu solicitud de viáticos por S/ ${Number(saved.amount).toFixed(2)} fue rechazada. Motivo: ${dto.rejectionReason}`,
       type: 'error',
       actionUrl: '/mis-rendiciones',
-    }).catch(() => {})
+    }).catch(() => { })
     return saved
   }
 
@@ -1090,7 +1162,7 @@ export class AdvanceService {
       message: `Se registró el pago de tu viático por S/ ${Number(saved.amount).toFixed(2)}. Ya puedes registrar tus gastos.`,
       type: 'success',
       actionUrl: '/mis-rendiciones',
-    }).catch(() => {})
+    }).catch(() => { })
     return saved
   }
 
@@ -1290,12 +1362,9 @@ export class AdvanceService {
     const owner = report.userId as { name?: string; email?: string }
     const collaboratorName = owner?.name || 'Colaborador'
 
-    const platformUrl =
-      process.env.APP_PUBLIC_URL ||
-      process.env.FRONTEND_URL ||
-      'https://app.viatica.tecdidata.com'
-
-    const detailUrl = `${platformUrl.replace(/\/$/, '')}/mis-rendiciones/${reportId}/detalle`
+    const detailUrl = this.emailService.buildAppUrl(
+      `/mis-rendiciones/${reportId}/detalle`
+    )
 
     const amountFormatted = amountReimburse.toFixed(2)
     const reportTitle = report.title || 'Rendición'
@@ -1643,10 +1712,7 @@ export class AdvanceService {
       `Monto total: S/ ${totalFormatted}`,
     ].join('\n')
 
-    const platformUrl =
-      process.env.APP_PUBLIC_URL ||
-      process.env.FRONTEND_URL ||
-      'https://app.viatica.tecdidata.com'
+    const platformUrl = this.emailService.buildAppUrl('/tesoreria')
 
     this.notificationsService.create({
       userId: coordId.toString(),

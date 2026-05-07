@@ -229,6 +229,32 @@ export class ExpenseReportController {
     return result
   }
 
+  /** Cancela una rendición en estado 'solicited' (colaborador propietario). */
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR)
+  @Patch(':id/cancel')
+  async cancel(
+    @Param('id') id: string,
+    @Body() body: { reason?: string },
+    @Request() req: any
+  ) {
+    const result = await this.expenseReportService.cancel(
+      id,
+      req.user._id,
+      body.reason
+    )
+    await this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email || 'Usuario',
+      action: 'cancel_rendicion',
+      module: 'rendiciones',
+      entityId: id,
+      details: body.reason,
+      clientId: req.user.clientId,
+    })
+    return result
+  }
+
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
   @Delete(':id')

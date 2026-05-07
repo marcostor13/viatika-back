@@ -9,6 +9,7 @@ export type ExpenseReportStatus =
   | 'rejected'
   | 'reimbursed'
   | 'closed'
+  | 'cancelled'
 
 export type ReopeningStatus = 'none' | 'requested' | 'approved'
 

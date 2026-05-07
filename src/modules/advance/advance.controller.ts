@@ -8,6 +8,7 @@ import {
   Request,
   UseGuards,
   Query,
+  ForbiddenException,
 } from '@nestjs/common'
 import { AdvanceService } from './advance.service'
 import { CreateAdvanceDto } from './dto/create-advance.dto'
@@ -49,6 +50,40 @@ export class AdvanceController {
   @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR)
   findAll(@Param('clientId') clientId: string) {
     return this.advanceService.findAllByClient(clientId)
+  }
+
+  /** Página Viáticos: listado con filtros — Admin ve todos, coordinador ve solo los suyos */
+  @Get('viaticos/list')
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR)
+  findForViaticosPage(
+    @Request() req,
+    @Query('status') status?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string
+  ) {
+    const userRole = req.user?.roles?.[0] || req.user?.role
+    const isAdminRole = [ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(userRole)
+    const canApproveL1 = req.user?.permissions?.canApproveL1 === true
+
+    if (!isAdminRole && !canApproveL1) {
+      throw new ForbiddenException('Sin permiso para acceder a la gestión de viáticos')
+    }
+
+    const rawClient = req.user?.clientId
+    const clientId =
+      rawClient?._id?.toString?.() ??
+      rawClient?.toString?.() ??
+      String(rawClient ?? '')
+
+    return this.advanceService.findForViaticosPage({
+      requesterId: req.user?.sub || req.user?._id,
+      requesterRole: userRole,
+      requesterPermissions: req.user?.permissions,
+      clientId,
+      status,
+      dateFrom,
+      dateTo,
+    })
   }
 
   /** Anticipos pendientes de acción (Admin/Tesorero) */
@@ -314,4 +349,22 @@ export class AdvanceController {
   findPendingReturns(@Param('clientId') clientId: string) {
     return this.advanceService.findPendingReturns(clientId)
   }
+
+  /** Colaborador cancela su solicitud pendiente de aprobación. */
+  @Patch(':id/cancel')
+  @Roles(ROLES.COLABORADOR, ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  async cancelByCollaborator(@Param('id') id: string, @Request() req) {
+    const userId = req.user?.sub || req.user?._id
+    const result = await this.advanceService.cancelByCollaborator(id, userId)
+    this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email,
+      action: 'cancel_advance',
+      module: 'tesoreria',
+      entityId: id,
+      clientId: req.user.clientId,
+    })
+    return result
+  }
+
 }

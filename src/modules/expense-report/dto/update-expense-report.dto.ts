@@ -21,6 +21,7 @@ export class UpdateExpenseReportDto extends PartialType(
     'approved',
     'rejected',
     'closed',
+    'cancelled',
   ])
   status?: ExpenseReportStatus
 
@@ -28,6 +29,11 @@ export class UpdateExpenseReportDto extends PartialType(
   @IsString()
   @MaxLength(2000)
   rejectionReason?: string
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  cancelReason?: string
 
   @IsOptional()
   @IsArray()

@@ -27,6 +27,7 @@ import { ProjectService } from '../project/project.service'
 import { CategoryService } from '../category/category.service'
 import { UserService } from '../user/user.service'
 import { EmailService } from '../email/email.service'
+import { NotificationsService } from '../notifications/notifications.service'
 
 @Injectable()
 export class AdvanceService {
@@ -40,7 +41,8 @@ export class AdvanceService {
     private readonly projectService: ProjectService,
     private readonly categoryService: CategoryService,
     private readonly userService: UserService,
-    private readonly emailService: EmailService
+    private readonly emailService: EmailService,
+    private readonly notificationsService: NotificationsService
   ) {}
 
   async create(dto: CreateAdvanceDto): Promise<Advance> {
@@ -283,6 +285,7 @@ export class AdvanceService {
     const advance = await this.advanceModel.create({
       userId: new Types.ObjectId(dto.userId),
       clientId: new Types.ObjectId(dto.clientId),
+      coordinatorId: profile.coordinatorId ?? undefined,
       expenseReportId: dto.expenseReportId
         ? new Types.ObjectId(dto.expenseReportId)
         : undefined,
@@ -413,18 +416,40 @@ export class AdvanceService {
       coordId.toString()
     )
 
+    if (!coordinator || !collaborator) {
+      await setNotif({
+        recipientUserId: coordId,
+        status: 'skipped',
+        errorMessage: 'Coordinador o colaborador no encontrado en la base de datos',
+      })
+      return
+    }
+
+    // Allow coordinators without clientId (Admins/SuperAdmins may have null clientId).
+    // When both have clientIds, they must belong to the same company.
     if (
-      !coordinator ||
-      !collaborator ||
-      !coordinator.clientId.equals(collaborator.clientId)
+      coordinator.clientId &&
+      collaborator.clientId &&
+      coordinator.clientId.toString() !== collaborator.clientId.toString()
     ) {
       await setNotif({
         recipientUserId: coordId,
         status: 'skipped',
-        errorMessage: 'Coordinador inválido o no pertenece al mismo cliente',
+        errorMessage: 'Coordinador no pertenece al mismo cliente que el colaborador',
       })
       return
     }
+
+    // In-app notification for coordinator — always fire regardless of email outcome
+    this.notificationsService.create({
+      userId: coordId.toString(),
+      title: 'Nueva solicitud de viáticos pendiente',
+      message: `${collaborator.name} solicitó viáticos para ${projectLabel} — S/ ${totalFormatted}. Ingresa a Tesorería para revisar.`,
+      type: 'info',
+      actionUrl: '/tesoreria',
+    }).catch((err: unknown) => {
+      this.logger.error(`In-app notif viático ${advanceId}: ${err instanceof Error ? err.message : String(err)}`)
+    })
 
     try {
       await this.emailService.sendViaticoSolicitudToCoordinator(
@@ -741,6 +766,50 @@ export class AdvanceService {
       .exec()
   }
 
+  async findForViaticosPage(opts: {
+    requesterId: string
+    requesterRole: string
+    requesterPermissions?: { canApproveL1?: boolean; canApproveL2?: boolean }
+    clientId: string
+    status?: string
+    dateFrom?: string
+    dateTo?: string
+  }) {
+    const isAdminRole = [ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(opts.requesterRole as ROLES)
+    const isCoordinator =
+      !isAdminRole && opts.requesterPermissions?.canApproveL1 === true
+
+    const filter: Record<string, unknown> = {
+      clientId: new Types.ObjectId(opts.clientId),
+    }
+
+    if (isCoordinator) {
+      filter['coordinatorId'] = new Types.ObjectId(opts.requesterId)
+    }
+
+    if (opts.status && opts.status !== 'all') {
+      filter['status'] = opts.status
+    }
+
+    if (opts.dateFrom || opts.dateTo) {
+      const dateFilter: Record<string, Date> = {}
+      if (opts.dateFrom) dateFilter['$gte'] = new Date(opts.dateFrom)
+      if (opts.dateTo) {
+        const to = new Date(opts.dateTo)
+        to.setHours(23, 59, 59, 999)
+        dateFilter['$lte'] = to
+      }
+      filter['createdAt'] = dateFilter
+    }
+
+    return this.advanceModel
+      .find(filter)
+      .populate('userId', 'name email')
+      .populate('projectId', 'code name')
+      .sort({ createdAt: -1 })
+      .exec()
+  }
+
   /** Comprobantes de pago de viático para «Mis documentos» (Fase 6). */
   async findPaymentReceiptsForCollaborator(userId: string, clientId: string) {
     return this.advanceModel
@@ -837,6 +906,21 @@ export class AdvanceService {
     const saved = await advance.save()
     if (saved.status === 'approved') {
       await this.onViaticoAdvanceFullyApproved(saved as AdvanceDocument)
+      this.notificationsService.create({
+        userId: saved.userId.toString(),
+        title: 'Solicitud de viáticos aprobada',
+        message: `Tu solicitud de viáticos por S/ ${Number(saved.amount).toFixed(2)} fue aprobada. El pago está siendo procesado.`,
+        type: 'success',
+        actionUrl: '/mis-rendiciones',
+      }).catch(() => {})
+    } else {
+      this.notificationsService.create({
+        userId: saved.userId.toString(),
+        title: 'Solicitud de viáticos en revisión',
+        message: `Tu solicitud de viáticos por S/ ${Number(saved.amount).toFixed(2)} fue aprobada en el primer nivel y está pendiente de aprobación final.`,
+        type: 'info',
+        actionUrl: '/mis-rendiciones',
+      }).catch(() => {})
     }
     return saved
   }
@@ -873,6 +957,13 @@ export class AdvanceService {
 
     const saved = await advance.save()
     await this.onViaticoAdvanceFullyApproved(saved as AdvanceDocument)
+    this.notificationsService.create({
+      userId: saved.userId.toString(),
+      title: 'Solicitud de viáticos aprobada',
+      message: `Tu solicitud de viáticos por S/ ${Number(saved.amount).toFixed(2)} fue aprobada completamente. El pago está siendo procesado.`,
+      type: 'success',
+      actionUrl: '/mis-rendiciones',
+    }).catch(() => {})
     return saved
   }
 
@@ -918,6 +1009,13 @@ export class AdvanceService {
       const msg = err instanceof Error ? err.message : String(err)
       this.logger.error(`Correo rechazo viático colaborador: ${msg}`)
     })
+    this.notificationsService.create({
+      userId: saved.userId.toString(),
+      title: 'Solicitud de viáticos rechazada',
+      message: `Tu solicitud de viáticos por S/ ${Number(saved.amount).toFixed(2)} fue rechazada. Motivo: ${dto.rejectionReason}`,
+      type: 'error',
+      actionUrl: '/mis-rendiciones',
+    }).catch(() => {})
     return saved
   }
 
@@ -984,6 +1082,13 @@ export class AdvanceService {
         this.logger.error(`Correo pago viático ${saved._id}: ${msg}`)
       }
     )
+    this.notificationsService.create({
+      userId: saved.userId.toString(),
+      title: 'Pago de viático registrado',
+      message: `Se registró el pago de tu viático por S/ ${Number(saved.amount).toFixed(2)}. Ya puedes registrar tus gastos.`,
+      type: 'success',
+      actionUrl: '/mis-rendiciones',
+    }).catch(() => {})
     return saved
   }
 
@@ -1377,9 +1482,9 @@ export class AdvanceService {
     const advance = await this.advanceModel.findById(id)
     if (!advance) throw new NotFoundException(`Anticipo ${id} no encontrado`)
 
-    if (advance.status !== 'rejected') {
+    if (advance.status !== 'rejected' && advance.status !== 'pending_l1') {
       throw new BadRequestException(
-        'Solo pueden reenviarse solicitudes en estado rechazado.'
+        'Solo pueden editarse solicitudes en estado rechazado o pendiente de aprobación.'
       )
     }
 
@@ -1417,6 +1522,7 @@ export class AdvanceService {
         clientId
       )
 
+    const wasEditing = advance.status === 'pending_l1'
     advance.place = dto.place.trim()
     advance.startDate = new Date(dto.startDate)
     advance.endDate = new Date(dto.endDate)
@@ -1437,7 +1543,9 @@ export class AdvanceService {
       level: 0,
       approvedBy: actingUserId,
       action: 'resubmitted',
-      notes: 'Solicitud corregida y reenviada tras rechazo',
+      notes: wasEditing
+        ? 'Solicitud editada antes de aprobación'
+        : 'Solicitud corregida y reenviada tras rechazo',
       date: new Date(),
     })
 
@@ -1459,6 +1567,106 @@ export class AdvanceService {
       .exec()
 
     return refreshed as Advance
+  }
+
+  // ─── Cancel / Delete por colaborador ────────────────────────────────────────
+
+  async cancelByCollaborator(id: string, userId: string): Promise<Advance> {
+    const advance = await this.advanceModel.findById(id)
+    if (!advance) throw new NotFoundException(`Anticipo ${id} no encontrado`)
+    if (advance.userId.toString() !== userId) {
+      throw new ForbiddenException(
+        'Solo el colaborador solicitante puede cancelar esta solicitud.'
+      )
+    }
+    if (advance.status !== 'pending_l1') {
+      throw new BadRequestException(
+        'Solo se puede cancelar una solicitud en estado pendiente de aprobación.'
+      )
+    }
+    advance.status = 'cancelled'
+    await advance.save()
+
+    this.notifyCoordinatorViaticoCancelled(advance as AdvanceDocument, userId).catch(
+      (err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.logger.error(`Correo cancelación viático coordinador: ${msg}`)
+      }
+    )
+
+    return advance
+  }
+
+  private async notifyCoordinatorViaticoCancelled(
+    advance: AdvanceDocument,
+    collaboratorUserId: string
+  ): Promise<void> {
+    if (!advance.projectId) return
+
+    const collaborator = await this.userService.findEmailNameClient(collaboratorUserId)
+    const profile = await this.userService.findTransactionalProfile(collaboratorUserId)
+    const coordId = profile?.coordinatorId
+    if (!coordId) return
+
+    const coordinator = await this.userService.findEmailNameClient(coordId.toString())
+    if (!coordinator?.email || !collaborator) return
+    if (
+      coordinator.clientId &&
+      collaborator.clientId &&
+      coordinator.clientId.toString() !== collaborator.clientId.toString()
+    ) return
+
+    let projectLabel = 'Centro de costo'
+    try {
+      const p = await this.projectService.findOne(
+        advance.projectId.toString(),
+        advance.clientId.toString()
+      )
+      projectLabel = `[${p.code} - ${p.name}]`
+    } catch { /* use fallback */ }
+
+    const totalFormatted = Number(advance.amount).toFixed(2)
+    const startStr = advance.startDate instanceof Date
+      ? advance.startDate.toISOString().slice(0, 10)
+      : String(advance.startDate ?? '').slice(0, 10)
+    const endStr = advance.endDate instanceof Date
+      ? advance.endDate.toISOString().slice(0, 10)
+      : String(advance.endDate ?? '').slice(0, 10)
+
+    const plainSummary = [
+      `Colaborador: ${collaborator.name}`,
+      `Lugar: ${advance.place ?? '—'}`,
+      `Fechas: ${startStr} al ${endStr}`,
+      `Centro de costo: ${projectLabel}`,
+      `Monto total: S/ ${totalFormatted}`,
+    ].join('\n')
+
+    const platformUrl =
+      process.env.APP_PUBLIC_URL ||
+      process.env.FRONTEND_URL ||
+      'https://app.viatica.tecdidata.com'
+
+    this.notificationsService.create({
+      userId: coordId.toString(),
+      title: 'Solicitud de viáticos cancelada',
+      message: `${collaborator.name} canceló su solicitud de viáticos para ${projectLabel} — S/ ${totalFormatted}.`,
+      type: 'warning',
+      actionUrl: '/tesoreria',
+    }).catch((err: unknown) => {
+      this.logger.error(`In-app notif cancelación viático: ${err instanceof Error ? err.message : String(err)}`)
+    })
+
+    await this.emailService.sendViaticoCancelacion(coordinator.email, {
+      coordinatorName: coordinator.name,
+      collaboratorName: collaborator.name,
+      place: advance.place ?? '—',
+      startDate: startStr,
+      endDate: endStr,
+      totalFormatted,
+      projectLabel,
+      plainSummary,
+      platformUrl,
+    })
   }
 
   async getStats(clientId: string) {

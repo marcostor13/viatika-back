@@ -31,7 +31,7 @@ export class AdvanceController {
 
   /** Colaborador solicita un anticipo */
   @Post()
-  @Roles(ROLES.COLABORADOR, ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Roles(ROLES.COLABORADOR, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   create(@Body() dto: CreateAdvanceDto, @Request() req) {
     dto.userId = req.user?.sub || req.user?._id
     dto.clientId = dto.clientId || req.user?.clientId
@@ -40,21 +40,21 @@ export class AdvanceController {
 
   /** Mis anticipos (colaborador) */
   @Get('my/:userId/client/:clientId')
-  @Roles(ROLES.COLABORADOR, ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Roles(ROLES.COLABORADOR, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   findMy(@Param('userId') userId: string, @Param('clientId') clientId: string) {
     return this.advanceService.findMyAdvances(userId, clientId)
   }
 
   /** Todos los anticipos del cliente (Admin/Tesorero) */
   @Get('client/:clientId')
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   findAll(@Param('clientId') clientId: string) {
     return this.advanceService.findAllByClient(clientId)
   }
 
   /** Página Viáticos: listado con filtros — Admin ve todos, coordinador ve solo los suyos */
   @Get('viaticos/list')
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   findForViaticosPage(
     @Request() req,
     @Query('status') status?: string,
@@ -63,9 +63,10 @@ export class AdvanceController {
   ) {
     const userRole = req.user?.roles?.[0] || req.user?.role
     const isAdminRole = [ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(userRole)
+    const isCoordinadorRole = userRole === ROLES.COORDINADOR
     const canApproveL1 = req.user?.permissions?.canApproveL1 === true
 
-    if (!isAdminRole && !canApproveL1) {
+    if (!isAdminRole && !isCoordinadorRole && !canApproveL1) {
       throw new ForbiddenException('Sin permiso para acceder a la gestión de viáticos')
     }
 
@@ -88,28 +89,28 @@ export class AdvanceController {
 
   /** Anticipos pendientes de acción (Admin/Tesorero) */
   @Get('pending/client/:clientId')
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   findPending(@Param('clientId') clientId: string) {
     return this.advanceService.findPending(clientId)
   }
 
   /** Estadísticas para dashboard Tesorería */
   @Get('stats/client/:clientId')
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   getStats(@Param('clientId') clientId: string) {
     return this.advanceService.getStats(clientId)
   }
 
   /** Detalle de un anticipo */
   @Get(':id')
-  @Roles(ROLES.COLABORADOR, ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Roles(ROLES.COLABORADOR, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   findOne(@Param('id') id: string) {
     return this.advanceService.findOne(id)
   }
 
   /** Aprobación nivel 1 (Admin/SuperAdmin o usuario con permiso canApproveL1) */
   @Patch(':id/approve-l1')
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   async approveL1(
     @Param('id') id: string,
     @Body() dto: ApproveAdvanceDto,
@@ -136,7 +137,7 @@ export class AdvanceController {
 
   /** Aprobación nivel 2 (SuperAdmin o usuario con permiso canApproveL2) */
   @Patch(':id/approve-l2')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   async approveL2(
     @Param('id') id: string,
     @Body() dto: ApproveAdvanceDto,
@@ -163,7 +164,7 @@ export class AdvanceController {
 
   /** Rechazo (Admin/SuperAdmin o usuario con permiso de aprobación) */
   @Patch(':id/reject')
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   async reject(
     @Param('id') id: string,
     @Body() dto: RejectAdvanceDto,
@@ -191,7 +192,7 @@ export class AdvanceController {
 
   /** Reenvío tras rechazo — solo el colaborador dueño (Fase 3). */
   @Patch(':id/resubmit')
-  @Roles(ROLES.COLABORADOR, ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Roles(ROLES.COLABORADOR, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   async resubmit(
     @Param('id') id: string,
     @Body() dto: ResubmitAdvanceDto,
@@ -222,7 +223,7 @@ export class AdvanceController {
 
   /** Reenvío manual de correo al coordinador cuando el envío falló. */
   @Patch(':id/resend-coordinator-email')
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   async resendCoordinatorEmail(@Param('id') id: string, @Request() req) {
     const rawClient = req.user?.clientId
     const clientId =
@@ -247,7 +248,7 @@ export class AdvanceController {
 
   /** Registro de pago / transferencia (SuperAdmin o usuario con canApproveL2) */
   @Patch(':id/register-payment')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   async registerPayment(
     @Param('id') id: string,
     @Body() dto: PayAdvanceDto,
@@ -273,7 +274,7 @@ export class AdvanceController {
 
   /** Liquidación: compara anticipo vs gastos reales */
   @Patch(':id/settle')
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   async settle(@Param('id') id: string, @Request() req) {
     const result = await this.advanceService.settle(id)
     this.auditLogService.log({
@@ -289,7 +290,7 @@ export class AdvanceController {
 
   /** Registrar devolución de saldo */
   @Patch(':id/return')
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   registerReturn(
     @Param('id') id: string,
     @Body() body: { returnedAmount: number }
@@ -308,7 +309,7 @@ export class AdvanceController {
 
   /** Colaborador carga comprobante de depósito. */
   @Patch(':id/return/proof')
-  @Roles(ROLES.COLABORADOR, ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Roles(ROLES.COLABORADOR, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   uploadReturnProof(
     @Param('id') id: string,
     @Body() body: {
@@ -352,7 +353,7 @@ export class AdvanceController {
 
   /** Colaborador cancela su solicitud pendiente de aprobación. */
   @Patch(':id/cancel')
-  @Roles(ROLES.COLABORADOR, ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Roles(ROLES.COLABORADOR, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   async cancelByCollaborator(@Param('id') id: string, @Request() req) {
     const userId = req.user?.sub || req.user?._id
     const result = await this.advanceService.cancelByCollaborator(id, userId)

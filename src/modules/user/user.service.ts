@@ -326,14 +326,16 @@ export class UserService {
     clientId: string
   ): Promise<{ email: string; name: string }[]> {
     const adminRoles = await this.roleService.getAdminRoles()
-    const adminRoleIds = adminRoles.map(r => (r as any)._id)
+    const contabilidadRole = await this.roleService.getByName('Contabilidad')
+    const roleIds = [...adminRoles.map(r => (r as any)._id)]
+    if (contabilidadRole) roleIds.push((contabilidadRole as any)._id)
     const users = await this.userModel
       .find({
         clientId: new Types.ObjectId(clientId),
         isActive: true,
         $or: [
-          { roleId: { $in: adminRoleIds } },
-          { 'permissions.modules': 'tesoreria' },
+          { roleId: { $in: roleIds } },
+          { 'permissions.modules': { $in: ['tesoreria', 'pagos'] } },
         ],
       })
       .select('email name')

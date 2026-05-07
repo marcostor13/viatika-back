@@ -446,7 +446,7 @@ export class AdvanceService {
       title: 'Nueva solicitud de viáticos pendiente',
       message: `${collaborator.name} solicitó viáticos para ${projectLabel} — S/ ${totalFormatted}. Ingresa a Tesorería para revisar.`,
       type: 'info',
-      actionUrl: '/tesoreria',
+      actionUrl: '/viaticos',
     }).catch((err: unknown) => {
       this.logger.error(`In-app notif viático ${advanceId}: ${err instanceof Error ? err.message : String(err)}`)
     })
@@ -777,7 +777,8 @@ export class AdvanceService {
   }) {
     const isAdminRole = [ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(opts.requesterRole as ROLES)
     const isCoordinator =
-      !isAdminRole && opts.requesterPermissions?.canApproveL1 === true
+      !isAdminRole &&
+      (opts.requesterRole === ROLES.COORDINADOR || opts.requesterPermissions?.canApproveL1 === true)
 
     const filter: Record<string, unknown> = {
       clientId: new Types.ObjectId(opts.clientId),
@@ -883,7 +884,7 @@ export class AdvanceService {
     }
 
     const canApproveL1 =
-      [ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(userRole as ROLES) ||
+      [ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COORDINADOR].includes(userRole as ROLES) ||
       userPermissions?.canApproveL1 === true
     if (!canApproveL1)
       throw new ForbiddenException('No tienes permiso para aprobar en nivel 1')
@@ -984,7 +985,7 @@ export class AdvanceService {
     }
 
     const canReject =
-      [ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(userRole as ROLES) ||
+      [ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COORDINADOR].includes(userRole as ROLES) ||
       userPermissions?.canApproveL1 === true ||
       userPermissions?.canApproveL2 === true
     if (!canReject)
@@ -1035,7 +1036,8 @@ export class AdvanceService {
     }
 
     const canPay =
-      userRole === ROLES.SUPER_ADMIN || userPermissions?.canApproveL2 === true
+      [ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD].includes(userRole as ROLES) ||
+      userPermissions?.canApproveL2 === true
     if (!canPay)
       throw new ForbiddenException('No tienes permiso para registrar pagos')
 
@@ -1651,7 +1653,7 @@ export class AdvanceService {
       title: 'Solicitud de viáticos cancelada',
       message: `${collaborator.name} canceló su solicitud de viáticos para ${projectLabel} — S/ ${totalFormatted}.`,
       type: 'warning',
-      actionUrl: '/tesoreria',
+      actionUrl: '/viaticos',
     }).catch((err: unknown) => {
       this.logger.error(`In-app notif cancelación viático: ${err instanceof Error ? err.message : String(err)}`)
     })

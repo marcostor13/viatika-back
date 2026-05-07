@@ -9,6 +9,21 @@ export type ExpenseReportStatus =
   | 'rejected'
   | 'reimbursed'
   | 'closed'
+
+export type ReopeningStatus = 'none' | 'requested' | 'approved'
+
+export interface ClosureRecord {
+  closedAt: Date
+  closedBy: string
+  documentHashes?: string[]
+  reopeningStatus: ReopeningStatus
+  reopeningRequestedBy?: string
+  reopeningRequestedAt?: Date
+  reopeningReason?: string
+  reopeningApprovedBy?: string
+  reopeningApprovedAt?: Date
+  reopenedAt?: Date
+}
 export type SettlementType = 'reembolso' | 'devolucion' | 'equilibrado'
 
 export interface Settlement {
@@ -75,6 +90,7 @@ export interface ExpenseReportDocument extends Document {
   reimbursementPaymentInfo?: ReimbursementPaymentInfo
   reimbursedAt?: Date
   reimbursementAccountingNotifiedAt?: Date
+  closureRecord?: ClosureRecord
 }
 
 @Schema({ timestamps: true })
@@ -206,6 +222,9 @@ export class ExpenseReport {
 
   @Prop({ type: Date, required: false })
   reimbursementAccountingNotifiedAt?: Date
+
+  @Prop({ type: Object, required: false })
+  closureRecord?: ClosureRecord
 }
 
 export const ExpenseReportSchema = SchemaFactory.createForClass(ExpenseReport)

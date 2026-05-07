@@ -245,6 +245,69 @@ export class ExpenseReportController {
     return result
   }
 
+  // ─── Fase 8 — Cierre Definitivo ────────────────────────────────────────────
+
+  /** Valida condiciones de cierre sin cerrar. */
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Get(':id/close/validate')
+  validateClosure(@Param('id') id: string) {
+    return this.expenseReportService.validateClosureConditions(id)
+  }
+
+  /** Cierra definitivamente la rendición. */
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Patch(':id/close')
+  async close(@Param('id') id: string, @Request() req: any) {
+    const closedBy = req.user._id || req.user.sub
+    const result = await this.expenseReportService.close(id, String(closedBy))
+    await this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email || 'Usuario',
+      action: 'close_rendicion',
+      module: 'rendiciones',
+      entityId: id,
+      clientId: req.user.clientId,
+    })
+    return result
+  }
+
+  /** Solicita reapertura de una rendición cerrada. */
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Post(':id/reopen-request')
+  async requestReopening(
+    @Param('id') id: string,
+    @Body() body: { reason: string },
+    @Request() req: any
+  ) {
+    const requestedBy = req.user._id || req.user.sub
+    return this.expenseReportService.requestReopening(id, String(requestedBy), body.reason)
+  }
+
+  /** Aprueba o rechaza la reapertura (SuperAdmin/Contabilidad). */
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Patch(':id/reopen-approve')
+  async approveReopening(
+    @Param('id') id: string,
+    @Body() body: { approve: boolean },
+    @Request() req: any
+  ) {
+    const approvedBy = req.user._id || req.user.sub
+    const result = await this.expenseReportService.approveReopening(id, String(approvedBy), body.approve)
+    await this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email || 'Usuario',
+      action: body.approve ? 'approve_reopen_rendicion' : 'reject_reopen_rendicion',
+      module: 'rendiciones',
+      entityId: id,
+      clientId: req.user.clientId,
+    })
+    return result
+  }
+
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
   @Post(':id/affidavit')

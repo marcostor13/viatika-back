@@ -1200,6 +1200,148 @@ export class AdvanceService {
     return advance.save()
   }
 
+  // ─── FASE 7 — Sub-flujo de devolución de saldo ────────────────────────────
+
+  /** Inicia el registro de devolución luego de settle() cuando type='devolucion'. */
+  async initiateReturnTracking(id: string): Promise<Advance> {
+    const advance = await this.advanceModel.findById(id)
+    if (!advance) throw new NotFoundException(`Anticipo ${id} no encontrado`)
+    if (advance.status !== 'settled') {
+      throw new BadRequestException('Solo se puede iniciar devolución desde estado liquidado')
+    }
+    if (!advance.settlement || advance.settlement.type !== 'devolucion') {
+      throw new BadRequestException('Este anticipo no tiene saldo a devolver')
+    }
+    const dueDate = this.addBusinessDays(new Date(), 10)
+    const returnRecord = {
+      status: 'pending' as const,
+      amountDue: advance.settlement.difference,
+      dueDate,
+      isOverdue: false,
+      remindersSent: 0,
+    }
+    await this.advanceModel.findByIdAndUpdate(id, { $set: { returnRecord } })
+    const collaborator = await this.userService.findEmailNameClient(advance.userId.toString())
+    if (collaborator?.email) {
+      this.emailService.sendDevolucionPendiente(collaborator.email, {
+        recipientName: collaborator.name,
+        amountDue: advance.settlement.difference.toFixed(2),
+        dueDate: dueDate.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric' }),
+        advanceId: id,
+      }).catch(err => this.logger.error(`Email devolución pendiente: ${err?.message}`))
+    }
+    return (await this.advanceModel.findById(id))!
+  }
+
+  /** Colaborador carga el comprobante de depósito (Fase 7.3). */
+  async uploadReturnProof(
+    id: string,
+    proof: {
+      depositDate: Date
+      amountReturned: number
+      bankOrigin: string
+      operationNumber: string
+      fileUrl: string
+      fileKey?: string
+      note?: string
+    }
+  ): Promise<Advance> {
+    const advance = await this.advanceModel.findById(id)
+    if (!advance) throw new NotFoundException(`Anticipo ${id} no encontrado`)
+    const rr = (advance as any).returnRecord
+    if (!rr || rr.status !== 'pending') {
+      throw new BadRequestException('El anticipo no tiene una devolución pendiente de comprobante')
+    }
+    if (proof.amountReturned < rr.amountDue) {
+      throw new BadRequestException(
+        `El monto devuelto (${proof.amountReturned}) es menor al monto adeudado (${rr.amountDue})`
+      )
+    }
+    const updatedRr = {
+      ...rr,
+      status: 'proof_uploaded' as const,
+      proof: { ...proof, uploadedAt: new Date() },
+    }
+    await this.advanceModel.findByIdAndUpdate(id, { $set: { returnRecord: updatedRr } })
+    return (await this.advanceModel.findById(id))!
+  }
+
+  /** Contabilidad valida o rechaza el comprobante (Fase 7.4). */
+  async validateReturn(
+    id: string,
+    approved: boolean,
+    validatedBy: string,
+    rejectionReason?: string
+  ): Promise<Advance> {
+    const advance = await this.advanceModel.findById(id)
+    if (!advance) throw new NotFoundException(`Anticipo ${id} no encontrado`)
+    const rr = (advance as any).returnRecord
+    if (!rr || rr.status !== 'proof_uploaded') {
+      throw new BadRequestException('No hay comprobante pendiente de validación')
+    }
+    if (!approved && (!rejectionReason || rejectionReason.trim().length < 50)) {
+      throw new BadRequestException('El motivo de rechazo debe tener al menos 50 caracteres')
+    }
+    const validation = { validatedBy, validatedAt: new Date(), approved, rejectionReason }
+    const newStatus = approved ? 'validated' : 'rejected'
+    const updatedRr = { ...rr, status: newStatus, validation }
+    const updates: any = { returnRecord: updatedRr }
+    if (approved) {
+      updates.status = 'returned'
+      updates.returnedAmount = rr.proof?.amountReturned ?? rr.amountDue
+    }
+    await this.advanceModel.findByIdAndUpdate(id, { $set: updates })
+    const collaborator = await this.userService.findEmailNameClient(advance.userId.toString())
+    if (collaborator?.email) {
+      const sendFn = approved
+        ? this.emailService.sendDevolucionValidada.bind(this.emailService)
+        : this.emailService.sendDevolucionRechazada.bind(this.emailService)
+      sendFn(collaborator.email, {
+        recipientName: collaborator.name,
+        amountDue: rr.amountDue.toFixed(2),
+        rejectionReason,
+        advanceId: id,
+      }).catch((err: any) => this.logger.error(`Email validación devolución: ${err?.message}`))
+    }
+    return (await this.advanceModel.findById(id))!
+  }
+
+  /** Devuelve anticipos con devoluciones pendientes del cliente (para vista de contabilidad). */
+  async findPendingReturns(clientId: string): Promise<Advance[]> {
+    return this.advanceModel
+      .find({
+        clientId: new Types.ObjectId(clientId),
+        'returnRecord.status': { $in: ['pending', 'proof_uploaded', 'rejected'] },
+      })
+      .populate('userId', 'name email')
+      .exec() as Promise<Advance[]>
+  }
+
+  /** Marca devoluciones vencidas (llamado desde cron o manualmente). */
+  async markOverdueReturns(): Promise<number> {
+    const now = new Date()
+    const result = await this.advanceModel.updateMany(
+      {
+        'returnRecord.status': 'pending',
+        'returnRecord.dueDate': { $lt: now },
+        'returnRecord.isOverdue': false,
+      },
+      { $set: { 'returnRecord.isOverdue': true } }
+    )
+    return (result as any).modifiedCount ?? 0
+  }
+
+  private addBusinessDays(date: Date, days: number): Date {
+    const result = new Date(date)
+    let added = 0
+    while (added < days) {
+      result.setDate(result.getDate() + 1)
+      const dow = result.getDay()
+      if (dow !== 0 && dow !== 6) added++
+    }
+    return result
+  }
+
   /**
    * Fase 3 — colaborador corrige y reenvía; conserva historial y aumenta versión.
    */

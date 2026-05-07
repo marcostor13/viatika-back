@@ -1,5 +1,7 @@
 import {
   Injectable,
+  Inject,
+  forwardRef,
   NotFoundException,
   BadRequestException,
   ForbiddenException,
@@ -33,6 +35,7 @@ export class AdvanceService {
   constructor(
     @InjectModel(Advance.name)
     private readonly advanceModel: Model<AdvanceDocument>,
+    @Inject(forwardRef(() => ExpenseReportService))
     private readonly expenseReportService: ExpenseReportService,
     private readonly projectService: ProjectService,
     private readonly categoryService: CategoryService,

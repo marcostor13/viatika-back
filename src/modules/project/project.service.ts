@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { CreateProjectDto } from './dto/create-project.dto'
 import { UpdateProjectDto } from './dto/update-project.dto'
 import { InjectModel } from '@nestjs/mongoose'
@@ -29,6 +29,7 @@ export class ProjectService {
       code: project.code,
       isActive: project.isActive,
       client: project.clientId,
+      clientName: project.clientName,
       committedAdvanceTotal: project.committedAdvanceTotal ?? 0,
     }
   }
@@ -72,13 +73,37 @@ export class ProjectService {
     return this.toResponse(project)
   }
 
-  async findAll(clientId: string) {
+  async findAll(
+    clientId: string,
+    opts?: { page?: number; limit?: number; search?: string; isActive?: boolean }
+  ) {
     const clientIdObject = new Types.ObjectId(clientId)
-    const projects = await this.projectModel
-      .find({ clientId: clientIdObject })
-      .populate('clientId')
-      .exec()
-    return projects.map((p) => this.toResponse(p))
+    const filter: any = { clientId: clientIdObject }
+
+    if (opts?.isActive !== undefined) {
+      filter.isActive = opts.isActive
+    }
+    if (opts?.search) {
+      const re = new RegExp(opts.search, 'i')
+      filter.$or = [{ name: re }, { code: re }]
+    }
+
+    const usePagination = opts?.page !== undefined || opts?.limit !== undefined
+    const page = opts?.page ?? 1
+    const limit = opts?.limit ?? 200
+    const skip = (page - 1) * limit
+
+    const [projects, total] = await Promise.all([
+      this.projectModel.find(filter).skip(skip).limit(limit).populate('clientId').exec(),
+      this.projectModel.countDocuments(filter).exec(),
+    ])
+
+    const data = projects.map((p) => this.toResponse(p))
+
+    if (usePagination) {
+      return { data, total, page, pages: Math.ceil(total / limit), limit }
+    }
+    return data
   }
 
   async findOne(id: string, clientId: string) {
@@ -99,6 +124,18 @@ export class ProjectService {
     clientId: string
   ) {
     const clientIdObject = new Types.ObjectId(clientId)
+
+    if (updateProjectDto.isActive === false) {
+      const activeExpenses = await (this.projectModel.db.model('Expense') as any)
+        .countDocuments({ proyectId: new Types.ObjectId(id), status: { $nin: ['rejected'] } })
+        .catch(() => 0)
+      if (activeExpenses > 0) {
+        throw new BadRequestException(
+          `Este proyecto tiene ${activeExpenses} comprobante(s) activo(s). Puede desactivarlo, pero los gastos existentes se conservarán.`
+        )
+      }
+    }
+
     const project = await this.projectModel
       .findOneAndUpdate(
         { _id: new Types.ObjectId(id), clientId: clientIdObject },
@@ -113,6 +150,34 @@ export class ProjectService {
     }
 
     return this.toResponse(project)
+  }
+
+  async bulkImport(
+    rows: Array<Record<string, any>>,
+    clientId: string
+  ): Promise<{ created: number; skipped: string[]; errors: string[] }> {
+    let created = 0
+    const skipped: string[] = []
+    const errors: string[] = []
+    const clientIdObj = new Types.ObjectId(clientId)
+
+    for (const row of rows) {
+      const name = String(row['Nombre Proyecto'] ?? row['name'] ?? '').trim()
+      if (!name) { errors.push('Fila sin nombre de proyecto'); continue }
+
+      const code = String(row['Código'] ?? row['Codigo'] ?? row['code'] ?? '').trim() || this.generateCode(name)
+      const clientName = String(row['Nombre Cliente'] ?? '').trim() || undefined
+
+      try {
+        const exists = await this.projectModel.findOne({ code, clientId: clientIdObj }).exec()
+        if (exists) { skipped.push(code); continue }
+        await this.projectModel.create({ name, code, clientId: clientIdObj, clientName })
+        created++
+      } catch (e: any) {
+        errors.push(`${code}: ${e?.message || 'error'}`)
+      }
+    }
+    return { created, skipped, errors }
   }
 
   async remove(id: string, clientId: string) {

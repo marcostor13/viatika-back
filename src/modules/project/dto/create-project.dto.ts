@@ -16,4 +16,8 @@ export class CreateProjectDto {
   @IsString()
   @IsNotEmpty()
   clientId: string
+
+  @IsString()
+  @IsOptional()
+  clientName?: string
 }

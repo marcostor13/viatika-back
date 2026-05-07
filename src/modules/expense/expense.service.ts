@@ -874,6 +874,15 @@ export class ExpenseService {
         HttpStatus.BAD_REQUEST
       )
     }
+    if (body.userId) {
+      const profile = await this.userService.findTransactionalProfile(body.userId)
+      if (!profile?.signature) {
+        throw new HttpException(
+          'Debes registrar tu firma digital antes de enviar una Declaración Jurada. Ve a tu perfil para añadirla.',
+          HttpStatus.UNPROCESSABLE_ENTITY
+        )
+      }
+    }
 
     const deadlineMeta = this.evaluateDeadline(body.fechaEmision)
     const categoryMeta = await this.evaluateCategoryLimit(body, body.total)
@@ -1087,8 +1096,11 @@ export class ExpenseService {
     return expense
   }
 
-  async findAll(clientId: string, filters: any = {}): Promise<Expense[]> {
+  async findAll(clientId: string, filters: any = {}): Promise<{ data: Expense[]; total: number; page: number; pages: number; limit: number }> {
     const query: any = { clientId }
+    const page = filters.page ? Math.max(1, parseInt(String(filters.page), 10)) : 1
+    const limit = filters.limit ? Math.min(200, parseInt(String(filters.limit), 10)) : 20
+    const skip = (page - 1) * limit
 
     const isValidObjectId = (id: string): boolean => {
       return /^[0-9a-fA-F]{24}$/.test(id)
@@ -1163,7 +1175,8 @@ export class ExpenseService {
         filters.correlativo,
         clientId
       )
-      return expense ? [expense] : []
+      const data = expense ? [expense] : []
+      return { data, total: data.length, page: 1, pages: 1, limit }
     }
 
     // Si hay filtros de fecha, usar agregación para comparar fechas correctamente
@@ -1228,7 +1241,7 @@ export class ExpenseService {
                   vars: { parts: { $split: ['$fechaEmision', '-'] } },
                   in: {
                     $cond: {
-                      if: { $eq: [{ $strLenCP: { $arrayElemAt: ['$$parts', 0] } }, 4] },
+                      if: { $eq: [{ $strLenCP: { $ifNull: [{ $arrayElemAt: ['$$parts', 0] }, ''] } }, 4] },
                       then: '$fechaEmision',
                       else: {
                         $concat: [
@@ -1282,70 +1295,61 @@ export class ExpenseService {
         pipeline.push({ $match: dateFilter })
       }
 
-      // Remover el campo temporal
-      pipeline.push({
-        $project: {
-          fechaEmisionDate: 0,
-        },
-      })
-
-      // Aplicar ordenamiento
+      // Sort by parsed date for correct ordering, then paginate
       const sortBy = filters.sortBy || 'fechaEmision'
       const sortOrder = filters.sortOrder || 'desc'
-      const sortOptions: any = {}
-      sortOptions[sortBy] = sortOrder === 'desc' ? -1 : 1
-      pipeline.push({ $sort: sortOptions })
+      const sortField = sortBy === 'fechaEmision' ? 'fechaEmisionDate' : sortBy
+      pipeline.push({ $sort: { [sortField]: sortOrder === 'desc' ? -1 : 1 } })
 
-      // Ejecutar agregación
-      const result = await this.expenseRepository.aggregate(pipeline)
-
-      // Populate las referencias
-      const populatedResult = await this.expenseRepository.populate(result, [
+      const [facetResult] = await this.expenseRepository.aggregate([
+        ...pipeline,
+        {
+          $facet: {
+            data: [{ $skip: skip }, { $limit: limit }, { $project: { fechaEmisionDate: 0 } }],
+            count: [{ $count: 'total' }],
+          },
+        },
+      ])
+      const rawData = facetResult?.data ?? []
+      const total = facetResult?.count?.[0]?.total ?? 0
+      const populatedResult = await this.expenseRepository.populate(rawData, [
         { path: 'proyectId' },
         { path: 'categoryId' },
-      ])
-
-      // Ordenar por fechaEmision si es necesario (ya que MongoDB no puede ordenar strings de fecha correctamente)
-      if (sortBy === 'fechaEmision') {
-        return populatedResult.sort((a, b) => {
-          if (!a.fechaEmision || !b.fechaEmision) return 0
-          const dateA = new Date(a.fechaEmision.split('-').reverse().join('-'))
-          const dateB = new Date(b.fechaEmision.split('-').reverse().join('-'))
-          return sortOrder === 'desc'
-            ? dateB.getTime() - dateA.getTime()
-            : dateA.getTime() - dateB.getTime()
-        })
-      }
-
-      return populatedResult
+      ]) as unknown as Expense[]
+      return { data: populatedResult, total, page, pages: Math.ceil(total / limit), limit }
     }
 
     const sortBy = filters.sortBy || 'fechaEmision'
     const sortOrder = filters.sortOrder || 'desc'
-
     const sortOptions: any = {}
     sortOptions[sortBy] = sortOrder === 'desc' ? -1 : 1
 
-    const result = await this.expenseRepository
-      .find(query)
-      .populate('proyectId')
-      .populate('categoryId')
-      .sort(sortOptions)
-      .exec()
+    const [result, total] = await Promise.all([
+      this.expenseRepository.find(query).populate('proyectId').populate('categoryId').sort(sortOptions).skip(skip).limit(limit).exec(),
+      this.expenseRepository.countDocuments(query),
+    ])
 
-    // Ordenar por fechaEmision si es necesario (ya que MongoDB no puede ordenar strings de fecha correctamente)
+    let data: Expense[] = result
     if (sortBy === 'fechaEmision') {
-      return result.sort((a, b) => {
+      data = result.sort((a, b) => {
         if (!a.fechaEmision || !b.fechaEmision) return 0
         const dateA = new Date(a.fechaEmision.split('-').reverse().join('-'))
         const dateB = new Date(b.fechaEmision.split('-').reverse().join('-'))
-        return sortOrder === 'desc'
-          ? dateB.getTime() - dateA.getTime()
-          : dateA.getTime() - dateB.getTime()
+        return sortOrder === 'desc' ? dateB.getTime() - dateA.getTime() : dateA.getTime() - dateB.getTime()
       })
     }
 
-    return result
+    return { data, total, page, pages: Math.ceil(total / limit), limit }
+  }
+
+  async getStatusCounts(clientId: string): Promise<{ pending: number; approved: number; rejected: number; total: number }> {
+    const match = { clientId: new Types.ObjectId(clientId) }
+    const [total, approved, rejected] = await Promise.all([
+      this.expenseRepository.countDocuments(match),
+      this.expenseRepository.countDocuments({ ...match, status: { $in: ['approved', 'APPROVED'] } }),
+      this.expenseRepository.countDocuments({ ...match, status: { $in: ['rejected', 'REJECTED'] } }),
+    ])
+    return { total, approved, rejected, pending: total - approved - rejected }
   }
 
   async findOne(id: string): Promise<Expense | null> {

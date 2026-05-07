@@ -8,6 +8,7 @@ import {
   Delete,
   UseGuards,
   Query,
+  Request,
 } from '@nestjs/common'
 import { CategoryService } from './category.service'
 import { CreateCategoryDto } from './dto/create-category.dto'
@@ -17,17 +18,31 @@ import { RolesGuard } from '../auth/guards/roles.guard'
 import { ROLES } from '../auth/enums/roles.enum'
 import { Roles } from '../auth/decorators/roles.decorador'
 import { AuthGuard } from '@nestjs/passport'
+import { AuditLogService } from '../audit-log/audit-log.service'
 
 @UseGuards(AuthGuard('jwt'), RolesGuard)
 @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
 @Controller('category')
 export class CategoryController {
-  constructor(private readonly categoryService: CategoryService) {}
+  constructor(
+    private readonly categoryService: CategoryService,
+    private readonly auditLogService: AuditLogService
+  ) {}
 
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  create(@Body() createCategoryDto: CreateCategoryDto) {
-    return this.categoryService.create(createCategoryDto)
+  async create(@Body() createCategoryDto: CreateCategoryDto, @Request() req: any) {
+    const result = await this.categoryService.create(createCategoryDto)
+    this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email,
+      action: 'create_category',
+      module: 'categorias',
+      entityId: (result as any)?._id?.toString(),
+      details: createCategoryDto.name,
+      clientId: req.user.clientId,
+    })
+    return result
   }
 
   @Get(':clientId/flat')
@@ -67,17 +82,42 @@ export class CategoryController {
 
   @Patch(':id/:clientId')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  update(
+  async update(
     @Param('id') id: string,
     @Param('clientId') clientId: string,
-    @Body() updateCategoryDto: UpdateCategoryDto
+    @Body() updateCategoryDto: UpdateCategoryDto,
+    @Request() req: any
   ) {
-    return this.categoryService.update(id, updateCategoryDto, clientId)
+    const before = await this.categoryService.findOne(id, clientId).catch(() => null)
+    const result = await this.categoryService.update(id, updateCategoryDto, clientId)
+    this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email,
+      action: 'update_category',
+      module: 'categorias',
+      entityId: id,
+      details: JSON.stringify({ before: { limit: (before as any)?.limit }, after: { limit: updateCategoryDto.limit } }),
+      clientId: req.user.clientId,
+    })
+    return result
   }
 
   @Delete(':id/:clientId')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  remove(@Param('id') id: string, @Param('clientId') clientId: string) {
-    return this.categoryService.remove(id, clientId)
+  async remove(
+    @Param('id') id: string,
+    @Param('clientId') clientId: string,
+    @Request() req: any
+  ) {
+    const result = await this.categoryService.remove(id, clientId)
+    this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email,
+      action: 'delete_category',
+      module: 'categorias',
+      entityId: id,
+      clientId: req.user.clientId,
+    })
+    return result
   }
 }

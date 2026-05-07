@@ -12,9 +12,19 @@ export class AuditLogController {
   constructor(private readonly auditLogService: AuditLogService) {}
 
   @Get()
-  findAll(@Request() req: any, @Query('limit') limit?: string) {
+  findAll(
+    @Request() req: any,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('module') module?: string,
+    @Query('search') search?: string,
+  ) {
     const clientId = req.user.clientId
-    const parsedLimit = limit ? parseInt(limit, 10) : 200
-    return this.auditLogService.findAll(clientId, parsedLimit)
+    return this.auditLogService.findAll(clientId, {
+      page: page ? parseInt(page, 10) : 1,
+      limit: limit ? parseInt(limit, 10) : 20,
+      module,
+      search,
+    })
   }
 }

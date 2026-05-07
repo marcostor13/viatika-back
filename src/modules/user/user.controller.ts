@@ -11,7 +11,11 @@ import {
   Param,
   Patch,
   Delete,
+  Query,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common'
+import { FileInterceptor } from '@nestjs/platform-express'
 import { UserService } from './user.service'
 import { AuthGuard } from '@nestjs/passport'
 import { RolesGuard } from '../auth/guards/roles.guard'
@@ -58,9 +62,23 @@ export class UserController {
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
   @Get('client/:clientId')
   async findAll(
-    @Param('clientId', ParseObjectIdPipe) clientId: Types.ObjectId
+    @Param('clientId', ParseObjectIdPipe) clientId: Types.ObjectId,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+    @Query('roleName') roleName?: string
   ) {
-    return await this.userService.findAll(clientId)
+    if (page || limit || search || status || roleName) {
+      return this.userService.findAllPaginated(clientId, {
+        page: page ? parseInt(page, 10) : undefined,
+        limit: limit ? parseInt(limit, 10) : undefined,
+        search,
+        status,
+        roleName,
+      })
+    }
+    return this.userService.findAll(clientId)
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
@@ -108,6 +126,68 @@ export class UserController {
   @Delete(':id')
   async delete(@Param('id', ParseObjectIdPipe) id: Types.ObjectId) {
     return await this.userService.delete(id.toString())
+  }
+
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Post(':id/reset-password')
+  async resetPassword(
+    @Param('id', ParseObjectIdPipe) id: Types.ObjectId,
+    @Request() req: any
+  ) {
+    const result = await this.userService.resetPassword(id.toString())
+    this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email,
+      action: 'reset_password',
+      module: 'usuarios',
+      entityId: id.toString(),
+      clientId: req.user.clientId,
+    })
+    return result
+  }
+
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Post('bulk-import')
+  @UseInterceptors(FileInterceptor('file'))
+  async bulkImport(
+    @UploadedFile() file: Express.Multer.File,
+    @Body() body: { clientId: string; roleId: string },
+    @Request() req: any
+  ) {
+    if (!file) throw new Error('No se recibió archivo')
+    const xlsx = await import('xlsx')
+    const wb = xlsx.read(file.buffer, { type: 'buffer' })
+    const ws = wb.Sheets[wb.SheetNames[0]]
+    const rows: any[] = xlsx.utils.sheet_to_json(ws)
+    const clientId = body.clientId || req.user?.clientId
+    const roleId = body.roleId
+    const result = await this.userService.bulkImportUsers(rows, clientId, roleId)
+    this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email,
+      action: 'bulk_import_users',
+      module: 'usuarios',
+      details: `Creados: ${result.created}, Omitidos: ${result.skipped.length}, Errores: ${result.errors.length}`,
+      clientId,
+    })
+    return result
+  }
+
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Get('bulk-import/template')
+  async downloadTemplate(@Request() req: any) {
+    const xlsx = await import('xlsx')
+    const ws = xlsx.utils.aoa_to_sheet([
+      ['name', 'email', 'password', 'roleId', 'coordinatorId'],
+      ['Juan Pérez', 'juan@empresa.com', 'Pass123!', '', ''],
+    ])
+    const wb = xlsx.utils.book_new()
+    xlsx.utils.book_append_sheet(wb, ws, 'Usuarios')
+    const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' })
+    return { file: buffer.toString('base64'), filename: 'plantilla_usuarios.xlsx' }
   }
 
   @UseGuards(AuthGuard('jwt'))

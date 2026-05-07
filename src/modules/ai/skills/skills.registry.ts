@@ -199,7 +199,8 @@ export class SkillsExecutor {
       if (input['dateTo']) filters['dateTo'] = input['dateTo']
       if (!isAdmin) filters['createdBy'] = ctx.userId
 
-      const expenses = await this.expenseService.findAll(ctx.clientId, filters)
+      const result = await this.expenseService.findAll(ctx.clientId, filters)
+      const expenses = result.data
       const totalAmount = expenses.reduce((sum, e) => sum + (e.total ?? 0), 0)
       const byStatus = expenses.reduce<Record<string, number>>((acc, e) => {
         acc[e.status] = (acc[e.status] ?? 0) + 1
@@ -207,7 +208,7 @@ export class SkillsExecutor {
       }, {})
 
       return JSON.stringify({
-        totalGastos: expenses.length,
+        totalGastos: result.total,
         montoTotal: `S/ ${totalAmount.toFixed(2)}`,
         porEstado: byStatus,
         periodo: {

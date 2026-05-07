@@ -14,7 +14,14 @@ export class UpdateExpenseReportDto extends PartialType(
   CreateExpenseReportDto
 ) {
   @IsOptional()
-  @IsIn(['solicited', 'open', 'submitted', 'approved', 'rejected', 'closed'])
+  @IsIn([
+    'solicited',
+    'open',
+    'submitted',
+    'approved',
+    'rejected',
+    'closed',
+  ])
   status?: ExpenseReportStatus
 
   @IsOptional()

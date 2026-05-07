@@ -365,7 +365,6 @@ export class AdvanceService {
         : String(advance.endDate).slice(0, 10)
 
     const plainSummary = [
-      `ID solicitud: ${advanceId}`,
       `Colaborador: ${collaborator?.name ?? ''}`,
       `Lugar: ${advance.place}`,
       `Fechas: ${startStr} al ${endStr}`,
@@ -374,9 +373,10 @@ export class AdvanceService {
     ].join('\n')
 
     const platformUrl =
+      process.env.HOST ||
       process.env.APP_PUBLIC_URL ||
       process.env.FRONTEND_URL ||
-      'https://app.viatica.tecdidata.com'
+      'http://localhost:4200'
 
     const setNotif = async (payload: {
       recipientUserId?: Types.ObjectId

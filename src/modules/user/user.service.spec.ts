@@ -113,17 +113,19 @@ describe('UserService', () => {
       clientId,
     }
 
-    it('hashes password and creates user', async () => {
+    it('auto-genera contraseña temporal y crea usuario', async () => {
       ;(bcrypt.hash as jest.Mock).mockResolvedValue('hashed_pw')
       mockUserModel.findOne.mockReturnValue(makeChain(null))
       mockUserModel.create.mockResolvedValue({ _id: new Types.ObjectId() })
       mockUserModel.findById.mockReturnValue(makeChain(mockUserDoc))
       const result = await service.create(dto)
-      expect(bcrypt.hash).toHaveBeenCalledWith('plain123', 10)
+      // La contraseña que se hashea es la temporal generada automáticamente, no la del DTO
+      expect(bcrypt.hash).toHaveBeenCalledWith(expect.any(String), 10)
       expect(mockUserModel.create).toHaveBeenCalledWith(
-        expect.objectContaining({ password: 'hashed_pw' })
+        expect.objectContaining({ password: 'hashed_pw', mustChangePassword: true })
       )
       expect(result).toMatchObject({ email: 'user@example.com' })
+      expect((result as any).temporaryPassword).toBeDefined()
     })
 
     it('throws BadRequestException when email already registered', async () => {

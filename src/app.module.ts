@@ -19,6 +19,8 @@ import { AdvanceModule } from './modules/advance/advance.module'
 import { AuditLogModule } from './modules/audit-log/audit-log.module'
 import { NotificationsModule } from './modules/notifications/notifications.module'
 import { AiModule } from './modules/ai/ai.module'
+import { DirectReimbursementModule } from './modules/direct-reimbursement/direct-reimbursement.module'
+import { PettyCashModule } from './modules/petty-cash/petty-cash.module'
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -41,6 +43,8 @@ import { AiModule } from './modules/ai/ai.module'
     AuditLogModule,
     NotificationsModule,
     AiModule,
+    DirectReimbursementModule,
+    PettyCashModule,
   ],
   controllers: [AppController],
   providers: [AppService],

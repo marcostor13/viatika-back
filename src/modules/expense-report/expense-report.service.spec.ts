@@ -323,6 +323,262 @@ describe('ExpenseReportService — Fase 5 (envío y aprobación final)', () => {
   })
 })
 
+describe('ExpenseReportService — Fase 8 (cierre definitivo)', () => {
+  let service: ExpenseReportService
+  let mockExpenseReportModel: Record<string, jest.Mock>
+
+  const mockEmailServicePhase8 = {
+    sendRendicionFullyApprovedEmail: jest.fn().mockResolvedValue(undefined),
+    sendRendicionReembolsoPagado: jest.fn().mockResolvedValue(undefined),
+    sendRendicionCerrada: jest.fn().mockResolvedValue(undefined),
+  }
+
+  const mockUserServicePhase8 = {
+    findAdminsByClient: jest.fn().mockResolvedValue([]),
+    findOne: jest.fn().mockResolvedValue({ name: 'Colaborador', email: 'c@test.com' }),
+    findTransactionalProfile: jest.fn().mockResolvedValue(null),
+    findEmailNameClient: jest.fn().mockResolvedValue({ name: 'Colaborador', email: 'c@test.com' }),
+  }
+
+  function makeReportDoc(overrides: Record<string, unknown> = {}) {
+    return {
+      _id: new Types.ObjectId(reportId),
+      title: 'Rendición Test',
+      status: 'approved',
+      clientId: new Types.ObjectId(clientId),
+      userId: new Types.ObjectId(userId),
+      settlement: { type: 'reembolso' as const, difference: -50 },
+      expenseIds: [],
+      closureRecord: undefined,
+      ...overrides,
+    }
+  }
+
+  beforeEach(async () => {
+    jest.clearAllMocks()
+
+    mockExpenseReportModel = {
+      findById: jest.fn(),
+      findByIdAndUpdate: jest.fn().mockReturnValue({
+        exec: jest.fn().mockResolvedValue(makeReportDoc({ status: 'closed' })),
+      }),
+    }
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ExpenseReportService,
+        { provide: getModelToken(ExpenseReport.name), useValue: mockExpenseReportModel },
+        { provide: EmailService, useValue: mockEmailServicePhase8 },
+        { provide: NotificationsService, useValue: mockNotificationsService },
+        { provide: UserService, useValue: mockUserServicePhase8 },
+        { provide: AdvanceService, useValue: mockAdvanceService },
+      ],
+    }).compile()
+
+    service = module.get<ExpenseReportService>(ExpenseReportService)
+  })
+
+  describe('validateClosureConditions', () => {
+    it('devuelve error si la rendición ya está cerrada', async () => {
+      mockExpenseReportModel.findById.mockReturnValue({
+        populate: jest.fn().mockReturnValue({
+          exec: jest.fn().mockResolvedValue(makeReportDoc({ status: 'closed' })),
+        }),
+      })
+      const errors = await service.validateClosureConditions(reportId)
+      expect(errors).toContain('La rendición ya está cerrada')
+    })
+
+    it('devuelve error si estado no es approved ni reimbursed', async () => {
+      mockExpenseReportModel.findById.mockReturnValue({
+        populate: jest.fn().mockReturnValue({
+          exec: jest.fn().mockResolvedValue(makeReportDoc({ status: 'submitted' })),
+        }),
+      })
+      const errors = await service.validateClosureConditions(reportId)
+      expect(errors.some(e => e.includes('submitted'))).toBe(true)
+    })
+
+    it('devuelve error si hay gasto con devolución pendiente sin validar', async () => {
+      mockExpenseReportModel.findById.mockReturnValue({
+        populate: jest.fn().mockReturnValue({
+          exec: jest.fn().mockResolvedValue(makeReportDoc({
+            status: 'reimbursed',
+            settlement: { type: 'reembolso' },
+            returnRecord: { status: 'proof_uploaded' },
+          })),
+        }),
+      })
+      const errors = await service.validateClosureConditions(reportId)
+      expect(errors.some(e => e.includes('Devolución pendiente'))).toBe(true)
+    })
+
+    it('devuelve lista vacía cuando todas las condiciones se cumplen', async () => {
+      mockExpenseReportModel.findById.mockReturnValue({
+        populate: jest.fn().mockReturnValue({
+          exec: jest.fn().mockResolvedValue(makeReportDoc({
+            status: 'reimbursed',
+            settlement: { type: 'reembolso' },
+            expenseIds: [],
+          })),
+        }),
+      })
+      const errors = await service.validateClosureConditions(reportId)
+      expect(errors).toHaveLength(0)
+    })
+  })
+
+  describe('close', () => {
+    it('lanza BadRequestException si hay errores de validación', async () => {
+      mockExpenseReportModel.findById.mockReturnValue({
+        populate: jest.fn().mockReturnValue({
+          exec: jest.fn().mockResolvedValue(makeReportDoc({ status: 'submitted' })),
+        }),
+      })
+      await expect(service.close(reportId, userId)).rejects.toThrow(BadRequestException)
+    })
+
+    it('cierra la rendición y envía email al colaborador', async () => {
+      mockExpenseReportModel.findById.mockReturnValue({
+        populate: jest.fn().mockReturnValue({
+          exec: jest.fn().mockResolvedValue(makeReportDoc({
+            status: 'reimbursed',
+            settlement: { type: 'reembolso' },
+          })),
+        }),
+      })
+      const updatedDoc = makeReportDoc({ status: 'closed' })
+      mockExpenseReportModel.findByIdAndUpdate.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(updatedDoc),
+      })
+
+      const result = await service.close(reportId, userId)
+
+      expect(mockExpenseReportModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        reportId,
+        expect.objectContaining({ $set: expect.objectContaining({ status: 'closed' }) }),
+        { new: true }
+      )
+      expect(result.status).toBe('closed')
+    })
+  })
+
+  describe('requestReopening', () => {
+    it('lanza BadRequestException si la rendición no está cerrada', async () => {
+      mockExpenseReportModel.findById.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(makeReportDoc({ status: 'approved' })),
+      })
+      const longReason = 'x'.repeat(200)
+      await expect(service.requestReopening(reportId, userId, longReason)).rejects.toThrow(/cerradas/)
+    })
+
+    it('lanza BadRequestException si el motivo es menor a 200 caracteres', async () => {
+      mockExpenseReportModel.findById.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(makeReportDoc({ status: 'closed' })),
+      })
+      await expect(service.requestReopening(reportId, userId, 'corto')).rejects.toThrow(/200 caracteres/)
+    })
+
+    it('persiste la solicitud de reapertura con motivo válido', async () => {
+      mockExpenseReportModel.findById.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(makeReportDoc({ status: 'closed', closureRecord: { reopeningStatus: 'none' } })),
+      })
+      const updatedDoc = makeReportDoc({ status: 'closed' })
+      mockExpenseReportModel.findByIdAndUpdate.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(updatedDoc),
+      })
+
+      const longReason = 'x'.repeat(200)
+      await service.requestReopening(reportId, userId, longReason)
+
+      expect(mockExpenseReportModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        reportId,
+        expect.objectContaining({
+          $set: expect.objectContaining({
+            closureRecord: expect.objectContaining({ reopeningStatus: 'requested' }),
+          }),
+        }),
+        { new: true }
+      )
+    })
+  })
+
+  describe('approveReopening', () => {
+    it('lanza BadRequestException si no hay solicitud de reapertura pendiente', async () => {
+      mockExpenseReportModel.findById.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(makeReportDoc({
+          status: 'closed',
+          closureRecord: { reopeningStatus: 'none' },
+        })),
+      })
+      await expect(service.approveReopening(reportId, userId, true)).rejects.toThrow(/pendiente/)
+    })
+
+    it('aprueba la reapertura: vuelve a estado approved', async () => {
+      mockExpenseReportModel.findById.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(makeReportDoc({
+          status: 'closed',
+          closureRecord: { reopeningStatus: 'requested', closedAt: new Date(), closedBy: userId },
+        })),
+      })
+      const updatedDoc = makeReportDoc({ status: 'approved' })
+      mockExpenseReportModel.findByIdAndUpdate.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(updatedDoc),
+      })
+
+      const result = await service.approveReopening(reportId, userId, true)
+
+      expect(mockExpenseReportModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        reportId,
+        expect.objectContaining({
+          $set: expect.objectContaining({ status: 'approved' }),
+        }),
+        { new: true }
+      )
+      expect(result.status).toBe('approved')
+    })
+
+    it('rechaza la reapertura: mantiene estado closed', async () => {
+      mockExpenseReportModel.findById.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(makeReportDoc({
+          status: 'closed',
+          closureRecord: { reopeningStatus: 'requested', closedAt: new Date(), closedBy: userId },
+        })),
+      })
+      const updatedDoc = makeReportDoc({ status: 'closed' })
+      mockExpenseReportModel.findByIdAndUpdate.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(updatedDoc),
+      })
+
+      await service.approveReopening(reportId, userId, false)
+
+      const updateCall = mockExpenseReportModel.findByIdAndUpdate.mock.calls[0][1]
+      expect(updateCall.$set.closureRecord.reopeningStatus).toBe('none')
+      expect(updateCall.$set.status).toBeUndefined()
+    })
+  })
+
+  describe('assertNotClosed', () => {
+    it('lanza ForbiddenException si la rendición está cerrada', async () => {
+      mockExpenseReportModel.findById.mockReturnValue({
+        select: jest.fn().mockReturnValue({
+          exec: jest.fn().mockResolvedValue(makeReportDoc({ status: 'closed' })),
+        }),
+      })
+      await expect(service.assertNotClosed(reportId)).rejects.toThrow(ForbiddenException)
+    })
+
+    it('no lanza si la rendición no está cerrada', async () => {
+      mockExpenseReportModel.findById.mockReturnValue({
+        select: jest.fn().mockReturnValue({
+          exec: jest.fn().mockResolvedValue(makeReportDoc({ status: 'approved' })),
+        }),
+      })
+      await expect(service.assertNotClosed(reportId)).resolves.toBeUndefined()
+    })
+  })
+})
+
 const validReimbursementDto = {
   method: 'transferencia_bancaria' as const,
   transferDate: '2025-01-15T00:00:00.000Z',

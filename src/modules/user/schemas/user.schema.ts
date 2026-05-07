@@ -30,6 +30,7 @@ export interface UserDocument extends Document {
   permissions?: UserPermissions
   signature?: string
   coordinatorId?: Types.ObjectId
+  mustChangePassword?: boolean
 }
 
 @Schema({ timestamps: true })
@@ -92,6 +93,9 @@ export class User {
   /** Coordinador / aprobador asignado (Fase 2 — solicitud de viáticos) */
   @Prop({ type: Types.ObjectId, ref: 'User', required: false })
   coordinatorId?: Types.ObjectId
+
+  @Prop({ type: Boolean, default: false })
+  mustChangePassword?: boolean
 }
 
 export const UserSchema = SchemaFactory.createForClass(User)

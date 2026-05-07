@@ -47,6 +47,7 @@ export class AuthService {
     if (!user) {
       throw new BadRequestException('Credenciales inválidas')
     }
+    const mustChangePassword = !!(user as any).mustChangePassword
     const payload = {
       email: user.email,
       userId: user._id.toString(),
@@ -57,10 +58,12 @@ export class AuthService {
         canApproveL1: false,
         canApproveL2: false,
       },
+      mustChangePassword,
     }
     return {
       access_token: this.jwtService.sign(payload),
       ...user,
+      mustChangePassword,
     }
   }
 }

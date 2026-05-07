@@ -26,6 +26,15 @@ export type AuditAction =
   | 'update_permissions'
   | 'update_signature'
   | 'generate_affidavit'
+  | 'reset_password'
+  | 'create_project'
+  | 'update_project'
+  | 'delete_project'
+  | 'bulk_import_projects'
+  | 'bulk_import_users'
+  | 'create_category'
+  | 'update_category'
+  | 'delete_category'
 
 @Schema({ timestamps: true })
 export class AuditLog {

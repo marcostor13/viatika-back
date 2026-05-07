@@ -244,6 +244,15 @@ export class ExpenseController {
     )
   }
 
+  @Get('stats')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  getStatusCounts(@Request() req) {
+    const clientId = req.user?.clientId
+    if (!clientId) return { pending: 0, approved: 0, rejected: 0, total: 0 }
+    return this.expenseService.getStatusCounts(clientId)
+  }
+
   @Get(':clientId')
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
   @UseGuards(JwtAuthGuard, RolesGuard)

@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common'
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { InjectModel } from '@nestjs/mongoose'
 import { User, UserDocument } from './schemas/user.schema'
 import { Model, Types } from 'mongoose'
@@ -38,6 +38,8 @@ export interface IUserResponse {
   address?: string
   phone?: string
   coordinatorId?: Types.ObjectId | { _id: Types.ObjectId; name?: string; email?: string }
+  mustChangePassword?: boolean
+  signature?: string
 }
 
 @Injectable()
@@ -98,6 +100,8 @@ export class UserService {
       employeeCode: (user as any).employeeCode,
       address: (user as any).address,
       phone: (user as any).phone,
+      mustChangePassword: !!(user as any).mustChangePassword,
+      signature: (user as any).signature,
     }
   }
 
@@ -132,7 +136,6 @@ export class UserService {
   }
 
   async create(userData: CreateUserDto): Promise<IUserResponse> {
-    console.log('====== create user payload received ======', userData)
     const clientId = userData.clientId
       ? new Types.ObjectId(userData.clientId)
       : null
@@ -143,8 +146,9 @@ export class UserService {
       throw new BadRequestException('El correo ya se encuentra registrado')
     }
     const hashedPassword = await bcrypt.hash(userData.password, 10)
-    const { coordinatorId: coordRaw, ...rest } = userData as CreateUserDto & {
+    const { coordinatorId: coordRaw, permissions, ...rest } = userData as CreateUserDto & {
       coordinatorId?: string
+      permissions?: IUserPermissions
     }
     const savedUser = await this.userModel.create({
       ...rest,
@@ -152,6 +156,7 @@ export class UserService {
       clientId,
       password: hashedPassword,
       coordinatorId: coordRaw ? new Types.ObjectId(coordRaw) : undefined,
+      ...(permissions ? { permissions } : {}),
     })
     const populatedUser = await this.userModel
       .findById(savedUser._id)
@@ -194,6 +199,44 @@ export class UserService {
       client: user.clientId,
       isActive: user.isActive,
     }))
+  }
+
+  async findAllPaginated(
+    clientId: Types.ObjectId,
+    opts: { page?: number; limit?: number; search?: string; status?: string; roleName?: string } = {}
+  ) {
+    const page = opts.page ?? 1
+    const limit = opts.limit ?? 20
+    const skip = (page - 1) * limit
+    const filter: any = { clientId }
+
+    if (opts.search) {
+      const re = new RegExp(opts.search, 'i')
+      filter.$or = [{ name: re }, { email: re }]
+    }
+    if (opts.status) {
+      filter.isActive = opts.status === 'active'
+    }
+    if (opts.roleName) {
+      const role = await this.roleService.getByName(opts.roleName)
+      filter.roleId = role ? (role as any)._id : null
+    }
+
+    const [users, total] = await Promise.all([
+      this.userModel.find(filter).populate('roleId').populate('clientId').sort({ name: 1 }).skip(skip).limit(limit).exec(),
+      this.userModel.countDocuments(filter),
+    ])
+    const pages = Math.ceil(total / limit)
+    const data = users.map(user => ({
+      _id: user._id,
+      email: user.email,
+      name: user.name,
+      role: user.roleId as unknown as RoleDocument,
+      client: user.clientId as unknown as ClientDocument,
+      isActive: user.isActive,
+      permissions: (user as any).permissions || { modules: [], canApproveL1: false, canApproveL2: false },
+    }))
+    return { data, total, page, pages, limit }
   }
 
   update(id: string, updateUserDto: UpdateUserDto) {
@@ -299,6 +342,51 @@ export class UserService {
       out.push({ email: u.email, name: u.name })
     }
     return out
+  }
+
+  async resetPassword(id: string): Promise<{ temporaryPassword: string }> {
+    const user = await this.userModel.findById(id).exec()
+    if (!user) throw new NotFoundException('Usuario no encontrado')
+    const temporaryPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-4).toUpperCase()
+    const hashed = await bcrypt.hash(temporaryPassword, 10)
+    await this.userModel.findByIdAndUpdate(id, { password: hashed, mustChangePassword: true }).exec()
+    return { temporaryPassword }
+  }
+
+  async bulkImportUsers(
+    rows: Array<{ name: string; email: string; password: string; roleId: string; clientId: string; coordinatorId?: string }>,
+    defaultClientId: string,
+    defaultRoleId: string
+  ): Promise<{ created: number; skipped: string[]; errors: string[] }> {
+    let created = 0
+    const skipped: string[] = []
+    const errors: string[] = []
+
+    for (const row of rows) {
+      try {
+        const email = (row.email || '').trim().toLowerCase()
+        if (!email) { errors.push(`Fila sin email`); continue }
+        const exists = await this.userModel.findOne({ email }).exec()
+        if (exists) { skipped.push(email); continue }
+        const roleId = row.roleId?.trim() || defaultRoleId
+        const clientId = row.clientId?.trim() || defaultClientId
+        const password = row.password?.trim() || Math.random().toString(36).slice(-8)
+        const hashed = await bcrypt.hash(password, 10)
+        await this.userModel.create({
+          name: row.name?.trim() || email,
+          email,
+          password: hashed,
+          roleId: new Types.ObjectId(roleId),
+          clientId: new Types.ObjectId(clientId),
+          mustChangePassword: true,
+          coordinatorId: row.coordinatorId?.trim() ? new Types.ObjectId(row.coordinatorId.trim()) : undefined,
+        })
+        created++
+      } catch (e: any) {
+        errors.push(`${row.email}: ${e?.message || 'error desconocido'}`)
+      }
+    }
+    return { created, skipped, errors }
   }
 
   async findAdminsByClient(clientId: string): Promise<UserDocument[]> {

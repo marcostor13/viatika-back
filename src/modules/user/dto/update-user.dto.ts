@@ -76,4 +76,8 @@ export class UpdateUserDto {
   @IsMongoId()
   @IsOptional()
   coordinatorId?: string | null
+
+  @IsBoolean()
+  @IsOptional()
+  mustChangePassword?: boolean
 }

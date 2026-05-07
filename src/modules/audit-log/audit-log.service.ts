@@ -33,14 +33,23 @@ export class AuditLogService {
     }
   }
 
-  async findAll(clientId?: string, limit = 200) {
+  async findAll(clientId?: string, opts: { page?: number; limit?: number; module?: string; search?: string } = {}) {
     const filter: any = {}
     if (clientId) filter.clientId = clientId
-    return this.auditLogModel
-      .find(filter)
-      .sort({ createdAt: -1 })
-      .limit(limit)
-      .lean()
-      .exec()
+    if (opts.module) filter.module = opts.module
+    if (opts.search) {
+      const re = new RegExp(opts.search, 'i')
+      filter.$or = [{ userName: re }, { action: re }, { details: re }]
+    }
+
+    const page = opts.page ?? 1
+    const limit = opts.limit ?? 20
+    const skip = (page - 1) * limit
+
+    const [data, total] = await Promise.all([
+      this.auditLogModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean().exec(),
+      this.auditLogModel.countDocuments(filter),
+    ])
+    return { data, total, page, pages: Math.ceil(total / limit), limit }
   }
 }

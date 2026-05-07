@@ -376,7 +376,9 @@ export class ExpenseReportService {
             userName: owner.name || 'Colaborador',
             title: fullyUpdatedReport.title,
             budget: fullyUpdatedReport.budget,
-            platformUrl: `https://app.viatica.tecdidata.com/mis-rendiciones/${id}/detalle`,
+            platformUrl: this.emailService.buildAppUrl(
+              `/mis-rendiciones/${id}/detalle`
+            ),
           })
 
           await this.notificationsService.create({
@@ -579,11 +581,6 @@ export class ExpenseReportService {
         clientId
       )
 
-    const platformUrl =
-      process.env.APP_PUBLIC_URL ||
-      process.env.FRONTEND_URL ||
-      'https://app.viatica.tecdidata.com'
-
     const reimbursementDocs = reimbursementRows.map(r => ({
       kind: 'reembolso_rendicion' as const,
       expenseReportId: String(r._id),
@@ -600,7 +597,7 @@ export class ExpenseReportService {
         r.settlement?.difference != null
           ? Math.abs(Number(r.settlement.difference)).toFixed(2)
           : undefined,
-      detailUrl: `${platformUrl.replace(/\/$/, '')}/mis-rendiciones/${String(r._id)}/detalle`,
+      detailUrl: `${this.emailService.buildAppUrl(`/mis-rendiciones/${String(r._id)}/detalle`)}`,
     }))
 
     const viaticoDocs = (viaticoRows as any[]).map(row => {
@@ -727,10 +724,7 @@ export class ExpenseReportService {
     const diff = report.settlement?.difference ?? 0
     const amountFormatted = Math.abs(Number(diff)).toFixed(2)
 
-    const platformUrl =
-      process.env.APP_PUBLIC_URL ||
-      process.env.FRONTEND_URL ||
-      'https://app.viatica.tecdidata.com'
+    const platformUrl = this.emailService.buildAppUrl('/mis-documentos')
 
     const pi = report.reimbursementPaymentInfo
     const transferDate = pi?.transferDate

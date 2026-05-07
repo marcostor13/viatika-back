@@ -13,6 +13,7 @@ import { ProjectService } from '../project/project.service'
 import { CategoryService } from '../category/category.service'
 import { UserService } from '../user/user.service'
 import { EmailService } from '../email/email.service'
+import { NotificationsService } from '../notifications/notifications.service'
 import { ROLES } from '../auth/enums/roles.enum'
 
 const advanceId = new Types.ObjectId().toString()
@@ -87,7 +88,12 @@ const mockUserService = {
   findViaticoAccountingNotifyRecipients: jest.fn().mockResolvedValue([]),
 }
 
+const mockNotificationsService = {
+  create: jest.fn().mockResolvedValue(undefined),
+}
+
 const mockEmailService = {
+  buildAppUrl: jest.fn().mockReturnValue('http://localhost:4200/app'),
   sendViaticoSolicitudToCoordinator: jest.fn(),
   sendViaticoRechazoColaborador: jest.fn().mockResolvedValue(undefined),
   sendViaticoAprobacionContabilidad: jest.fn().mockResolvedValue(undefined),
@@ -111,6 +117,7 @@ describe('AdvanceService', () => {
         { provide: CategoryService, useValue: mockCategoryService },
         { provide: UserService, useValue: mockUserService },
         { provide: EmailService, useValue: mockEmailService },
+        { provide: NotificationsService, useValue: mockNotificationsService },
       ],
     }).compile()
     service = module.get<AdvanceService>(AdvanceService)

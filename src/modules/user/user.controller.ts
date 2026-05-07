@@ -191,6 +191,17 @@ export class UserController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Patch('profile/password')
+  async changeOwnPassword(
+    @Body() body: { password: string },
+    @Request() req: any
+  ) {
+    const userId = req.user._id || req.user.sub
+    await this.userService.changeOwnPassword(userId, body.password)
+    return { message: 'Contraseña actualizada correctamente' }
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Patch('profile/signature')
   async updateSignature(
     @Body() body: { signature: string },

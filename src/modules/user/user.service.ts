@@ -135,7 +135,7 @@ export class UserService {
     }
   }
 
-  async create(userData: CreateUserDto): Promise<IUserResponse> {
+  async create(userData: CreateUserDto): Promise<IUserResponse & { temporaryPassword: string }> {
     const clientId = userData.clientId
       ? new Types.ObjectId(userData.clientId)
       : null
@@ -145,7 +145,10 @@ export class UserService {
     if (issetUser) {
       throw new BadRequestException('El correo ya se encuentra registrado')
     }
-    const hashedPassword = await bcrypt.hash(userData.password, 10)
+    const temporaryPassword =
+      Math.random().toString(36).slice(-8) +
+      Math.random().toString(36).slice(-4).toUpperCase()
+    const hashedPassword = await bcrypt.hash(temporaryPassword, 10)
     const { coordinatorId: coordRaw, permissions, ...rest } = userData as CreateUserDto & {
       coordinatorId?: string
       permissions?: IUserPermissions
@@ -155,6 +158,7 @@ export class UserService {
       roleId,
       clientId,
       password: hashedPassword,
+      mustChangePassword: true,
       coordinatorId: coordRaw ? new Types.ObjectId(coordRaw) : undefined,
       ...(permissions ? { permissions } : {}),
     })
@@ -164,7 +168,7 @@ export class UserService {
       .populate('clientId')
       .exec()
     if (!populatedUser) {
-      return {} as IUserResponse
+      return {} as IUserResponse & { temporaryPassword: string }
     }
     return {
       _id: populatedUser._id,
@@ -182,6 +186,7 @@ export class UserService {
       employeeCode: (populatedUser as any).employeeCode,
       address: (populatedUser as any).address,
       phone: (populatedUser as any).phone,
+      temporaryPassword,
     }
   }
 
@@ -342,6 +347,13 @@ export class UserService {
       out.push({ email: u.email, name: u.name })
     }
     return out
+  }
+
+  async changeOwnPassword(userId: string, newPassword: string): Promise<void> {
+    const hashed = await bcrypt.hash(newPassword, 10)
+    await this.userModel
+      .findByIdAndUpdate(userId, { password: hashed, mustChangePassword: false })
+      .exec()
   }
 
   async resetPassword(id: string): Promise<{ temporaryPassword: string }> {

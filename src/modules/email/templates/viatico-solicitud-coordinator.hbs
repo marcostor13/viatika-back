@@ -10,7 +10,9 @@
     .logo { max-width: 150px; height: auto; }
     .content { padding: 30px; }
     .heading { color: #1e293b; font-size: 22px; margin-bottom: 16px; }
-    .details { background-color: #f8fafc; border-radius: 6px; padding: 15px; margin: 20px 0; border-left: 4px solid #0ea5e9; white-space: pre-wrap; font-size: 14px; }
+    .label { font-weight: 700; color: #1e293b; margin-bottom: 8px; }
+    .quick-list { margin: 0; padding-left: 18px; }
+    .quick-list li { margin: 6px 0; }
     .btn-container { text-align: center; margin-top: 24px; }
     .btn { display: inline-block; background-color: #0ea5e9; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 6px; font-weight: bold; }
     .footer { text-align: center; font-size: 12px; color: #94a3b8; padding: 20px; background-color: #f8fafc; border-top: 1px solid #e2e8f0; }
@@ -23,10 +25,14 @@
     </div>
     <div class="content">
       <h1 class="heading">Nueva solicitud de viáticos</h1>
-      <p>Estimado/a <strong>{{coordinatorName}}</strong>,</p>
-      <p>El colaborador <strong>{{collaboratorName}}</strong> ha enviado una nueva solicitud de viáticos. Por favor revise la solicitud en la plataforma.</p>
-      <p><strong>Detalles rápidos:</strong> Lugar: {{place}} · Fechas: {{startDate}} al {{endDate}} · Monto total: S/ {{totalFormatted}} · Proyecto: {{projectLabel}}</p>
-      <div class="details">{{plainSummary}}</div>
+      <p>Estimado/a <strong>{{coordinatorName}}</strong></p>
+      <p>El colaborador <strong>{{collaboratorName}}</strong> ha enviado una nueva solicitud de viáticos. Revisar solicitud en la plataforma</p>
+      <p class="label">Detalles rápidos:</p>
+      <ul class="quick-list">
+        <li>Lugar: {{place}}</li>
+        <li>Fechas: {{startDate}} al {{endDate}}</li>
+        <li>Monto Total: S/ {{totalFormatted}}</li>
+      </ul>
       <div class="btn-container">
         <a href="{{platformUrl}}" class="btn">Ir a la plataforma</a>
       </div>

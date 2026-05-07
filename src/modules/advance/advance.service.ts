@@ -531,7 +531,7 @@ export class AdvanceService {
           advance.projectId.toString(),
           advance.clientId.toString()
         )
-        projectLabel = `[${p.code} - ${p.name}]`
+        projectLabel = `${p.code} - ${p.name}`
       } catch {
         /* ignore */
       }
@@ -577,7 +577,7 @@ export class AdvanceService {
     if (project && typeof project === 'object' && project !== null) {
       const pr = project as { code?: string; name?: string }
       if (pr.code !== undefined || pr.name !== undefined) {
-        cc = `[${pr.code ?? '—'} - ${pr.name ?? '—'}]`
+        cc = `${pr.code ?? '—'} - ${pr.name ?? '—'}`
       }
     }
     const start =
@@ -652,11 +652,11 @@ export class AdvanceService {
     const doc = (populated ?? advance) as AdvanceDocument
 
     const collabId = advance.userId.toString()
-    let projectLabelSubject = '[— - —]'
+    let projectLabelSubject = '— - —'
     if (doc.projectId && typeof doc.projectId === 'object' && doc.projectId !== null) {
       const pr = doc.projectId as { code?: string; name?: string }
       if (pr.code !== undefined || pr.name !== undefined) {
-        projectLabelSubject = `[${pr.code ?? '—'} - ${pr.name ?? '—'}]`
+        projectLabelSubject = `${pr.code ?? '—'} - ${pr.name ?? '—'}`
       }
     }
 

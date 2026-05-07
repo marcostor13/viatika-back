@@ -666,6 +666,84 @@ export class EmailService {
     }
   }
 
+  /** Fase 6 — rendición aprobada con saldo a favor del colaborador (pendiente de pago). */
+  async sendRendicionReembolsoContabilidad(
+    email: string,
+    data: {
+      recipientName: string
+      /** Identificador legible para el asunto (ej. título + ref. corta), alineado a Funcionalidades §6.1 */
+      reportLabel: string
+      reportTitle: string
+      collaboratorName: string
+      amountFormatted: string
+      detailUrl: string
+    }
+  ) {
+    try {
+      const subject = `Rendición «${data.reportLabel}» requiere reembolso de S/ ${data.amountFormatted} a ${data.collaboratorName}`
+      await this.mailerService.sendMail({
+        to: email,
+        subject,
+        template: './rendicion-reembolso-contabilidad',
+        context: {
+          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          year: new Date().getFullYear(),
+          ...data,
+        },
+      })
+      this.logger.debug(`Correo reembolso pendiente (contabilidad) enviado a ${email}`)
+    } catch (error) {
+      this.logger.error(`Error correo reembolso contabilidad a ${email}:`, error)
+      throw error
+    }
+  }
+
+  /** Fase 6 — reembolso pagado al colaborador (adjunta comprobante). */
+  async sendRendicionReembolsoPagado(
+    email: string,
+    data: {
+      recipientName: string
+      collaboratorName: string
+      coordinatorName?: string
+      reportTitle: string
+      amountFormatted: string
+      transferDate: string
+      reference?: string
+      paymentMethod: string
+      paymentReceiptUrl: string
+      paymentReceiptFileName?: string
+      platformUrl: string
+    }
+  ) {
+    try {
+      const subject = `Reembolso de gastos registrado — ${data.reportTitle}`
+      await this.mailerService.sendMail({
+        to: email,
+        subject,
+        template: './rendicion-reembolso-pagado',
+        attachments: data.paymentReceiptUrl
+          ? [
+              {
+                filename:
+                  data.paymentReceiptFileName ||
+                  'comprobante-reembolso-rendicion.pdf',
+                path: data.paymentReceiptUrl,
+              },
+            ]
+          : [],
+        context: {
+          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          year: new Date().getFullYear(),
+          ...data,
+        },
+      })
+      this.logger.debug(`Correo reembolso pagado enviado a ${email}`)
+    } catch (error) {
+      this.logger.error(`Error correo reembolso pagado a ${email}:`, error)
+      throw error
+    }
+  }
+
   /** Fase 4 — pago de viáticos registrado para colaborador y coordinador. */
   async sendViaticoPagoRealizado(
     email: string,

@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common'
+import { Module, forwardRef } from '@nestjs/common'
 import { ExpenseReportService } from './expense-report.service'
 import { ExpenseReportController } from './expense-report.controller'
 import { MongooseModule } from '@nestjs/mongoose'
@@ -10,6 +10,7 @@ import { AuditLogModule } from '../audit-log/audit-log.module'
 import { EmailModule } from '../email/email.module'
 import { NotificationsModule } from '../notifications/notifications.module'
 import { UserModule } from '../user/user.module'
+import { AdvanceModule } from '../advance/advance.module'
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { UserModule } from '../user/user.module'
     EmailModule,
     NotificationsModule,
     UserModule,
+    forwardRef(() => AdvanceModule),
   ],
   controllers: [ExpenseReportController],
   providers: [ExpenseReportService],

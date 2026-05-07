@@ -1,0 +1,163 @@
+import { Test, TestingModule } from '@nestjs/testing'
+import { getModelToken } from '@nestjs/mongoose'
+import { BadRequestException } from '@nestjs/common'
+import { Types } from 'mongoose'
+import { ConfigService } from '@nestjs/config'
+import { ExpenseService } from './expense.service'
+import { Expense } from './entities/expense.entity'
+import { EmailService } from '../email/email.service'
+import { ProjectService } from '../project/project.service'
+import { UserService } from '../user/user.service'
+import { SunatConfigService } from '../sunat-config/sunat-config.service'
+import { HttpService } from '@nestjs/axios'
+import { UploadService } from '../upload/upload.service'
+import { ExpenseReportService } from '../expense-report/expense-report.service'
+import { NotificationsService } from '../notifications/notifications.service'
+import { CategoryService } from '../category/category.service'
+import { CreateExpenseDto } from './dto/create-expense.dto'
+
+describe('ExpenseService — Fase 5 (plazos y límites de categoría)', () => {
+  let service: ExpenseService
+
+  const mockExpenseRepository = {
+    aggregate: jest.fn(),
+  }
+
+  const mockCategoryService = {
+    findOne: jest.fn(),
+  }
+
+  const noopDeps = {
+    emailService: {},
+    projectService: {},
+    userService: {},
+    sunatConfigService: {},
+    httpService: {},
+    uploadService: {},
+    expenseReportService: {},
+    notificationsService: {},
+  }
+
+  beforeEach(async () => {
+    jest.clearAllMocks()
+    jest.useFakeTimers()
+    jest.setSystemTime(new Date('2026-05-15T15:00:00.000Z'))
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ExpenseService,
+        {
+          provide: ConfigService,
+          useValue: { get: jest.fn().mockReturnValue('sk-test-openai-key') },
+        },
+        { provide: getModelToken(Expense.name), useValue: mockExpenseRepository },
+        { provide: EmailService, useValue: noopDeps.emailService },
+        { provide: ProjectService, useValue: noopDeps.projectService },
+        { provide: UserService, useValue: noopDeps.userService },
+        { provide: SunatConfigService, useValue: noopDeps.sunatConfigService },
+        { provide: HttpService, useValue: noopDeps.httpService },
+        { provide: UploadService, useValue: noopDeps.uploadService },
+        { provide: ExpenseReportService, useValue: noopDeps.expenseReportService },
+        { provide: NotificationsService, useValue: noopDeps.notificationsService },
+        { provide: CategoryService, useValue: mockCategoryService },
+      ],
+    }).compile()
+
+    service = module.get<ExpenseService>(ExpenseService)
+  })
+
+  afterEach(() => {
+    jest.useRealTimers()
+  })
+
+  describe('evaluateDeadline', () => {
+    it('sin fecha no marca observación', () => {
+      const out = (service as unknown as { evaluateDeadline: (d?: string | null) => unknown }).evaluateDeadline(null)
+      expect(out).toEqual({ observado: false })
+    })
+
+    it('emisión hasta 2 días antes no observa', () => {
+      const out = (service as unknown as { evaluateDeadline: (d: string) => unknown }).evaluateDeadline(
+        '2026-05-14'
+      )
+      expect(out).toMatchObject({ observado: false, diasRetraso: 1 })
+    })
+
+    it('emisión con más de 2 días en el mismo mes es observado', () => {
+      const out = (service as unknown as { evaluateDeadline: (d: string) => unknown }).evaluateDeadline(
+        '2026-05-10'
+      )
+      expect(out).toMatchObject({
+        observado: true,
+        diasRetraso: 5,
+      })
+      expect(String((out as { observacionPlazo?: string }).observacionPlazo)).toContain('OBSERVADO')
+    })
+
+    it('emisión de mes anterior con más de 2 días de retraso rechaza', () => {
+      expect(() =>
+        (service as unknown as { evaluateDeadline: (d: string) => unknown }).evaluateDeadline(
+          '2026-04-20'
+        )
+      ).toThrow(BadRequestException)
+    })
+  })
+
+  describe('evaluateCategoryLimit', () => {
+    const bodyBase = (): CreateExpenseDto =>
+      ({
+        expenseReportId: new Types.ObjectId().toString(),
+        categoryId: new Types.ObjectId().toString(),
+        clientId: new Types.ObjectId().toString(),
+      }) as CreateExpenseDto
+
+    it('sin datos de categoría no evalúa', async () => {
+      const b = bodyBase()
+      delete (b as { expenseReportId?: string }).expenseReportId
+      const out = await (
+        service as unknown as {
+          evaluateCategoryLimit: (dto: CreateExpenseDto, n: number) => Promise<unknown>
+        }
+      ).evaluateCategoryLimit(b, 100)
+      expect(out).toEqual({})
+      expect(mockCategoryService.findOne).not.toHaveBeenCalled()
+    })
+
+    it('bloquea al llegar o superar el 100% del límite', async () => {
+      mockCategoryService.findOne.mockResolvedValue({ limit: 100 })
+      mockExpenseRepository.aggregate.mockResolvedValue([{ total: 92 }])
+      await expect(
+        (
+          service as unknown as {
+            evaluateCategoryLimit: (dto: CreateExpenseDto, n: number) => Promise<unknown>
+          }
+        ).evaluateCategoryLimit(bodyBase(), 10)
+      ).rejects.toThrow(/Límite de categoría/)
+    })
+
+    it('alerta al alcanzar al menos el 90%', async () => {
+      mockCategoryService.findOne.mockResolvedValue({ limit: 100 })
+      mockExpenseRepository.aggregate.mockResolvedValue([{ total: 85 }])
+      const out = await (
+        service as unknown as {
+          evaluateCategoryLimit: (dto: CreateExpenseDto, n: number) => Promise<unknown>
+        }
+      ).evaluateCategoryLimit(bodyBase(), 10)
+      expect(out).toMatchObject({
+        warning: expect.stringContaining('90%'),
+      })
+    })
+
+    it('por debajo del 90% devuelve solo porcentaje', async () => {
+      mockCategoryService.findOne.mockResolvedValue({ limit: 100 })
+      mockExpenseRepository.aggregate.mockResolvedValue([{ total: 10 }])
+      const out = await (
+        service as unknown as {
+          evaluateCategoryLimit: (dto: CreateExpenseDto, n: number) => Promise<unknown>
+        }
+      ).evaluateCategoryLimit(bodyBase(), 50)
+      expect(out).toEqual({ percent: 60 })
+      expect((out as { warning?: string }).warning).toBeUndefined()
+    })
+  })
+})

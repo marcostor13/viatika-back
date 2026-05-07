@@ -7,6 +7,7 @@ export type ExpenseReportStatus =
   | 'submitted'
   | 'approved'
   | 'rejected'
+  | 'reimbursed'
   | 'closed'
 export type SettlementType = 'reembolso' | 'devolucion' | 'equilibrado'
 
@@ -34,6 +35,20 @@ export interface ExpenseReportAffidavit {
   generatedAt: Date
 }
 
+/** Comprobante del pago de reembolso al colaborador (Fase 6) — mismo criterio que pago de anticipo */
+export interface ReimbursementPaymentInfo {
+  method: 'transferencia_bancaria' | 'efectivo' | 'cheque'
+  bankName?: string
+  accountNumber?: string
+  cci?: string
+  transferDate: Date
+  reference?: string
+  paymentReceiptUrl: string
+  paymentReceiptFileName?: string
+  paymentReceiptMimeType?: string
+  paymentReceiptSizeBytes?: number
+}
+
 export interface ExpenseReportDocument extends Document {
   title: string
   description: string
@@ -57,6 +72,9 @@ export interface ExpenseReportDocument extends Document {
   endDate?: Date
   items?: ExpenseReportBudgetItem[]
   affidavits?: ExpenseReportAffidavit[]
+  reimbursementPaymentInfo?: ReimbursementPaymentInfo
+  reimbursedAt?: Date
+  reimbursementAccountingNotifiedAt?: Date
 }
 
 @Schema({ timestamps: true })
@@ -161,6 +179,33 @@ export class ExpenseReport {
     default: [],
   })
   affidavits?: ExpenseReportAffidavit[]
+
+  @Prop({
+    type: {
+      method: {
+        type: String,
+        enum: ['transferencia_bancaria', 'efectivo', 'cheque'],
+      },
+      bankName: { type: String },
+      accountNumber: { type: String },
+      cci: { type: String },
+      transferDate: { type: Date },
+      reference: { type: String },
+      paymentReceiptUrl: { type: String, required: true },
+      paymentReceiptFileName: { type: String },
+      paymentReceiptMimeType: { type: String },
+      paymentReceiptSizeBytes: { type: Number },
+      _id: false,
+    },
+    required: false,
+  })
+  reimbursementPaymentInfo?: ReimbursementPaymentInfo
+
+  @Prop({ type: Date, required: false })
+  reimbursedAt?: Date
+
+  @Prop({ type: Date, required: false })
+  reimbursementAccountingNotifiedAt?: Date
 }
 
 export const ExpenseReportSchema = SchemaFactory.createForClass(ExpenseReport)

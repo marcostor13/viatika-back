@@ -1,7 +1,10 @@
 import {
   BadRequestException,
+  ForbiddenException,
+  Inject,
   Injectable,
   NotFoundException,
+  forwardRef,
 } from '@nestjs/common'
 import { InjectModel } from '@nestjs/mongoose'
 import { Model, Types } from 'mongoose'
@@ -15,6 +18,9 @@ import { EmailService } from '../email/email.service'
 import { NotificationsService } from '../notifications/notifications.service'
 import { UserService } from '../user/user.service'
 import { CreateAffidavitDto } from './dto/create-affidavit.dto'
+import { RegisterReimbursementPaymentDto } from './dto/register-reimbursement-payment.dto'
+import { AdvanceService } from '../advance/advance.service'
+import { ROLES } from '../auth/enums/roles.enum'
 
 @Injectable()
 export class ExpenseReportService {
@@ -23,8 +29,46 @@ export class ExpenseReportService {
     private readonly expenseReportModel: Model<ExpenseReportDocument>,
     private readonly emailService: EmailService,
     private readonly notificationsService: NotificationsService,
-    private readonly userService: UserService
+    private readonly userService: UserService,
+    @Inject(forwardRef(() => AdvanceService))
+    private readonly advanceService: AdvanceService
   ) {}
+
+  private validatePaymentReceipt(
+    mimeType?: string,
+    fileName?: string,
+    sizeBytes?: number
+  ): { ok: boolean; reason?: string } {
+    const allowedMimes = ['application/pdf', 'image/jpeg', 'image/png']
+    const allowedExtensions = ['.pdf', '.jpg', '.jpeg', '.png']
+    const normalizedMime = (mimeType ?? '').toLowerCase().trim()
+    const normalizedName = (fileName ?? '').toLowerCase().trim()
+    const mimeAllowed = normalizedMime
+      ? allowedMimes.includes(normalizedMime)
+      : false
+    const extAllowed = allowedExtensions.some(ext =>
+      normalizedName.endsWith(ext)
+    )
+    if (!mimeAllowed && !extAllowed) {
+      return {
+        ok: false,
+        reason: 'Formato inválido. Solo se permite PDF, JPG o PNG.',
+      }
+    }
+    if (typeof sizeBytes === 'number' && sizeBytes > 10 * 1024 * 1024) {
+      return { ok: false, reason: 'El comprobante excede 10MB.' }
+    }
+    return { ok: true }
+  }
+
+  private normalizeExpenseReportClientId(clientId: unknown): string {
+    if (!clientId) return ''
+    if (clientId instanceof Types.ObjectId) return clientId.toHexString()
+    if (typeof clientId === 'object' && clientId !== null && '_id' in clientId) {
+      return String((clientId as { _id: unknown })._id)
+    }
+    return String(clientId)
+  }
 
   private async validateBeforeSubmit(reportId: string): Promise<void> {
     const report = await this.expenseReportModel
@@ -197,6 +241,12 @@ export class ExpenseReportService {
       throw new NotFoundException(`Expense report with ID ${id} not found`)
     }
 
+    if (dto.status === 'reimbursed') {
+      throw new BadRequestException(
+        'El estado reembolsado se registra únicamente al cargar el comprobante de pago en tesorería.'
+      )
+    }
+
     if (
       dto.status === 'submitted' &&
       existing.status !== 'open' &&
@@ -319,6 +369,15 @@ export class ExpenseReportService {
             error
           )
         }
+      }
+
+      try {
+        await this.advanceService.liquidateExpenseReport(id)
+      } catch (err) {
+        console.error(
+          `[ExpenseReportService] Liquidación post-aprobación ${id}:`,
+          err
+        )
       }
     }
 
@@ -450,6 +509,249 @@ export class ExpenseReportService {
       expenseIds: dto.expenseIds,
       generatedBy,
       generatedAt: new Date().toISOString(),
+    }
+  }
+
+  async markReimbursementAccountingNotified(reportId: string): Promise<void> {
+    await this.expenseReportModel.findByIdAndUpdate(reportId, {
+      $set: { reimbursementAccountingNotifiedAt: new Date() },
+    })
+  }
+
+  async findPendingReimbursementsByClient(clientId: string) {
+    return this.expenseReportModel
+      .find({
+        clientId: new Types.ObjectId(clientId),
+        status: 'approved',
+        'settlement.type': 'reembolso',
+        $or: [
+          { reimbursementPaymentInfo: { $exists: false } },
+          { reimbursementPaymentInfo: null },
+        ],
+      })
+      .populate('userId', 'name email')
+      .sort({ updatedAt: -1 })
+      .lean()
+      .exec()
+  }
+
+  async findMyDocuments(userId: string, clientId: string) {
+    const reimbursementRows = await this.expenseReportModel
+      .find({
+        userId: new Types.ObjectId(userId),
+        clientId: new Types.ObjectId(clientId),
+        reimbursementPaymentInfo: { $exists: true, $ne: null },
+      })
+      .select(
+        'title reimbursementPaymentInfo reimbursedAt settlement.difference'
+      )
+      .sort({ reimbursedAt: -1 })
+      .lean()
+      .exec()
+
+    const viaticoRows =
+      await this.advanceService.findPaymentReceiptsForCollaborator(
+        userId,
+        clientId
+      )
+
+    const platformUrl =
+      process.env.APP_PUBLIC_URL ||
+      process.env.FRONTEND_URL ||
+      'https://app.viatica.tecdidata.com'
+
+    const reimbursementDocs = reimbursementRows.map(r => ({
+      kind: 'reembolso_rendicion' as const,
+      expenseReportId: String(r._id),
+      title: r.title || 'Rendición',
+      receiptUrl: r.reimbursementPaymentInfo?.paymentReceiptUrl || '',
+      receiptFileName:
+        r.reimbursementPaymentInfo?.paymentReceiptFileName ||
+        'comprobante-reembolso.pdf',
+      date:
+        r.reimbursedAt?.toISOString?.() ||
+        r.reimbursementPaymentInfo?.transferDate ||
+        '',
+      amountFormatted:
+        r.settlement?.difference != null
+          ? Math.abs(Number(r.settlement.difference)).toFixed(2)
+          : undefined,
+      detailUrl: `${platformUrl.replace(/\/$/, '')}/mis-rendiciones/${String(r._id)}/detalle`,
+    }))
+
+    const viaticoDocs = (viaticoRows as any[]).map(row => {
+      const rep = row.expenseReportId
+      const reportTitle =
+        typeof rep === 'object' && rep?.title ? rep.title : 'Viáticos'
+      return {
+        kind: 'viatico_pago' as const,
+        advanceId: String(row._id),
+        title: row.description || reportTitle,
+        receiptUrl: row.paymentInfo?.paymentReceiptUrl || '',
+        receiptFileName:
+          row.paymentInfo?.paymentReceiptFileName ||
+          'comprobante-pago-viaticos.pdf',
+        date:
+          row.paymentInfo?.transferDate?.toISOString?.() ||
+          row.createdAt?.toString?.() ||
+          '',
+        expenseReportId:
+          typeof rep === 'object' && rep?._id
+            ? String(rep._id)
+            : rep
+              ? String(rep)
+              : undefined,
+      }
+    })
+
+    return {
+      items: [...reimbursementDocs, ...viaticoDocs].sort((a, b) =>
+        String(b.date).localeCompare(String(a.date))
+      ),
+    }
+  }
+
+  async registerReimbursementPayment(
+    reportId: string,
+    dto: RegisterReimbursementPaymentDto,
+    userRole: string,
+    userPermissions?: { canApproveL2?: boolean },
+    tenantCtx?: { requestClientId: string; isSuperAdmin: boolean }
+  ) {
+    const canPay =
+      userRole === ROLES.SUPER_ADMIN || userPermissions?.canApproveL2 === true
+    if (!canPay) {
+      throw new ForbiddenException(
+        'No tienes permiso para registrar pagos de reembolso.'
+      )
+    }
+
+    const receiptValidation = this.validatePaymentReceipt(
+      dto.paymentReceiptMimeType,
+      dto.paymentReceiptFileName,
+      dto.paymentReceiptSizeBytes
+    )
+    if (!receiptValidation.ok) {
+      throw new BadRequestException(receiptValidation.reason)
+    }
+
+    const report = await this.expenseReportModel.findById(reportId).exec()
+    if (!report) {
+      throw new NotFoundException(`Expense report with ID ${reportId} not found`)
+    }
+
+    if (tenantCtx && !tenantCtx.isSuperAdmin) {
+      const rid = this.normalizeExpenseReportClientId(report.clientId)
+      if (
+        !tenantCtx.requestClientId ||
+        rid !== tenantCtx.requestClientId
+      ) {
+        throw new ForbiddenException(
+          'La rendición no pertenece a su organización.'
+        )
+      }
+    }
+
+    if (report.status !== 'approved') {
+      throw new BadRequestException(
+        'Solo se puede registrar el reembolso cuando la rendición está aprobada y pendiente de pago al colaborador.'
+      )
+    }
+    if (report.settlement?.type !== 'reembolso') {
+      throw new BadRequestException(
+        'Esta rendición no tiene saldo a favor del colaborador que deba reembolsarse.'
+      )
+    }
+    if (report.reimbursementPaymentInfo) {
+      throw new BadRequestException('El reembolso de esta rendición ya fue registrado.')
+    }
+
+    report.reimbursementPaymentInfo = {
+      method: dto.method,
+      bankName: dto.bankName,
+      accountNumber: dto.accountNumber,
+      cci: dto.cci,
+      transferDate: new Date(dto.transferDate),
+      reference: dto.reference,
+      paymentReceiptUrl: dto.paymentReceiptUrl,
+      paymentReceiptFileName: dto.paymentReceiptFileName,
+      paymentReceiptMimeType: dto.paymentReceiptMimeType,
+      paymentReceiptSizeBytes: dto.paymentReceiptSizeBytes,
+    }
+    report.reimbursedAt = new Date()
+    report.status = 'reimbursed'
+    await report.save()
+
+    await this.notifyCollaboratorReimbursementPaid(reportId)
+
+    return this.findOne(reportId)
+  }
+
+  private async notifyCollaboratorReimbursementPaid(reportId: string) {
+    const report = await this.findOne(reportId)
+    const owner = report.userId as any
+    if (!owner?.email) return
+
+    const profile = await this.userService.findTransactionalProfile(
+      String(owner._id || owner.id)
+    )
+    const coordinatorId = profile?.coordinatorId?.toString?.()
+    const coordinator = coordinatorId
+      ? await this.userService.findEmailNameClient(coordinatorId)
+      : null
+
+    const diff = report.settlement?.difference ?? 0
+    const amountFormatted = Math.abs(Number(diff)).toFixed(2)
+
+    const platformUrl =
+      process.env.APP_PUBLIC_URL ||
+      process.env.FRONTEND_URL ||
+      'https://app.viatica.tecdidata.com'
+
+    const pi = report.reimbursementPaymentInfo
+    const transferDate = pi?.transferDate
+      ? new Date(pi.transferDate).toISOString().slice(0, 10)
+      : new Date().toISOString().slice(0, 10)
+
+    const baseData = {
+      collaboratorName: owner.name || 'Colaborador',
+      coordinatorName: coordinator?.name,
+      reportTitle: report.title || 'Rendición',
+      amountFormatted,
+      transferDate,
+      reference: pi?.reference || '—',
+      paymentMethod: pi?.method || 'transferencia_bancaria',
+      paymentReceiptUrl: pi?.paymentReceiptUrl || '',
+      paymentReceiptFileName:
+        pi?.paymentReceiptFileName || 'comprobante-reembolso.pdf',
+      platformUrl,
+    }
+
+    try {
+      await this.emailService.sendRendicionReembolsoPagado(owner.email, {
+        recipientName: owner.name || 'Colaborador',
+        ...baseData,
+      })
+
+      if (coordinator?.email) {
+        await this.emailService.sendRendicionReembolsoPagado(coordinator.email, {
+          recipientName: coordinator.name || 'Coordinador/a',
+          ...baseData,
+        })
+      }
+
+      await this.notificationsService.create({
+        userId: String(owner._id || owner.id),
+        title: 'Reembolso registrado',
+        message: `Se registró el pago del reembolso por S/ ${amountFormatted} para "${report.title}".`,
+        type: 'success',
+        actionUrl: `/mis-documentos`,
+      })
+    } catch (err) {
+      console.error(
+        'Error enviando notificación de reembolso pagado',
+        err
+      )
     }
   }
 

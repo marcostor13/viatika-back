@@ -715,6 +715,22 @@ export class AdvanceService {
       .exec()
   }
 
+  /** Comprobantes de pago de viático para «Mis documentos» (Fase 6). */
+  async findPaymentReceiptsForCollaborator(userId: string, clientId: string) {
+    return this.advanceModel
+      .find({
+        userId: new Types.ObjectId(userId),
+        clientId: new Types.ObjectId(clientId),
+        status: { $in: ['paid', 'settled', 'returned'] },
+        'paymentInfo.paymentReceiptUrl': { $exists: true, $nin: [null, ''] },
+      })
+      .select('paymentInfo description expenseReportId createdAt')
+      .populate('expenseReportId', 'title')
+      .sort({ createdAt: -1 })
+      .lean()
+      .exec()
+  }
+
   async findMyAdvances(userId: string, clientId: string) {
     return this.advanceModel
       .find({
@@ -1009,6 +1025,160 @@ export class AdvanceService {
     }
 
     return advance.save()
+  }
+
+  /**
+   * Fase 6 — Al aprobar la rendición: liquida en bloque los anticipos pagados vinculados,
+   * guarda el settlement en la rendición y avisa a contabilidad si corresponde reembolso al colaborador.
+   */
+  async liquidateExpenseReport(reportId: string): Promise<void> {
+    const report = await this.expenseReportService.findOneWithAdvances(reportId)
+    if (!report || report.status !== 'approved') {
+      return
+    }
+
+    const oid = new Types.ObjectId(reportId)
+    const rawAdvanceIds = Array.isArray(report.advanceIds)
+      ? report.advanceIds
+      : []
+    const idList = rawAdvanceIds.map((x: unknown) => new Types.ObjectId(String(x)))
+
+    const linkedAdvances = await this.advanceModel
+      .find({
+        clientId: report.clientId,
+        $or: [{ _id: { $in: idList } }, { expenseReportId: oid }],
+      })
+      .exec()
+
+    const byId = new Map<string, AdvanceDocument>()
+    for (const a of linkedAdvances) {
+      byId.set(String(a._id), a as AdvanceDocument)
+    }
+    const advances = [...byId.values()]
+
+    const expenses = (report.expenseIds as any[]) || []
+    const expenseTotal = expenses.reduce((sum, e) => {
+      if (String(e?.status || '').toLowerCase() !== 'approved') return sum
+      return sum + (Number(e.total) || 0)
+    }, 0)
+
+    const paidAdvances = advances.filter(a => a.status === 'paid')
+    const settledAdvances = advances.filter(a => a.status === 'settled')
+
+    if (paidAdvances.length === 0 && settledAdvances.length === 0) {
+      return
+    }
+
+    let advanceTotal = 0
+    if (paidAdvances.length > 0) {
+      advanceTotal = paidAdvances.reduce(
+        (s, a) => s + (Number(a.amount) || 0),
+        0
+      )
+    } else {
+      advanceTotal = settledAdvances.reduce(
+        (s, a) => s + (Number(a.amount) || 0),
+        0
+      )
+    }
+
+    const difference = advanceTotal - expenseTotal
+    let type: 'reembolso' | 'devolucion' | 'equilibrado'
+    if (Math.abs(difference) < 0.01) {
+      type = 'equilibrado'
+    } else if (difference > 0) {
+      type = 'devolucion'
+    } else {
+      type = 'reembolso'
+    }
+
+    const settledAt = new Date()
+    const settlementPayload = {
+      expenseTotal,
+      advanceAmount: advanceTotal,
+      difference,
+      type,
+      settledAt,
+    }
+
+    const reportSettlement = {
+      advanceTotal,
+      expenseTotal,
+      difference,
+      type,
+      settledAt,
+    }
+
+    if (paidAdvances.length > 0) {
+      for (const adv of paidAdvances) {
+        adv.status = 'settled'
+        adv.settlement = settlementPayload
+        await adv.save()
+      }
+    }
+
+    await this.expenseReportService.updateSettlement(reportId, reportSettlement)
+
+    const doc = report as any
+    const alreadyNotified = !!doc.reimbursementAccountingNotifiedAt
+    const alreadyPaidReimbursement = !!doc.reimbursementPaymentInfo
+
+    if (
+      type === 'reembolso' &&
+      Math.abs(difference) >= 0.01 &&
+      !alreadyNotified &&
+      !alreadyPaidReimbursement
+    ) {
+      try {
+        await this.notifyAccountingReembolsoPending(
+          reportId,
+          report,
+          Math.abs(difference)
+        )
+        await this.expenseReportService.markReimbursementAccountingNotified(
+          reportId
+        )
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.logger.error(`Notificación reembolso contabilidad ${reportId}: ${msg}`)
+      }
+    }
+  }
+
+  private async notifyAccountingReembolsoPending(
+    reportId: string,
+    report: any,
+    amountReimburse: number
+  ): Promise<void> {
+    const clientId = String(report.clientId)
+    const recipients =
+      await this.userService.findViaticoAccountingNotifyRecipients(clientId)
+
+    const owner = report.userId as { name?: string; email?: string }
+    const collaboratorName = owner?.name || 'Colaborador'
+
+    const platformUrl =
+      process.env.APP_PUBLIC_URL ||
+      process.env.FRONTEND_URL ||
+      'https://app.viatica.tecdidata.com'
+
+    const detailUrl = `${platformUrl.replace(/\/$/, '')}/mis-rendiciones/${reportId}/detalle`
+
+    const amountFormatted = amountReimburse.toFixed(2)
+    const reportTitle = report.title || 'Rendición'
+    const reportLabel = `${reportTitle} · ${reportId}`
+
+    for (const r of recipients) {
+      if (!r.email?.trim()) continue
+      await this.emailService.sendRendicionReembolsoContabilidad(r.email, {
+        recipientName: r.name || 'Estimado/a',
+        reportLabel,
+        reportTitle,
+        collaboratorName,
+        amountFormatted,
+        detailUrl,
+      })
+    }
   }
 
   async registerReturn(id: string, returnedAmount: number): Promise<Advance> {

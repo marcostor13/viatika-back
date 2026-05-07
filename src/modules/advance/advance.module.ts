@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common'
+import { Module, forwardRef } from '@nestjs/common'
 import { MongooseModule } from '@nestjs/mongoose'
 import { AdvanceService } from './advance.service'
 import { AdvanceController } from './advance.controller'
@@ -13,7 +13,7 @@ import { EmailModule } from '../email/email.module'
 @Module({
   imports: [
     MongooseModule.forFeature([{ name: Advance.name, schema: AdvanceSchema }]),
-    ExpenseReportModule,
+    forwardRef(() => ExpenseReportModule),
     AuditLogModule,
     ProjectModule,
     CategoryModule,

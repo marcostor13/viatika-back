@@ -35,6 +35,18 @@ export type AuditAction =
   | 'create_category'
   | 'update_category'
   | 'delete_category'
+  | 'close_rendicion'
+  | 'approve_reopen_rendicion'
+  | 'reject_reopen_rendicion'
+  | 'create_reembolso_directo'
+  | 'coordinator_approve_reembolso_directo'
+  | 'accounting_approve_reembolso_directo'
+  | 'accounting_reject_reembolso_directo'
+  | 'pay_reembolso_directo'
+  | 'close_reembolso_directo'
+  | 'create_petty_cash'
+  | 'fund_petty_cash'
+  | 'close_petty_cash'
 
 @Schema({ timestamps: true })
 export class AuditLog {

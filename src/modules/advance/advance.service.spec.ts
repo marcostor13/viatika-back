@@ -55,6 +55,8 @@ const mockAdvanceModel = {
   find: jest.fn(),
   findById: jest.fn(),
   updateOne: jest.fn().mockResolvedValue({ acknowledged: true }),
+  findByIdAndUpdate: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue({}) }),
+  updateMany: jest.fn().mockResolvedValue({ modifiedCount: 0 }),
   countDocuments: jest.fn(),
   aggregate: jest.fn(),
 }
@@ -90,6 +92,9 @@ const mockEmailService = {
   sendViaticoRechazoColaborador: jest.fn().mockResolvedValue(undefined),
   sendViaticoAprobacionContabilidad: jest.fn().mockResolvedValue(undefined),
   sendViaticoPagoRealizado: jest.fn().mockResolvedValue(undefined),
+  sendDevolucionPendiente: jest.fn().mockResolvedValue(undefined),
+  sendDevolucionValidada: jest.fn().mockResolvedValue(undefined),
+  sendDevolucionRechazada: jest.fn().mockResolvedValue(undefined),
 }
 
 describe('AdvanceService', () => {
@@ -491,6 +496,142 @@ describe('AdvanceService', () => {
       mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       await expect(service.registerReturn(advanceId, 100)).rejects.toThrow(
         BadRequestException
+      )
+    })
+  })
+
+  // ── Fase 7 — initiateReturnTracking ──────────────────────────────────
+  describe('initiateReturnTracking', () => {
+    it('creates returnRecord and sends email when advance is settled with devolucion', async () => {
+      const advance = makeMockAdvance({
+        status: 'settled',
+        settlement: { difference: 200, type: 'devolucion', advanceAmount: 500, expenseTotal: 300, settledAt: new Date() },
+      })
+      mockAdvanceModel.findById
+        .mockReturnValueOnce(makeQuery(advance))
+        .mockReturnValueOnce(makeQuery({ ...advance, returnRecord: { status: 'pending', amountDue: 200 } }))
+      mockAdvanceModel.findByIdAndUpdate = jest.fn().mockResolvedValue({})
+      mockUserService.findEmailNameClient.mockResolvedValue({ email: 'test@test.com', name: 'Test User' })
+      mockEmailService.sendDevolucionPendiente = jest.fn().mockResolvedValue(undefined)
+      await service.initiateReturnTracking(advanceId)
+      expect(mockAdvanceModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        advanceId,
+        expect.objectContaining({ $set: expect.objectContaining({ returnRecord: expect.objectContaining({ status: 'pending' }) }) })
+      )
+    })
+
+    it('throws BadRequestException if advance is not settled', async () => {
+      const advance = makeMockAdvance({ status: 'paid' })
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
+      await expect(service.initiateReturnTracking(advanceId)).rejects.toThrow(BadRequestException)
+    })
+
+    it('throws BadRequestException if settlement type is not devolucion', async () => {
+      const advance = makeMockAdvance({
+        status: 'settled',
+        settlement: { difference: 0, type: 'equilibrado', advanceAmount: 300, expenseTotal: 300, settledAt: new Date() },
+      })
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
+      await expect(service.initiateReturnTracking(advanceId)).rejects.toThrow(BadRequestException)
+    })
+  })
+
+  // ── Fase 7 — uploadReturnProof ────────────────────────────────────────
+  describe('uploadReturnProof', () => {
+    const proofData = {
+      depositDate: new Date('2025-01-15'),
+      amountReturned: 200,
+      bankOrigin: 'BCP',
+      operationNumber: 'OP-12345',
+      fileUrl: 'https://s3.example.com/proof.pdf',
+    }
+
+    it('updates returnRecord to proof_uploaded status', async () => {
+      const advance = makeMockAdvance({
+        status: 'settled',
+        returnRecord: { status: 'pending', amountDue: 150, dueDate: new Date(), isOverdue: false, remindersSent: 0 },
+      })
+      const updatedAdvance = { ...advance, returnRecord: { ...advance.returnRecord, status: 'proof_uploaded' } }
+      mockAdvanceModel.findById
+        .mockReturnValueOnce(makeQuery(advance))
+        .mockReturnValueOnce(makeQuery(updatedAdvance))
+      mockAdvanceModel.findByIdAndUpdate = jest.fn().mockResolvedValue({})
+      const result = await service.uploadReturnProof(advanceId, proofData)
+      expect(mockAdvanceModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        advanceId,
+        expect.objectContaining({ $set: expect.objectContaining({ returnRecord: expect.objectContaining({ status: 'proof_uploaded' }) }) })
+      )
+    })
+
+    it('throws BadRequestException if amountReturned < amountDue', async () => {
+      const advance = makeMockAdvance({
+        returnRecord: { status: 'pending', amountDue: 300, dueDate: new Date(), isOverdue: false, remindersSent: 0 },
+      })
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
+      await expect(service.uploadReturnProof(advanceId, { ...proofData, amountReturned: 100 })).rejects.toThrow(BadRequestException)
+    })
+
+    it('throws BadRequestException if returnRecord status is not pending', async () => {
+      const advance = makeMockAdvance({
+        returnRecord: { status: 'proof_uploaded', amountDue: 200, dueDate: new Date(), isOverdue: false, remindersSent: 0 },
+      })
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
+      await expect(service.uploadReturnProof(advanceId, proofData)).rejects.toThrow(BadRequestException)
+    })
+  })
+
+  // ── Fase 7 — validateReturn ───────────────────────────────────────────
+  describe('validateReturn', () => {
+    it('approves the return and sets advance status to returned', async () => {
+      const advance = makeMockAdvance({
+        userId: new Types.ObjectId(userId),
+        returnRecord: {
+          status: 'proof_uploaded',
+          amountDue: 200,
+          proof: { amountReturned: 200, depositDate: new Date(), bankOrigin: 'BCP', operationNumber: 'OP1', fileUrl: 'url', uploadedAt: new Date() },
+          dueDate: new Date(),
+          isOverdue: false,
+          remindersSent: 0,
+        },
+      })
+      const updatedAdvance = { ...advance, status: 'returned', returnRecord: { ...advance.returnRecord, status: 'validated' } }
+      mockAdvanceModel.findById
+        .mockReturnValueOnce(makeQuery(advance))
+        .mockReturnValueOnce(makeQuery(updatedAdvance))
+      mockAdvanceModel.findByIdAndUpdate = jest.fn().mockResolvedValue({})
+      mockUserService.findEmailNameClient.mockResolvedValue({ email: 'c@c.com', name: 'Colaborador' })
+      mockEmailService.sendDevolucionValidada = jest.fn().mockResolvedValue(undefined)
+      const result = await service.validateReturn(advanceId, true, 'accountant-id')
+      expect(mockAdvanceModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        advanceId,
+        expect.objectContaining({ $set: expect.objectContaining({ status: 'returned' }) })
+      )
+    })
+
+    it('rejects the return and requires rejectionReason >= 50 chars', async () => {
+      const advance = makeMockAdvance({
+        returnRecord: { status: 'proof_uploaded', amountDue: 200, dueDate: new Date(), isOverdue: false, remindersSent: 0, proof: { amountReturned: 200, depositDate: new Date(), bankOrigin: 'BCP', operationNumber: 'OP1', fileUrl: 'url', uploadedAt: new Date() } },
+      })
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
+      await expect(service.validateReturn(advanceId, false, 'acc-id', 'short')).rejects.toThrow(BadRequestException)
+    })
+
+    it('throws BadRequestException if no proof_uploaded record exists', async () => {
+      const advance = makeMockAdvance({ returnRecord: { status: 'pending', amountDue: 200, dueDate: new Date(), isOverdue: false, remindersSent: 0 } })
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
+      await expect(service.validateReturn(advanceId, true, 'acc-id')).rejects.toThrow(BadRequestException)
+    })
+  })
+
+  // ── Fase 7 — markOverdueReturns ───────────────────────────────────────
+  describe('markOverdueReturns', () => {
+    it('updates overdue returns and returns modified count', async () => {
+      mockAdvanceModel.updateMany = jest.fn().mockResolvedValue({ modifiedCount: 3 })
+      const result = await service.markOverdueReturns()
+      expect(result).toBe(3)
+      expect(mockAdvanceModel.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ 'returnRecord.status': 'pending', 'returnRecord.isOverdue': false }),
+        expect.any(Object)
       )
     })
   })

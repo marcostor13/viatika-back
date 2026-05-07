@@ -788,4 +788,140 @@ export class EmailService {
       throw error
     }
   }
+
+  // ─── Fase 8 — Cierre definitivo ──────────────────────────────────────────
+
+  async sendRendicionCerrada(
+    email: string,
+    data: { recipientName: string; reportTitle: string; closedAt: string }
+  ) {
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: `Rendición Cerrada Definitivamente — ${data.reportTitle}`,
+        template: './rendicion-cerrada',
+        context: { logoUrl: 'https://app.viatica.tecdidata.com/logo.svg', year: new Date().getFullYear(), ...data },
+      })
+    } catch (error) {
+      this.logger.error(`Error correo rendición cerrada a ${email}:`, error)
+    }
+  }
+
+  // ─── Fase 7 — Devolución de saldos ───────────────────────────────────────
+
+  async sendDevolucionPendiente(
+    email: string,
+    data: { recipientName: string; amountDue: string; dueDate: string; advanceId: string }
+  ) {
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: `DEVOLUCIÓN PENDIENTE — Anticipo N° ${data.advanceId} — Monto S/ ${data.amountDue}`,
+        template: './devolucion-pendiente',
+        context: { logoUrl: 'https://app.viatica.tecdidata.com/logo.svg', year: new Date().getFullYear(), ...data },
+      })
+    } catch (error) {
+      this.logger.error(`Error correo devolución pendiente a ${email}:`, error)
+    }
+  }
+
+  async sendDevolucionValidada(
+    email: string,
+    data: { recipientName: string; amountDue: string; advanceId: string }
+  ) {
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: `Devolución validada — Anticipo N° ${data.advanceId}`,
+        template: './devolucion-validada',
+        context: { logoUrl: 'https://app.viatica.tecdidata.com/logo.svg', year: new Date().getFullYear(), ...data },
+      })
+    } catch (error) {
+      this.logger.error(`Error correo devolución validada a ${email}:`, error)
+    }
+  }
+
+  async sendDevolucionRechazada(
+    email: string,
+    data: { recipientName: string; amountDue: string; rejectionReason?: string; advanceId: string }
+  ) {
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: `Comprobante de devolución rechazado — Anticipo N° ${data.advanceId}`,
+        template: './devolucion-rechazada',
+        context: { logoUrl: 'https://app.viatica.tecdidata.com/logo.svg', year: new Date().getFullYear(), ...data },
+      })
+    } catch (error) {
+      this.logger.error(`Error correo devolución rechazada a ${email}:`, error)
+    }
+  }
+
+  // ─── Fase 9 — Reembolso Directo ──────────────────────────────────────────
+
+  async sendReembolsoDirectoAbierto(
+    email: string,
+    data: { recipientName: string; code: string; estimatedAmount: number; justification: string }
+  ) {
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: `Reembolso Directo Abierto — Código ${data.code}`,
+        template: './reembolso-directo-abierto',
+        context: { logoUrl: 'https://app.viatica.tecdidata.com/logo.svg', year: new Date().getFullYear(), ...data },
+      })
+    } catch (error) {
+      this.logger.error(`Error correo reembolso directo abierto a ${email}:`, error)
+    }
+  }
+
+  async sendReembolsoDirectoPagado(
+    email: string,
+    data: { recipientName: string; code: string; amount: number; receiptUrl: string }
+  ) {
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: `Pago Registrado — Reembolso Directo ${data.code}`,
+        template: './reembolso-directo-pagado',
+        context: { logoUrl: 'https://app.viatica.tecdidata.com/logo.svg', year: new Date().getFullYear(), ...data },
+      })
+    } catch (error) {
+      this.logger.error(`Error correo reembolso directo pagado a ${email}:`, error)
+    }
+  }
+
+  // ─── Fase 10 — Caja Chica ────────────────────────────────────────────────
+
+  async sendCajaChicaCreada(
+    email: string,
+    data: { recipientName: string; code: string; period: string; fundAmount: number }
+  ) {
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: `Caja Chica Creada — ${data.code}`,
+        template: './caja-chica-creada',
+        context: { logoUrl: 'https://app.viatica.tecdidata.com/logo.svg', year: new Date().getFullYear(), ...data },
+      })
+    } catch (error) {
+      this.logger.error(`Error correo caja chica creada a ${email}:`, error)
+    }
+  }
+
+  async sendCajaChicaFondeada(
+    email: string,
+    data: { recipientName: string; code: string; fundAmount: number }
+  ) {
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: `Caja Chica Fondeada y Activa — ${data.code}`,
+        template: './caja-chica-fondeada',
+        context: { logoUrl: 'https://app.viatica.tecdidata.com/logo.svg', year: new Date().getFullYear(), ...data },
+      })
+    } catch (error) {
+      this.logger.error(`Error correo caja chica fondeada a ${email}:`, error)
+    }
+  }
 }

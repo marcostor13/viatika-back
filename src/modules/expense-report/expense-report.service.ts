@@ -769,4 +769,134 @@ export class ExpenseReportService {
       throw new NotFoundException(`Expense report with ID ${id} not found`)
     return report
   }
+
+  // ─── FASE 8 — Cierre Definitivo ──────────────────────────────────────────
+
+  /** Valida todas las condiciones previas al cierre. Devuelve lista de errores (vacía = OK). */
+  async validateClosureConditions(id: string): Promise<string[]> {
+    const report = await this.expenseReportModel.findById(id).populate('expenseIds').exec()
+    if (!report) throw new NotFoundException(`Rendición ${id} no encontrada`)
+    const errors: string[] = []
+    if (report.status === 'closed') {
+      errors.push('La rendición ya está cerrada')
+      return errors
+    }
+    if (report.status !== 'approved' && report.status !== 'reimbursed') {
+      errors.push(`Estado actual "${report.status}" no permite cierre. Se requiere estado aprobado o reembolsado.`)
+    }
+    const expenses = (report.expenseIds as any[]) || []
+    const hasPendingExpenses = expenses.some(
+      e => e?.status === 'pending_review' || e?.status === 'pending_sunat'
+    )
+    if (hasPendingExpenses) {
+      errors.push('Existen gastos en estado pendiente de revisión o validación SUNAT')
+    }
+    const returnRecord = (report as any).returnRecord
+    if (returnRecord && returnRecord.status !== 'validated') {
+      errors.push(`Devolución pendiente en estado: ${returnRecord.status}. Se requiere validación de Contabilidad.`)
+    }
+    if (report.settlement?.type === 'reembolso' && report.status !== 'reimbursed') {
+      errors.push('El reembolso al colaborador aún no ha sido registrado')
+    }
+    return errors
+  }
+
+  /** Cierra definitivamente la rendición. Bloquea toda edición posterior. */
+  async close(id: string, closedBy: string): Promise<ExpenseReportDocument> {
+    const errors = await this.validateClosureConditions(id)
+    if (errors.length > 0) {
+      throw new BadRequestException(errors.join(' | '))
+    }
+    const closureRecord = {
+      closedAt: new Date(),
+      closedBy,
+      reopeningStatus: 'none' as const,
+      documentHashes: [],
+    }
+    const updated = await this.expenseReportModel
+      .findByIdAndUpdate(id, { $set: { status: 'closed', closureRecord } }, { new: true })
+      .exec()
+    if (!updated) throw new NotFoundException(`Rendición ${id} no encontrada`)
+    const collaborator = await this.userService.findEmailNameClient(updated.userId.toString())
+    if (collaborator?.email) {
+      this.emailService.sendRendicionCerrada(collaborator.email, {
+        recipientName: collaborator.name,
+        reportTitle: updated.title,
+        closedAt: closureRecord.closedAt.toLocaleDateString('es-PE'),
+      }).catch((err: any) => {})
+    }
+    return updated
+  }
+
+  /** Solicita reapertura (rol Gerencia/Admin). */
+  async requestReopening(
+    id: string,
+    requestedBy: string,
+    reason: string
+  ): Promise<ExpenseReportDocument> {
+    const report = await this.expenseReportModel.findById(id).exec()
+    if (!report) throw new NotFoundException(`Rendición ${id} no encontrada`)
+    if (report.status !== 'closed') {
+      throw new BadRequestException('Solo se puede solicitar reapertura de rendiciones cerradas')
+    }
+    if (reason.trim().length < 200) {
+      throw new BadRequestException('El motivo de reapertura debe tener al menos 200 caracteres')
+    }
+    const updatedClosure = {
+      ...(report as any).closureRecord,
+      reopeningStatus: 'requested' as const,
+      reopeningRequestedBy: requestedBy,
+      reopeningRequestedAt: new Date(),
+      reopeningReason: reason,
+    }
+    const updated = await this.expenseReportModel
+      .findByIdAndUpdate(id, { $set: { closureRecord: updatedClosure } }, { new: true })
+      .exec()
+    return updated!
+  }
+
+  /** Contabilidad aprueba o rechaza la reapertura. */
+  async approveReopening(
+    id: string,
+    approvedBy: string,
+    approve: boolean
+  ): Promise<ExpenseReportDocument> {
+    const report = await this.expenseReportModel.findById(id).exec()
+    if (!report) throw new NotFoundException(`Rendición ${id} no encontrada`)
+    const cr = (report as any).closureRecord
+    if (!cr || cr.reopeningStatus !== 'requested') {
+      throw new BadRequestException('No hay solicitud de reapertura pendiente')
+    }
+    const updates: any = {}
+    if (approve) {
+      updates.status = 'approved'
+      updates.closureRecord = {
+        ...cr,
+        reopeningStatus: 'approved' as const,
+        reopeningApprovedBy: approvedBy,
+        reopeningApprovedAt: new Date(),
+        reopenedAt: new Date(),
+      }
+    } else {
+      updates.closureRecord = {
+        ...cr,
+        reopeningStatus: 'none' as const,
+        reopeningApprovedBy: approvedBy,
+        reopeningApprovedAt: new Date(),
+      }
+    }
+    const updated = await this.expenseReportModel
+      .findByIdAndUpdate(id, { $set: updates }, { new: true })
+      .exec()
+    return updated!
+  }
+
+  /** Guard: lanza ForbiddenException si la rendición está cerrada. */
+  async assertNotClosed(id: string): Promise<void> {
+    const report = await this.expenseReportModel.findById(id).select('status closureRecord').exec()
+    if (!report) throw new NotFoundException(`Rendición ${id} no encontrada`)
+    if (report.status === 'closed') {
+      throw new ForbiddenException('La rendición está cerrada y no permite modificaciones')
+    }
+  }
 }

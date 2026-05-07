@@ -11,6 +11,41 @@ export type AdvanceStatus =
   | 'rejected'
   | 'returned'
 
+export type ReturnRecordStatus =
+  | 'pending'
+  | 'proof_uploaded'
+  | 'validated'
+  | 'rejected'
+
+export interface ReturnProof {
+  depositDate: Date
+  amountReturned: number
+  bankOrigin: string
+  operationNumber: string
+  fileUrl: string
+  fileKey?: string
+  uploadedAt: Date
+  note?: string
+}
+
+export interface ReturnValidation {
+  validatedBy: string
+  validatedAt: Date
+  approved: boolean
+  rejectionReason?: string
+}
+
+export interface ReturnRecord {
+  status: ReturnRecordStatus
+  amountDue: number
+  dueDate: Date
+  proof?: ReturnProof
+  validation?: ReturnValidation
+  isOverdue: boolean
+  remindersSent: number
+  escalatedAt?: Date
+}
+
 export interface ApprovalEntry {
   level: number
   approvedBy: string
@@ -78,6 +113,7 @@ export interface AdvanceDocument extends Document {
   rejectedBy?: string
   rejectionReason?: string
   returnedAmount?: number
+  returnRecord?: ReturnRecord
   /** Incrementa en cada reenvío tras rechazo (Fase 3). */
   solicitudVersion?: number
   /** Monto contabilizado en compromiso presupuestal del centro de costo hasta el pago. */
@@ -233,6 +269,9 @@ export class Advance {
 
   @Prop({ type: Number, required: false })
   returnedAmount?: number
+
+  @Prop({ type: Object, required: false })
+  returnRecord?: ReturnRecord
 
   @Prop({ type: Number, default: 1 })
   solicitudVersion?: number

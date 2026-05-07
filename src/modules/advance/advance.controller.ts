@@ -236,4 +236,57 @@ export class AdvanceController {
   ) {
     return this.advanceService.registerReturn(id, body.returnedAmount)
   }
+
+  // ─── Fase 7 ────────────────────────────────────────────────────────────
+
+  /** Inicia el sub-flujo de devolución (llamado después de settle con type=devolucion). */
+  @Patch(':id/return/initiate')
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  initiateReturn(@Param('id') id: string) {
+    return this.advanceService.initiateReturnTracking(id)
+  }
+
+  /** Colaborador carga comprobante de depósito. */
+  @Patch(':id/return/proof')
+  @Roles(ROLES.COLABORADOR, ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  uploadReturnProof(
+    @Param('id') id: string,
+    @Body() body: {
+      depositDate: string
+      amountReturned: number
+      bankOrigin: string
+      operationNumber: string
+      fileUrl: string
+      fileKey?: string
+      note?: string
+    }
+  ) {
+    return this.advanceService.uploadReturnProof(id, {
+      ...body,
+      depositDate: new Date(body.depositDate),
+    })
+  }
+
+  /** Contabilidad valida o rechaza el comprobante. */
+  @Patch(':id/return/validate')
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  validateReturn(
+    @Param('id') id: string,
+    @Body() body: { approved: boolean; rejectionReason?: string },
+    @Request() req
+  ) {
+    return this.advanceService.validateReturn(
+      id,
+      body.approved,
+      req.user?._id || req.user?.sub,
+      body.rejectionReason
+    )
+  }
+
+  /** Lista anticipos con devoluciones pendientes (contabilidad). */
+  @Get('pending-returns/client/:clientId')
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  findPendingReturns(@Param('clientId') clientId: string) {
+    return this.advanceService.findPendingReturns(clientId)
+  }
 }

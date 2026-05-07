@@ -24,6 +24,10 @@ export interface UserDocument extends Document {
   isActive: boolean
   dni?: string
   employeeCode?: string
+  /** Área organizacional (notificaciones viáticos Fase 3). */
+  area?: string
+  /** Cargo del colaborador (notificaciones viáticos Fase 3). */
+  cargo?: string
   address?: string
   phone?: string
   bankAccount?: BankAccount
@@ -58,6 +62,12 @@ export class User {
 
   @Prop()
   employeeCode?: string
+
+  @Prop()
+  area?: string
+
+  @Prop()
+  cargo?: string
 
   @Prop()
   address?: string

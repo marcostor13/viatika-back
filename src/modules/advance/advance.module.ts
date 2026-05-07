@@ -9,6 +9,7 @@ import { ProjectModule } from '../project/project.module'
 import { CategoryModule } from '../category/category.module'
 import { UserModule } from '../user/user.module'
 import { EmailModule } from '../email/email.module'
+import { NotificationsModule } from '../notifications/notifications.module'
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { EmailModule } from '../email/email.module'
     CategoryModule,
     UserModule,
     EmailModule,
+    NotificationsModule,
   ],
   controllers: [AdvanceController],
   providers: [AdvanceService],

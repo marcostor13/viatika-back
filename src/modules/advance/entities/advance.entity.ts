@@ -90,6 +90,7 @@ export interface CoordinatorNotificationLog {
 export interface AdvanceDocument extends Document {
   userId: Types.ObjectId
   clientId: Types.ObjectId
+  coordinatorId?: Types.ObjectId
   expenseReportId?: Types.ObjectId
   projectId?: Types.ObjectId
   place?: string
@@ -135,6 +136,9 @@ export class Advance {
 
   @Prop({ required: true, type: Types.ObjectId, ref: 'Client' })
   clientId: Types.ObjectId
+
+  @Prop({ type: Types.ObjectId, ref: 'User', required: false })
+  coordinatorId?: Types.ObjectId
 
   @Prop({ type: Types.ObjectId, ref: 'ExpenseReport', required: false })
   expenseReportId?: Types.ObjectId

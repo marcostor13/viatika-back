@@ -84,6 +84,7 @@ export interface CoordinatorNotificationLog {
   sentAt?: Date
   status: 'sent' | 'failed' | 'skipped'
   errorMessage?: string
+  manualResendUrl?: string
 }
 
 export interface AdvanceDocument extends Document {
@@ -178,6 +179,7 @@ export class Advance {
         enum: ['sent', 'failed', 'skipped'],
       },
       errorMessage: { type: String },
+      manualResendUrl: { type: String },
       _id: false,
     },
     required: false,

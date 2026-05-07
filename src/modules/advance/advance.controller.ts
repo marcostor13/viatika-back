@@ -185,6 +185,31 @@ export class AdvanceController {
     return result
   }
 
+  /** Reenvío manual de correo al coordinador cuando el envío falló. */
+  @Patch(':id/resend-coordinator-email')
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR)
+  async resendCoordinatorEmail(@Param('id') id: string, @Request() req) {
+    const rawClient = req.user?.clientId
+    const clientId =
+      rawClient?._id?.toString?.() ??
+      rawClient?.toString?.() ??
+      String(rawClient ?? '')
+
+    const result = await this.advanceService.resendCoordinatorNotification(
+      id,
+      clientId
+    )
+    this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email,
+      action: 'resend_coordinator_notification',
+      module: 'tesoreria',
+      entityId: id,
+      clientId: req.user.clientId,
+    })
+    return result
+  }
+
   /** Registro de pago / transferencia (SuperAdmin o usuario con canApproveL2) */
   @Patch(':id/register-payment')
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)

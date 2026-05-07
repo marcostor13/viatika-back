@@ -650,6 +650,13 @@ export class EmailService {
         to: email,
         subject,
         template: './viatico-solicitud-coordinator',
+        attachments: [
+          {
+            filename: 'resumen-solicitud-viaticos.txt',
+            content: data.plainSummary,
+            contentType: 'text/plain; charset=utf-8',
+          },
+        ],
         context: {
           logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
           year: new Date().getFullYear(),

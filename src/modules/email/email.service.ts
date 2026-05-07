@@ -666,6 +666,38 @@ export class EmailService {
     }
   }
 
+  async sendViaticoCancelacion(
+    email: string,
+    data: {
+      coordinatorName: string
+      collaboratorName: string
+      place: string
+      startDate: string
+      endDate: string
+      totalFormatted: string
+      projectLabel: string
+      plainSummary: string
+      cancelReason?: string
+      platformUrl: string
+    }
+  ) {
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: `Solicitud de viáticos cancelada — ${data.projectLabel}`,
+        template: './viatico-cancelacion-coordinator',
+        context: {
+          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          year: new Date().getFullYear(),
+          ...data,
+        },
+      })
+      this.logger.debug(`Correo cancelación viático enviado a ${email}`)
+    } catch (error) {
+      this.logger.error(`Error al enviar cancelación viático a ${email}:`, error)
+    }
+  }
+
   /** Fase 6 — rendición aprobada con saldo a favor del colaborador (pendiente de pago). */
   async sendRendicionReembolsoContabilidad(
     email: string,
@@ -804,6 +836,22 @@ export class EmailService {
       })
     } catch (error) {
       this.logger.error(`Error correo rendición cerrada a ${email}:`, error)
+    }
+  }
+
+  async sendRendicionCancelada(
+    email: string,
+    data: { adminName: string; collaboratorName: string; reportTitle: string; cancelReason?: string }
+  ) {
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: `Rendición cancelada por el colaborador — ${data.reportTitle}`,
+        template: './rendicion-cancelada',
+        context: { logoUrl: 'https://app.viatica.tecdidata.com/logo.svg', year: new Date().getFullYear(), ...data },
+      })
+    } catch (error) {
+      this.logger.error(`Error correo rendición cancelada a ${email}:`, error)
     }
   }
 

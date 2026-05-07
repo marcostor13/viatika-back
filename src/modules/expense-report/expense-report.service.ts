@@ -343,6 +343,30 @@ export class ExpenseReportService {
     // findByIdAndUpdate no hace populate: la UI necesita expenseIds como documentos
     const fullyUpdatedReport = await this.findOne(id)
 
+    // Si la rendición solicitada fue editada sin cambio de estado, re-notificar admins
+    if (existing.status === 'solicited' && dto.status === undefined) {
+      try {
+        const admins = await this.userService.findAdminsByClient(
+          String(fullyUpdatedReport.clientId)
+        )
+        const user = await this.userService.findOne(
+          String(fullyUpdatedReport.userId)
+        )
+        const creatorName = user.name || 'Un colaborador'
+        for (const admin of admins) {
+          await this.notificationsService.create({
+            userId: String(admin._id),
+            title: 'Solicitud de rendición actualizada',
+            message: `${creatorName} ha actualizado su solicitud de rendición: "${fullyUpdatedReport.title}"`,
+            type: 'info',
+            actionUrl: `/mis-rendiciones/${id}/detalle`,
+          })
+        }
+      } catch (error) {
+        console.error('Error enviando notificaciones de rendición actualizada', error)
+      }
+    }
+
     // Si la rendición fue aprobada, enviar email y notificación
     if (dto.status === 'approved') {
       const owner = fullyUpdatedReport.userId as any
@@ -889,6 +913,63 @@ export class ExpenseReportService {
       .findByIdAndUpdate(id, { $set: updates }, { new: true })
       .exec()
     return updated!
+  }
+
+  // ─── Cancel / Delete por colaborador ────────────────────────────────────────
+
+  /** Cancela una rendición en estado 'solicited'. Solo el propietario puede cancelar. */
+  async cancel(
+    id: string,
+    userId: string,
+    reason?: string
+  ): Promise<ExpenseReportDocument> {
+    const report = await this.expenseReportModel.findById(id).lean().exec()
+    if (!report) throw new NotFoundException(`Expense report with ID ${id} not found`)
+
+    if (
+      String(report.userId) !== String(userId) &&
+      String(report.createdBy) !== String(userId)
+    ) {
+      throw new ForbiddenException('No tienes permiso para cancelar esta rendición')
+    }
+    if (report.status !== 'solicited') {
+      throw new BadRequestException(
+        'Solo se puede cancelar una rendición en estado solicitada.'
+      )
+    }
+
+    const updated = await this.expenseReportModel
+      .findByIdAndUpdate(id, { $set: { status: 'cancelled' } }, { new: true })
+      .exec()
+    if (!updated) throw new NotFoundException(`Expense report with ID ${id} not found`)
+
+    try {
+      const admins = await this.userService.findAdminsByClient(String(report.clientId))
+      const user = await this.userService.findOne(userId)
+      const collaboratorName = user.name || 'Un colaborador'
+
+      for (const admin of admins) {
+        if (admin.email) {
+          await this.emailService.sendRendicionCancelada(admin.email, {
+            adminName: admin.name || 'Administrador',
+            collaboratorName,
+            reportTitle: report.title,
+            cancelReason: reason,
+          })
+        }
+        await this.notificationsService.create({
+          userId: String(admin._id),
+          title: 'Rendición cancelada',
+          message: `${collaboratorName} ha cancelado su solicitud de rendición: "${report.title}"`,
+          type: 'warning',
+          actionUrl: `/mis-rendiciones/${id}/detalle`,
+        })
+      }
+    } catch (error) {
+      console.error('Error enviando notificaciones de rendición cancelada', error)
+    }
+
+    return updated
   }
 
   /** Guard: lanza ForbiddenException si la rendición está cerrada. */

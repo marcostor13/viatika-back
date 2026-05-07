@@ -10,6 +10,7 @@ export type AdvanceStatus =
   | 'settled'
   | 'rejected'
   | 'returned'
+  | 'cancelled'
 
 export type ReturnRecordStatus =
   | 'pending'
@@ -201,6 +202,7 @@ export class Advance {
       'settled',
       'rejected',
       'returned',
+      'cancelled',
     ],
   })
   status: AdvanceStatus

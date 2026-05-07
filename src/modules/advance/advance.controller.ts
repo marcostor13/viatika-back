@@ -289,4 +289,22 @@ export class AdvanceController {
   findPendingReturns(@Param('clientId') clientId: string) {
     return this.advanceService.findPendingReturns(clientId)
   }
+
+  /** Colaborador cancela su solicitud pendiente de aprobación. */
+  @Patch(':id/cancel')
+  @Roles(ROLES.COLABORADOR, ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  async cancelByCollaborator(@Param('id') id: string, @Request() req) {
+    const userId = req.user?.sub || req.user?._id
+    const result = await this.advanceService.cancelByCollaborator(id, userId)
+    this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email,
+      action: 'cancel_advance',
+      module: 'tesoreria',
+      entityId: id,
+      clientId: req.user.clientId,
+    })
+    return result
+  }
+
 }

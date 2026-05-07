@@ -47,6 +47,8 @@ export type AuditAction =
   | 'create_petty_cash'
   | 'fund_petty_cash'
   | 'close_petty_cash'
+  | 'cancel_rendicion'
+  | 'cancel_advance'
 
 @Schema({ timestamps: true })
 export class AuditLog {

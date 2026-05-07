@@ -1354,9 +1354,9 @@ export class AdvanceService {
     const advance = await this.advanceModel.findById(id)
     if (!advance) throw new NotFoundException(`Anticipo ${id} no encontrado`)
 
-    if (advance.status !== 'rejected') {
+    if (advance.status !== 'rejected' && advance.status !== 'pending_l1') {
       throw new BadRequestException(
-        'Solo pueden reenviarse solicitudes en estado rechazado.'
+        'Solo pueden editarse solicitudes en estado rechazado o pendiente de aprobación.'
       )
     }
 
@@ -1394,6 +1394,7 @@ export class AdvanceService {
         clientId
       )
 
+    const wasEditing = advance.status === 'pending_l1'
     advance.place = dto.place.trim()
     advance.startDate = new Date(dto.startDate)
     advance.endDate = new Date(dto.endDate)
@@ -1414,7 +1415,9 @@ export class AdvanceService {
       level: 0,
       approvedBy: actingUserId,
       action: 'resubmitted',
-      notes: 'Solicitud corregida y reenviada tras rechazo',
+      notes: wasEditing
+        ? 'Solicitud editada antes de aprobación'
+        : 'Solicitud corregida y reenviada tras rechazo',
       date: new Date(),
     })
 
@@ -1436,6 +1439,95 @@ export class AdvanceService {
       .exec()
 
     return refreshed as Advance
+  }
+
+  // ─── Cancel / Delete por colaborador ────────────────────────────────────────
+
+  async cancelByCollaborator(id: string, userId: string): Promise<Advance> {
+    const advance = await this.advanceModel.findById(id)
+    if (!advance) throw new NotFoundException(`Anticipo ${id} no encontrado`)
+    if (advance.userId.toString() !== userId) {
+      throw new ForbiddenException(
+        'Solo el colaborador solicitante puede cancelar esta solicitud.'
+      )
+    }
+    if (advance.status !== 'pending_l1') {
+      throw new BadRequestException(
+        'Solo se puede cancelar una solicitud en estado pendiente de aprobación.'
+      )
+    }
+    advance.status = 'cancelled'
+    await advance.save()
+
+    this.notifyCoordinatorViaticoCancelled(advance as AdvanceDocument, userId).catch(
+      (err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.logger.error(`Correo cancelación viático coordinador: ${msg}`)
+      }
+    )
+
+    return advance
+  }
+
+  private async notifyCoordinatorViaticoCancelled(
+    advance: AdvanceDocument,
+    collaboratorUserId: string
+  ): Promise<void> {
+    if (!advance.projectId) return
+
+    const collaborator = await this.userService.findEmailNameClient(collaboratorUserId)
+    const profile = await this.userService.findTransactionalProfile(collaboratorUserId)
+    const coordId = profile?.coordinatorId
+    if (!coordId) return
+
+    const coordinator = await this.userService.findEmailNameClient(coordId.toString())
+    if (
+      !coordinator?.email ||
+      !collaborator ||
+      !coordinator.clientId.equals(collaborator.clientId)
+    ) return
+
+    let projectLabel = 'Centro de costo'
+    try {
+      const p = await this.projectService.findOne(
+        advance.projectId.toString(),
+        advance.clientId.toString()
+      )
+      projectLabel = `[${p.code} - ${p.name}]`
+    } catch { /* use fallback */ }
+
+    const totalFormatted = Number(advance.amount).toFixed(2)
+    const startStr = advance.startDate instanceof Date
+      ? advance.startDate.toISOString().slice(0, 10)
+      : String(advance.startDate ?? '').slice(0, 10)
+    const endStr = advance.endDate instanceof Date
+      ? advance.endDate.toISOString().slice(0, 10)
+      : String(advance.endDate ?? '').slice(0, 10)
+
+    const plainSummary = [
+      `Colaborador: ${collaborator.name}`,
+      `Lugar: ${advance.place ?? '—'}`,
+      `Fechas: ${startStr} al ${endStr}`,
+      `Centro de costo: ${projectLabel}`,
+      `Monto total: S/ ${totalFormatted}`,
+    ].join('\n')
+
+    const platformUrl =
+      process.env.APP_PUBLIC_URL ||
+      process.env.FRONTEND_URL ||
+      'https://app.viatica.tecdidata.com'
+
+    await this.emailService.sendViaticoCancelacion(coordinator.email, {
+      coordinatorName: coordinator.name,
+      collaboratorName: collaborator.name,
+      place: advance.place ?? '—',
+      startDate: startStr,
+      endDate: endStr,
+      totalFormatted,
+      projectLabel,
+      plainSummary,
+      platformUrl,
+    })
   }
 
   async getStats(clientId: string) {

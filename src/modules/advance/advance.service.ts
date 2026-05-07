@@ -377,11 +377,13 @@ export class AdvanceService {
       process.env.APP_PUBLIC_URL ||
       process.env.FRONTEND_URL ||
       'http://localhost:4200'
+    const manualResendUrl = `/advance/${advanceId}/resend-coordinator-email`
 
     const setNotif = async (payload: {
       recipientUserId?: Types.ObjectId
       status: 'sent' | 'failed' | 'skipped'
       errorMessage?: string
+      manualResendUrl?: string
     }) => {
       await this.advanceModel.updateOne(
         { _id: (advance as any)._id },
@@ -392,6 +394,7 @@ export class AdvanceService {
               status: payload.status,
               sentAt: new Date(),
               errorMessage: payload.errorMessage,
+              manualResendUrl: payload.manualResendUrl,
             },
           },
         }
@@ -446,8 +449,28 @@ export class AdvanceService {
         recipientUserId: coordId,
         status: 'failed',
         errorMessage: msg,
+        manualResendUrl,
       })
     }
+  }
+
+  async resendCoordinatorNotification(
+    advanceId: string,
+    clientId: string
+  ): Promise<Advance> {
+    const advance = await this.findOne(advanceId)
+    if (!advance.clientId || advance.clientId.toString() !== clientId) {
+      throw new ForbiddenException(
+        'No tiene permisos para reenviar esta notificación.'
+      )
+    }
+
+    await this.notifyCoordinatorViatico(
+      advance as AdvanceDocument,
+      advance.userId.toString(),
+      clientId
+    )
+    return this.findOne(advanceId)
   }
 
   private async notifyCollaboratorViaticoRejected(

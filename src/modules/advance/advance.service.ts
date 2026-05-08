@@ -86,6 +86,26 @@ export class AdvanceService {
     return this.viaticoNotifyField(employeeCode)
   }
 
+  /** Escape para HTML en correos (evita XSS y romper el markup). */
+  private escapeHtmlForEmail(value: string): string {
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+  }
+
+  private viaticoEmailKvRow(label: string, value: string): string {
+    const l = this.escapeHtmlForEmail(label)
+    const v = this.escapeHtmlForEmail(value)
+    return `<tr><td style="padding:6px 14px 6px 0;vertical-align:top;color:#64748b;font-size:13px;width:40%;">${l}</td><td style="padding:6px 0;vertical-align:top;color:#0f172a;font-size:13px;">${v}</td></tr>`
+  }
+
+  private viaticoEmailSectionTitle(title: string): string {
+    const t = this.escapeHtmlForEmail(title)
+    return `<h3 style="margin:22px 0 10px 0;font-size:13px;color:#0f172a;text-transform:uppercase;letter-spacing:0.04em;border-bottom:2px solid #22c55e;padding-bottom:6px;">${t}</h3>`
+  }
+
   private isViaticoSolicitud(dto: CreateAdvanceDto): boolean {
     return !!(
       dto.place?.trim() &&
@@ -103,9 +123,7 @@ export class AdvanceService {
     const t = this.startOfDay(new Date())
     const tomorrow = new Date(t)
     tomorrow.setDate(tomorrow.getDate() + 1)
-    return (
-      s.getTime() === t.getTime() || s.getTime() === tomorrow.getTime()
-    )
+    return s.getTime() === t.getTime() || s.getTime() === tomorrow.getTime()
   }
 
   private isValidPaymentReceipt(
@@ -121,7 +139,9 @@ export class AdvanceService {
     const mimeAllowed = normalizedMime
       ? allowedMimes.includes(normalizedMime)
       : false
-    const extAllowed = allowedExtensions.some(ext => normalizedName.endsWith(ext))
+    const extAllowed = allowedExtensions.some(ext =>
+      normalizedName.endsWith(ext)
+    )
     if (!mimeAllowed && !extAllowed) {
       return {
         ok: false,
@@ -266,13 +286,14 @@ export class AdvanceService {
       ? `${metaDesc} | ${dto.observations.trim()}`
       : metaDesc
 
-    const requiredLevels =
-      roundedSum > ADVANCE_THRESHOLDS.L1_MAX ? 2 : 1
+    const requiredLevels = roundedSum > ADVANCE_THRESHOLDS.L1_MAX ? 2 : 1
 
     return { lineDocs, roundedSum, description, requiredLevels }
   }
 
-  private async createViaticoSolicitud(dto: CreateAdvanceDto): Promise<Advance> {
+  private async createViaticoSolicitud(
+    dto: CreateAdvanceDto
+  ): Promise<Advance> {
     const profile = await this.userService.findTransactionalProfile(dto.userId!)
     if (!profile?.signature?.trim()) {
       throw new ForbiddenException(
@@ -428,7 +449,8 @@ export class AdvanceService {
       await setNotif({
         recipientUserId: coordId,
         status: 'skipped',
-        errorMessage: 'Coordinador o colaborador no encontrado en la base de datos',
+        errorMessage:
+          'Coordinador o colaborador no encontrado en la base de datos',
       })
       return
     }
@@ -443,7 +465,8 @@ export class AdvanceService {
       await setNotif({
         recipientUserId: coordId,
         status: 'skipped',
-        errorMessage: 'Coordinador no pertenece al mismo cliente que el colaborador',
+        errorMessage:
+          'Coordinador no pertenece al mismo cliente que el colaborador',
       })
       return
     }
@@ -554,6 +577,10 @@ export class AdvanceService {
     })
   }
 
+  /**
+   * Cuerpo HTML del correo a contabilidad (orden: detalle del viaje → solicitante → aprobador).
+   * Formato tabular para clientes que colapsan saltos de línea en texto plano.
+   */
   private buildViaticoAccountingDetailBody(
     advance: AdvanceDocument,
     collaboratorMeta: {
@@ -593,41 +620,93 @@ export class AdvanceService {
           ? String(advance.endDate).slice(0, 10)
           : '—'
     const lines = advance.lines ?? []
-    const breakdown: string[] = []
+    const breakdownItems: string[] = []
     for (const row of lines) {
       const cat = (row as { categoryId?: unknown }).categoryId
       const catName =
         cat && typeof cat === 'object' && cat !== null && 'name' in cat
           ? String((cat as { name?: string }).name)
           : 'Categoría'
-      breakdown.push(`  • ${catName}: S/ ${Number(row.lineTotal).toFixed(2)}`)
+      const lineText = `${catName}: S/ ${Number(row.lineTotal).toFixed(2)}`
+      breakdownItems.push(
+        `<li style="margin:6px 0;">${this.escapeHtmlForEmail(lineText)}</li>`
+      )
     }
+    const breakdownHtml =
+      breakdownItems.length > 0
+        ? `<ul style="margin:8px 0 16px 0;padding-left:22px;color:#0f172a;">${breakdownItems.join('')}</ul>`
+        : `<p style="margin:8px 0 16px;color:#64748b;font-size:13px;">${this.escapeHtmlForEmail('(sin líneas)')}</p>`
+
     const apprDate = approvedAt.toISOString().slice(0, 16).replace('T', ' ')
+    const amountStr = `S/ ${Number(advance.amount).toFixed(2)}`
+    const compromiso = `${amountStr} registrados en compromiso del centro de costo (hasta registro de pago en tesorería).`
+
+    const tableOpen =
+      '<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;">'
+    const tableClose = '</table>'
+
+    const detalleRows = [
+      this.viaticoEmailKvRow('Centro de costo', cc),
+      this.viaticoEmailKvRow(
+        'Lugar',
+        advance.place?.trim() ? advance.place.trim() : '—'
+      ),
+      this.viaticoEmailKvRow('Fechas del viaje', `${start} al ${end}`),
+      this.viaticoEmailKvRow('Monto total aprobado', amountStr),
+    ].join('')
+
+    const solicitanteRows = [
+      this.viaticoEmailKvRow('Nombre', collaboratorMeta.name),
+      this.viaticoEmailKvRow(
+        'Documento',
+        this.viaticoNotifyField(collaboratorMeta.dni)
+      ),
+      this.viaticoEmailKvRow(
+        'Área',
+        this.viaticoNotifyField(collaboratorMeta.area)
+      ),
+      this.viaticoEmailKvRow(
+        'Cargo',
+        this.viaticoCargoDisplay(
+          collaboratorMeta.cargo,
+          collaboratorMeta.employeeCode
+        )
+      ),
+    ].join('')
+
+    const aprobadorRows = [
+      this.viaticoEmailKvRow('Nombre', approverMeta.name),
+      this.viaticoEmailKvRow(
+        'Documento',
+        this.viaticoNotifyField(approverMeta.dni)
+      ),
+      this.viaticoEmailKvRow('Área', this.viaticoNotifyField(approverMeta.area)),
+      this.viaticoEmailKvRow(
+        'Cargo',
+        this.viaticoCargoDisplay(approverMeta.cargo, approverMeta.employeeCode)
+      ),
+      this.viaticoEmailKvRow('Fecha y hora de aprobación', apprDate),
+    ].join('')
+
     return [
-      `SOLICITANTE`,
-      `  Nombre: ${collaboratorMeta.name}`,
-      `  Documento: ${this.viaticoNotifyField(collaboratorMeta.dni)}`,
-      `  Área: ${this.viaticoNotifyField(collaboratorMeta.area)}`,
-      `  Cargo: ${this.viaticoCargoDisplay(collaboratorMeta.cargo, collaboratorMeta.employeeCode)}`,
-      ``,
-      `APROBADOR`,
-      `  Nombre: ${approverMeta.name}`,
-      `  Documento: ${this.viaticoNotifyField(approverMeta.dni)}`,
-      `  Área: ${this.viaticoNotifyField(approverMeta.area)}`,
-      `  Cargo: ${this.viaticoCargoDisplay(approverMeta.cargo, approverMeta.employeeCode)}`,
-      `  Fecha y hora: ${apprDate}`,
-      ``,
-      `DETALLE`,
-      `  Centro de costo: ${cc}`,
-      `  Lugar: ${advance.place ?? '—'}`,
-      `  Fechas viaje: ${start} al ${end}`,
-      `  Monto total aprobado: S/ ${Number(advance.amount).toFixed(2)}`,
-      ``,
-      `Desglose por categoría:`,
-      breakdown.join('\n') || '  (sin líneas)',
-      ``,
-      `Compromiso presupuestal: S/ ${Number(advance.amount).toFixed(2)} registrados en compromiso del centro de costo (hasta registro de pago en tesorería).`,
-    ].join('\n')
+      `<div style="font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;font-size:14px;line-height:1.55;color:#334155;">`,
+      `<h2 style="margin:0 0 14px;font-size:16px;color:#0f172a;font-weight:700;">${this.escapeHtmlForEmail('Detalle de la solicitud aprobada')}</h2>`,
+      tableOpen,
+      detalleRows,
+      tableClose,
+      `<p style="margin:14px 0 6px;font-weight:600;color:#0f172a;font-size:13px;">${this.escapeHtmlForEmail('Desglose por categoría')}</p>`,
+      breakdownHtml,
+      `<p style="margin:0;padding:12px 14px;background-color:#ecfdf5;border-radius:6px;border-left:4px solid #22c55e;font-size:13px;color:#166534;"><strong>${this.escapeHtmlForEmail('Compromiso presupuestal')}</strong><br/>${this.escapeHtmlForEmail(compromiso)}</p>`,
+      this.viaticoEmailSectionTitle('Solicitante'),
+      tableOpen,
+      solicitanteRows,
+      tableClose,
+      this.viaticoEmailSectionTitle('Aprobador'),
+      tableOpen,
+      aprobadorRows,
+      tableClose,
+      `</div>`,
+    ].join('')
   }
 
   private async notifyAccountingViaticoApproved(
@@ -649,11 +728,15 @@ export class AdvanceService {
       .populate('projectId')
       .populate({ path: 'lines.categoryId', select: 'name key' })
       .exec()
-    const doc = (populated ?? advance) as AdvanceDocument
+    const doc = populated ?? advance
 
     const collabId = advance.userId.toString()
     let projectLabelSubject = '— - —'
-    if (doc.projectId && typeof doc.projectId === 'object' && doc.projectId !== null) {
+    if (
+      doc.projectId &&
+      typeof doc.projectId === 'object' &&
+      doc.projectId !== null
+    ) {
       const pr = doc.projectId as { code?: string; name?: string }
       if (pr.code !== undefined || pr.name !== undefined) {
         projectLabelSubject = `${pr.code ?? '—'} - ${pr.name ?? '—'}`
@@ -756,7 +839,9 @@ export class AdvanceService {
         )
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err)
-        this.logger.error(`Compromiso presupuestal viático ${saved._id}: ${msg}`)
+        this.logger.error(
+          `Compromiso presupuestal viático ${saved._id}: ${msg}`
+        )
       }
     }
 
@@ -764,7 +849,9 @@ export class AdvanceService {
       await this.notifyAccountingViaticoApproved(saved)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
-      this.logger.error(`Notificación contabilidad viático ${saved._id}: ${msg}`)
+      this.logger.error(
+        `Notificación contabilidad viático ${saved._id}: ${msg}`
+      )
     }
   }
 
@@ -775,8 +862,7 @@ export class AdvanceService {
     const collab = await this.userService.findEmailNameClient(collabId)
     if (!collab?.email) return
 
-    const profile =
-      await this.userService.findTransactionalProfile(collabId)
+    const profile = await this.userService.findTransactionalProfile(collabId)
     const coordinatorId = profile?.coordinatorId?.toString?.()
     const coordinator = coordinatorId
       ? await this.userService.findEmailNameClient(coordinatorId)
@@ -811,7 +897,8 @@ export class AdvanceService {
       paymentMethod: advance.paymentInfo?.method || 'transferencia_bancaria',
       paymentReceiptUrl: advance.paymentInfo?.paymentReceiptUrl || '',
       paymentReceiptFileName:
-        advance.paymentInfo?.paymentReceiptFileName || 'comprobante-pago-viaticos.pdf',
+        advance.paymentInfo?.paymentReceiptFileName ||
+        'comprobante-pago-viaticos.pdf',
       platformUrl,
     }
 
@@ -847,7 +934,9 @@ export class AdvanceService {
     dateFrom?: string
     dateTo?: string
   }) {
-    const isAdminRole = [ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(opts.requesterRole as ROLES)
+    const isAdminRole = [ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(
+      opts.requesterRole as ROLES
+    )
     const isCoordinator =
       !isAdminRole &&
       (opts.requesterRole === ROLES.COORDINADOR || opts.requesterPermissions?.canApproveL1 === true)
@@ -1265,7 +1354,9 @@ export class AdvanceService {
     const rawAdvanceIds = Array.isArray(report.advanceIds)
       ? report.advanceIds
       : []
-    const idList = rawAdvanceIds.map((x: unknown) => new Types.ObjectId(String(x)))
+    const idList = rawAdvanceIds.map(
+      (x: unknown) => new Types.ObjectId(String(x))
+    )
 
     const linkedAdvances = await this.advanceModel
       .find({
@@ -1364,7 +1455,9 @@ export class AdvanceService {
         )
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err)
-        this.logger.error(`Notificación reembolso contabilidad ${reportId}: ${msg}`)
+        this.logger.error(
+          `Notificación reembolso contabilidad ${reportId}: ${msg}`
+        )
       }
     }
   }
@@ -1425,7 +1518,9 @@ export class AdvanceService {
     const advance = await this.advanceModel.findById(id)
     if (!advance) throw new NotFoundException(`Viático ${id} no encontrado`)
     if (advance.status !== 'settled') {
-      throw new BadRequestException('Solo se puede iniciar devolución desde estado liquidado')
+      throw new BadRequestException(
+        'Solo se puede iniciar devolución desde estado liquidado'
+      )
     }
     if (!advance.settlement || advance.settlement.type !== 'devolucion') {
       throw new BadRequestException('Este viático no tiene saldo a devolver')
@@ -1439,14 +1534,24 @@ export class AdvanceService {
       remindersSent: 0,
     }
     await this.advanceModel.findByIdAndUpdate(id, { $set: { returnRecord } })
-    const collaborator = await this.userService.findEmailNameClient(advance.userId.toString())
+    const collaborator = await this.userService.findEmailNameClient(
+      advance.userId.toString()
+    )
     if (collaborator?.email) {
-      this.emailService.sendDevolucionPendiente(collaborator.email, {
-        recipientName: collaborator.name,
-        amountDue: advance.settlement.difference.toFixed(2),
-        dueDate: dueDate.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric' }),
-        advanceId: id,
-      }).catch(err => this.logger.error(`Email devolución pendiente: ${err?.message}`))
+      this.emailService
+        .sendDevolucionPendiente(collaborator.email, {
+          recipientName: collaborator.name,
+          amountDue: advance.settlement.difference.toFixed(2),
+          dueDate: dueDate.toLocaleDateString('es-PE', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+          }),
+          advanceId: id,
+        })
+        .catch(err =>
+          this.logger.error(`Email devolución pendiente: ${err?.message}`)
+        )
     }
     return (await this.advanceModel.findById(id))!
   }
@@ -1480,7 +1585,9 @@ export class AdvanceService {
       status: 'proof_uploaded' as const,
       proof: { ...proof, uploadedAt: new Date() },
     }
-    await this.advanceModel.findByIdAndUpdate(id, { $set: { returnRecord: updatedRr } })
+    await this.advanceModel.findByIdAndUpdate(id, {
+      $set: { returnRecord: updatedRr },
+    })
     return (await this.advanceModel.findById(id))!
   }
 
@@ -1495,12 +1602,21 @@ export class AdvanceService {
     if (!advance) throw new NotFoundException(`Viático ${id} no encontrado`)
     const rr = (advance as any).returnRecord
     if (!rr || rr.status !== 'proof_uploaded') {
-      throw new BadRequestException('No hay comprobante pendiente de validación')
+      throw new BadRequestException(
+        'No hay comprobante pendiente de validación'
+      )
     }
     if (!approved && (!rejectionReason || rejectionReason.trim().length < 50)) {
-      throw new BadRequestException('El motivo de rechazo debe tener al menos 50 caracteres')
+      throw new BadRequestException(
+        'El motivo de rechazo debe tener al menos 50 caracteres'
+      )
     }
-    const validation = { validatedBy, validatedAt: new Date(), approved, rejectionReason }
+    const validation = {
+      validatedBy,
+      validatedAt: new Date(),
+      approved,
+      rejectionReason,
+    }
     const newStatus = approved ? 'validated' : 'rejected'
     const updatedRr = { ...rr, status: newStatus, validation }
     const updates: any = { returnRecord: updatedRr }
@@ -1509,7 +1625,9 @@ export class AdvanceService {
       updates.returnedAmount = rr.proof?.amountReturned ?? rr.amountDue
     }
     await this.advanceModel.findByIdAndUpdate(id, { $set: updates })
-    const collaborator = await this.userService.findEmailNameClient(advance.userId.toString())
+    const collaborator = await this.userService.findEmailNameClient(
+      advance.userId.toString()
+    )
     if (collaborator?.email) {
       const sendFn = approved
         ? this.emailService.sendDevolucionValidada.bind(this.emailService)
@@ -1519,7 +1637,9 @@ export class AdvanceService {
         amountDue: rr.amountDue.toFixed(2),
         rejectionReason,
         advanceId: id,
-      }).catch((err: any) => this.logger.error(`Email validación devolución: ${err?.message}`))
+      }).catch((err: any) =>
+        this.logger.error(`Email validación devolución: ${err?.message}`)
+      )
     }
     return (await this.advanceModel.findById(id))!
   }
@@ -1529,7 +1649,9 @@ export class AdvanceService {
     return this.advanceModel
       .find({
         clientId: new Types.ObjectId(clientId),
-        'returnRecord.status': { $in: ['pending', 'proof_uploaded', 'rejected'] },
+        'returnRecord.status': {
+          $in: ['pending', 'proof_uploaded', 'rejected'],
+        },
       })
       .populate('userId', 'name email')
       .exec() as Promise<Advance[]>
@@ -1677,12 +1799,13 @@ export class AdvanceService {
     advance.status = 'cancelled'
     await advance.save()
 
-    this.notifyCoordinatorViaticoCancelled(advance as AdvanceDocument, userId).catch(
-      (err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err)
-        this.logger.error(`Correo cancelación viático coordinador: ${msg}`)
-      }
-    )
+    this.notifyCoordinatorViaticoCancelled(
+      advance as AdvanceDocument,
+      userId
+    ).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err)
+      this.logger.error(`Correo cancelación viático coordinador: ${msg}`)
+    })
 
     return advance
   }
@@ -1693,18 +1816,23 @@ export class AdvanceService {
   ): Promise<void> {
     if (!advance.projectId) return
 
-    const collaborator = await this.userService.findEmailNameClient(collaboratorUserId)
-    const profile = await this.userService.findTransactionalProfile(collaboratorUserId)
+    const collaborator =
+      await this.userService.findEmailNameClient(collaboratorUserId)
+    const profile =
+      await this.userService.findTransactionalProfile(collaboratorUserId)
     const coordId = profile?.coordinatorId
     if (!coordId) return
 
-    const coordinator = await this.userService.findEmailNameClient(coordId.toString())
+    const coordinator = await this.userService.findEmailNameClient(
+      coordId.toString()
+    )
     if (!coordinator?.email || !collaborator) return
     if (
       coordinator.clientId &&
       collaborator.clientId &&
       coordinator.clientId.toString() !== collaborator.clientId.toString()
-    ) return
+    )
+      return
 
     let projectLabel = 'Centro de costo'
     try {
@@ -1713,15 +1841,19 @@ export class AdvanceService {
         advance.clientId.toString()
       )
       projectLabel = `[${p.code} - ${p.name}]`
-    } catch { /* use fallback */ }
+    } catch {
+      /* use fallback */
+    }
 
     const totalFormatted = Number(advance.amount).toFixed(2)
-    const startStr = advance.startDate instanceof Date
-      ? advance.startDate.toISOString().slice(0, 10)
-      : String(advance.startDate ?? '').slice(0, 10)
-    const endStr = advance.endDate instanceof Date
-      ? advance.endDate.toISOString().slice(0, 10)
-      : String(advance.endDate ?? '').slice(0, 10)
+    const startStr =
+      advance.startDate instanceof Date
+        ? advance.startDate.toISOString().slice(0, 10)
+        : String(advance.startDate ?? '').slice(0, 10)
+    const endStr =
+      advance.endDate instanceof Date
+        ? advance.endDate.toISOString().slice(0, 10)
+        : String(advance.endDate ?? '').slice(0, 10)
 
     const plainSummary = [
       `Colaborador: ${collaborator.name}`,

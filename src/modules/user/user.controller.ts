@@ -59,7 +59,7 @@ export class UserController {
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   @Get('client/:clientId')
   async findAll(
     @Param('clientId', ParseObjectIdPipe) clientId: Types.ObjectId,

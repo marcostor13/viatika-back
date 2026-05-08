@@ -217,7 +217,12 @@ export class ExpenseController {
   }
 
   @Get('invoice/:id/sunat-validation')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  @Roles(
+    ROLES.SUPER_ADMIN,
+    ROLES.ADMIN,
+    ROLES.COLABORADOR,
+    ROLES.CONTABILIDAD
+  )
   @UseGuards(JwtAuthGuard, RolesGuard)
   getSunatValidation(
     @Param('id') id: string,
@@ -231,7 +236,12 @@ export class ExpenseController {
   }
 
   @Get('invoice/:id')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  @Roles(
+    ROLES.SUPER_ADMIN,
+    ROLES.ADMIN,
+    ROLES.COLABORADOR,
+    ROLES.CONTABILIDAD
+  )
   @UseGuards(JwtAuthGuard, RolesGuard)
   findOne(
     @Param('id') id: string,
@@ -245,7 +255,12 @@ export class ExpenseController {
   }
 
   @Get('stats')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  @Roles(
+    ROLES.SUPER_ADMIN,
+    ROLES.ADMIN,
+    ROLES.COLABORADOR,
+    ROLES.CONTABILIDAD
+  )
   @UseGuards(JwtAuthGuard, RolesGuard)
   getStatusCounts(@Request() req) {
     const clientId = req.user?.clientId
@@ -254,7 +269,12 @@ export class ExpenseController {
   }
 
   @Get(':clientId')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  @Roles(
+    ROLES.SUPER_ADMIN,
+    ROLES.ADMIN,
+    ROLES.COLABORADOR,
+    ROLES.CONTABILIDAD
+  )
   @UseGuards(JwtAuthGuard, RolesGuard)
   findAll(
     @Param('clientId') clientId: string,

@@ -19,7 +19,14 @@ export class RoleService {
 
   getWithSuperAdmin() {
     return this.roleModel
-      .find({ $or: [{ name: 'Administrador' }, { name: 'Colaborador' }] })
+      .find({
+        $or: [
+          { name: 'Administrador' },
+          { name: 'Colaborador' },
+          { name: 'Contabilidad' },
+          { name: 'Coordinador' },
+        ],
+      })
       .exec()
   }
 

@@ -49,7 +49,7 @@ export class UserService {
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     private readonly roleService: RoleService
-  ) {}
+  ) { }
 
   async findAllWithClient(): Promise<IUserResponse[]> {
     const users = await this.userModel
@@ -151,7 +151,15 @@ export class UserService {
 
     const issetUser = await this.userModel.findOne({ email: userData.email })
     if (issetUser) {
-      throw new BadRequestException('El correo ya se encuentra registrado')
+      const sameClient =
+        clientId &&
+        issetUser.clientId &&
+        issetUser.clientId.toString() === clientId.toString()
+      throw new BadRequestException(
+        sameClient
+          ? 'El correo ya se encuentra registrado en esta empresa'
+          : 'El usuario se encuentra registrado para otra empresa'
+      )
     }
     const temporaryPassword =
       Math.random().toString(36).slice(-8) +
@@ -344,13 +352,15 @@ export class UserService {
     clientId: string
   ): Promise<{ email: string; name: string }[]> {
     const adminRoles = await this.roleService.getAdminRoles()
-    const adminRoleIds = adminRoles.map(r => (r as any)._id)
+    const contabilidadRole = await this.roleService.getByName('Contabilidad')
+    const roleIds = [...adminRoles.map(r => (r as any)._id)]
+    if (contabilidadRole) roleIds.push((contabilidadRole as any)._id)
     const users = await this.userModel
       .find({
         clientId: new Types.ObjectId(clientId),
         isActive: true,
         $or: [
-          { roleId: { $in: adminRoleIds } },
+          { roleId: { $in: roleIds } },
           { 'permissions.modules': 'tesoreria' },
           { 'permissions.modules': 'contabilidad' },
         ],

@@ -34,7 +34,7 @@ export const OPENAI_TOOLS: OpenAI.ChatCompletionTool[] = [
     function: {
       name: 'get_my_advances',
       description:
-        'Obtiene los anticipos del usuario. Usar cuando pregunte por anticipos, adelantos o pagos adelantados.',
+        'Obtiene los viáticos del usuario. Usar cuando pregunte por viáticos, adelantos o pagos adelantados.',
       parameters: {
         type: 'object',
         properties: {
@@ -52,7 +52,7 @@ export const OPENAI_TOOLS: OpenAI.ChatCompletionTool[] = [
     function: {
       name: 'get_pending_approvals',
       description:
-        'Obtiene anticipos pendientes de aprobación (solo administradores). Usar cuando el admin pregunte por aprobaciones pendientes.',
+        'Obtiene viáticos pendientes de aprobación (solo administradores). Usar cuando el admin pregunte por aprobaciones pendientes.',
       parameters: { type: 'object', properties: {} },
     },
   },
@@ -155,7 +155,7 @@ export class SkillsExecutor {
       }))
       return JSON.stringify({ total: data.length, anticipos: data })
     } catch {
-      return JSON.stringify({ error: 'Error al obtener anticipos' })
+      return JSON.stringify({ error: 'Error al obtener viáticos' })
     }
   }
 

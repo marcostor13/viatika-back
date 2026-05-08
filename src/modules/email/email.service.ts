@@ -935,7 +935,7 @@ export class EmailService {
     try {
       await this.mailerService.sendMail({
         to: email,
-        subject: `DEVOLUCIÓN PENDIENTE — Anticipo N° ${data.advanceId} — Monto S/ ${data.amountDue}`,
+        subject: `DEVOLUCIÓN PENDIENTE — Viático N° ${data.advanceId} — Monto S/ ${data.amountDue}`,
         template: './devolucion-pendiente',
         context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data },
       })
@@ -951,7 +951,7 @@ export class EmailService {
     try {
       await this.mailerService.sendMail({
         to: email,
-        subject: `Devolución validada — Anticipo N° ${data.advanceId}`,
+        subject: `Devolución validada — Viático N° ${data.advanceId}`,
         template: './devolucion-validada',
         context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data },
       })
@@ -967,7 +967,7 @@ export class EmailService {
     try {
       await this.mailerService.sendMail({
         to: email,
-        subject: `Comprobante de devolución rechazado — Anticipo N° ${data.advanceId}`,
+        subject: `Comprobante de devolución rechazado — Viático N° ${data.advanceId}`,
         template: './devolucion-rechazada',
         context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data },
       })

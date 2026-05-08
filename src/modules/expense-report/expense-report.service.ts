@@ -194,6 +194,35 @@ export class ExpenseReportService {
     return savedReport
   }
 
+  async createAutoFromViatico(advance: {
+    _id: unknown
+    userId: Types.ObjectId
+    clientId: Types.ObjectId
+    projectId?: Types.ObjectId
+    description?: string
+    place?: string
+    amount: number
+    startDate?: Date
+    endDate?: Date
+  }): Promise<ExpenseReportDocument> {
+    const title = advance.description?.trim() || advance.place?.trim() || 'Viático'
+    const report = new this.expenseReportModel({
+      title,
+      userId: advance.userId,
+      clientId: advance.clientId,
+      createdBy: advance.userId,
+      projectId: advance.projectId ?? undefined,
+      location: advance.place ?? undefined,
+      budget: advance.amount,
+      startDate: advance.startDate ?? undefined,
+      endDate: advance.endDate ?? undefined,
+      status: 'open',
+      expenseIds: [],
+      advanceIds: [advance._id],
+    })
+    return report.save()
+  }
+
   async findAllByClient(clientId: string) {
     return await this.expenseReportModel
       .find({ clientId: new Types.ObjectId(clientId) })

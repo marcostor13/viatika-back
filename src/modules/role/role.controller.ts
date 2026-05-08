@@ -28,13 +28,13 @@ export class RoleController {
   }
 
   @Get()
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   findAll() {
     return this.roleService.findAll()
   }
 
   @Get('for-admin')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   getForAdmin() {
     return this.roleService.getWithSuperAdmin()
   }

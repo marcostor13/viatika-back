@@ -302,7 +302,7 @@ export class AdvanceController {
 
   /** Inicia el sub-flujo de devolución (llamado después de settle con type=devolucion). */
   @Patch(':id/return/initiate')
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   initiateReturn(@Param('id') id: string) {
     return this.advanceService.initiateReturnTracking(id)
   }
@@ -330,7 +330,7 @@ export class AdvanceController {
 
   /** Contabilidad valida o rechaza el comprobante. */
   @Patch(':id/return/validate')
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   validateReturn(
     @Param('id') id: string,
     @Body() body: { approved: boolean; rejectionReason?: string },
@@ -346,7 +346,7 @@ export class AdvanceController {
 
   /** Lista anticipos con devoluciones pendientes (contabilidad). */
   @Get('pending-returns/client/:clientId')
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   findPendingReturns(@Param('clientId') clientId: string) {
     return this.advanceService.findPendingReturns(clientId)
   }

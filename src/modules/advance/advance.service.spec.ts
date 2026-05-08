@@ -391,7 +391,20 @@ describe('AdvanceService', () => {
       expect(mockEmailService.sendViaticoPagoRealizado).toHaveBeenCalledTimes(2)
     })
 
-    it('throws BadRequestException when advance is not approved', async () => {
+    it('registers payment from pending_l2 (L2 approval + payment in one step)', async () => {
+      const advance = makeMockAdvance({ status: 'pending_l2' })
+      mockUserService.findEmailNameClient.mockResolvedValue({
+        name: 'Colaborador Test',
+        email: 'colab@test.com',
+        clientId: new Types.ObjectId(clientId),
+      })
+      mockUserService.findTransactionalProfile.mockResolvedValue({ coordinatorId: undefined })
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
+      await service.registerPayment(advanceId, dto, ROLES.CONTABILIDAD)
+      expect(advance.status).toBe('paid')
+    })
+
+    it('throws BadRequestException when advance is in a non-payable state (e.g. pending_l1)', async () => {
       const advance = makeMockAdvance({ status: 'pending_l1' })
       mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
       await expect(

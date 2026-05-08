@@ -936,7 +936,7 @@ export class AdvanceService {
       })
       .exec()
     if (!advance)
-      throw new NotFoundException(`Anticipo con ID ${id} no encontrado`)
+      throw new NotFoundException(`Viático con ID ${id} no encontrado`)
     return advance
   }
 
@@ -947,11 +947,11 @@ export class AdvanceService {
     userPermissions?: any
   ): Promise<Advance> {
     const advance = await this.advanceModel.findById(id)
-    if (!advance) throw new NotFoundException(`Anticipo ${id} no encontrado`)
+    if (!advance) throw new NotFoundException(`Viático ${id} no encontrado`)
 
     if (advance.status !== 'pending_l1') {
       throw new BadRequestException(
-        `El anticipo no está en estado de aprobación nivel 1 (estado actual: ${advance.status})`
+        `El viático no está en estado de aprobación nivel 1 (estado actual: ${advance.status})`
       )
     }
 
@@ -1005,11 +1005,11 @@ export class AdvanceService {
     userPermissions?: any
   ): Promise<Advance> {
     const advance = await this.advanceModel.findById(id)
-    if (!advance) throw new NotFoundException(`Anticipo ${id} no encontrado`)
+    if (!advance) throw new NotFoundException(`Viático ${id} no encontrado`)
 
     if (advance.status !== 'pending_l2') {
       throw new BadRequestException(
-        `El anticipo no está en estado de aprobación nivel 2 (estado actual: ${advance.status})`
+        `El viático no está en estado de aprobación nivel 2 (estado actual: ${advance.status})`
       )
     }
 
@@ -1047,12 +1047,12 @@ export class AdvanceService {
     userPermissions?: any
   ): Promise<Advance> {
     const advance = await this.advanceModel.findById(id)
-    if (!advance) throw new NotFoundException(`Anticipo ${id} no encontrado`)
+    if (!advance) throw new NotFoundException(`Viático ${id} no encontrado`)
 
     const rejectableStatuses = ['pending_l1', 'pending_l2']
     if (!rejectableStatuses.includes(advance.status)) {
       throw new BadRequestException(
-        `No se puede rechazar un anticipo en estado "${advance.status}"`
+        `No se puede rechazar un viático en estado "${advance.status}"`
       )
     }
 
@@ -1061,7 +1061,7 @@ export class AdvanceService {
       userPermissions?.canApproveL1 === true ||
       userPermissions?.canApproveL2 === true
     if (!canReject)
-      throw new ForbiddenException('No tienes permiso para rechazar anticipos')
+      throw new ForbiddenException('No tienes permiso para rechazar viáticos')
 
     advance.approvalHistory.push({
       level: advance.status === 'pending_l2' ? 2 : 1,
@@ -1099,11 +1099,11 @@ export class AdvanceService {
     userPermissions?: any
   ): Promise<Advance> {
     const advance = await this.advanceModel.findById(id)
-    if (!advance) throw new NotFoundException(`Anticipo ${id} no encontrado`)
+    if (!advance) throw new NotFoundException(`Viático ${id} no encontrado`)
 
-    if (advance.status !== 'approved') {
+    if (!['approved', 'pending_l2'].includes(advance.status)) {
       throw new BadRequestException(
-        `Solo se puede registrar pago de anticipos aprobados (estado actual: ${advance.status})`
+        `Solo se puede registrar pago de viáticos aprobados o en espera de L2 (estado actual: ${advance.status})`
       )
     }
 
@@ -1149,6 +1149,22 @@ export class AdvanceService {
       paymentReceiptSizeBytes: dto.paymentReceiptSizeBytes,
     }
     advance.status = 'paid'
+
+    // Auto-crear rendición si el viático no tiene una vinculada
+    let reportId: string | null = null
+    if (!advance.expenseReportId) {
+      try {
+        const newReport = await this.expenseReportService.createAutoFromViatico(advance as AdvanceDocument)
+        advance.expenseReportId = newReport._id as Types.ObjectId
+        reportId = String(newReport._id)
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.logger.error(`Auto-crear rendición para viático ${advance._id}: ${msg}`)
+      }
+    } else {
+      reportId = advance.expenseReportId.toString()
+    }
+
     const saved = await advance.save()
     this.notifyViaticoPaymentRegistered(saved as AdvanceDocument).catch(
       (err: unknown) => {
@@ -1156,23 +1172,26 @@ export class AdvanceService {
         this.logger.error(`Correo pago viático ${saved._id}: ${msg}`)
       }
     )
+    const actionUrl = reportId
+      ? `/mis-rendiciones/${reportId}/detalle`
+      : '/mis-rendiciones'
     this.notificationsService.create({
       userId: saved.userId.toString(),
       title: 'Pago de viático registrado',
       message: `Se registró el pago de tu viático por S/ ${Number(saved.amount).toFixed(2)}. Ya puedes registrar tus gastos.`,
       type: 'success',
-      actionUrl: '/mis-rendiciones',
+      actionUrl,
     }).catch(() => { })
     return saved
   }
 
   async settle(id: string): Promise<Advance> {
     const advance = await this.advanceModel.findById(id)
-    if (!advance) throw new NotFoundException(`Anticipo ${id} no encontrado`)
+    if (!advance) throw new NotFoundException(`Viático ${id} no encontrado`)
 
     if (advance.status !== 'paid') {
       throw new BadRequestException(
-        `Solo se puede liquidar anticipos pagados (estado actual: ${advance.status})`
+        `Solo se puede liquidar viáticos pagados (estado actual: ${advance.status})`
       )
     }
 
@@ -1385,11 +1404,11 @@ export class AdvanceService {
 
   async registerReturn(id: string, returnedAmount: number): Promise<Advance> {
     const advance = await this.advanceModel.findById(id)
-    if (!advance) throw new NotFoundException(`Anticipo ${id} no encontrado`)
+    if (!advance) throw new NotFoundException(`Viático ${id} no encontrado`)
 
     if (advance.status !== 'settled' && advance.status !== 'paid') {
       throw new BadRequestException(
-        `Solo se puede registrar devolución de anticipos pagados o liquidados`
+        `Solo se puede registrar devolución de viáticos pagados o liquidados`
       )
     }
 
@@ -1404,12 +1423,12 @@ export class AdvanceService {
   /** Inicia el registro de devolución luego de settle() cuando type='devolucion'. */
   async initiateReturnTracking(id: string): Promise<Advance> {
     const advance = await this.advanceModel.findById(id)
-    if (!advance) throw new NotFoundException(`Anticipo ${id} no encontrado`)
+    if (!advance) throw new NotFoundException(`Viático ${id} no encontrado`)
     if (advance.status !== 'settled') {
       throw new BadRequestException('Solo se puede iniciar devolución desde estado liquidado')
     }
     if (!advance.settlement || advance.settlement.type !== 'devolucion') {
-      throw new BadRequestException('Este anticipo no tiene saldo a devolver')
+      throw new BadRequestException('Este viático no tiene saldo a devolver')
     }
     const dueDate = this.addBusinessDays(new Date(), 10)
     const returnRecord = {
@@ -1446,10 +1465,10 @@ export class AdvanceService {
     }
   ): Promise<Advance> {
     const advance = await this.advanceModel.findById(id)
-    if (!advance) throw new NotFoundException(`Anticipo ${id} no encontrado`)
+    if (!advance) throw new NotFoundException(`Viático ${id} no encontrado`)
     const rr = (advance as any).returnRecord
     if (!rr || rr.status !== 'pending') {
-      throw new BadRequestException('El anticipo no tiene una devolución pendiente de comprobante')
+      throw new BadRequestException('El viático no tiene una devolución pendiente de comprobante')
     }
     if (proof.amountReturned < rr.amountDue) {
       throw new BadRequestException(
@@ -1473,7 +1492,7 @@ export class AdvanceService {
     rejectionReason?: string
   ): Promise<Advance> {
     const advance = await this.advanceModel.findById(id)
-    if (!advance) throw new NotFoundException(`Anticipo ${id} no encontrado`)
+    if (!advance) throw new NotFoundException(`Viático ${id} no encontrado`)
     const rr = (advance as any).returnRecord
     if (!rr || rr.status !== 'proof_uploaded') {
       throw new BadRequestException('No hay comprobante pendiente de validación')
@@ -1551,7 +1570,7 @@ export class AdvanceService {
     clientId: string
   ): Promise<Advance> {
     const advance = await this.advanceModel.findById(id)
-    if (!advance) throw new NotFoundException(`Anticipo ${id} no encontrado`)
+    if (!advance) throw new NotFoundException(`Viático ${id} no encontrado`)
 
     if (advance.status !== 'rejected' && advance.status !== 'pending_l1') {
       throw new BadRequestException(
@@ -1644,7 +1663,7 @@ export class AdvanceService {
 
   async cancelByCollaborator(id: string, userId: string): Promise<Advance> {
     const advance = await this.advanceModel.findById(id)
-    if (!advance) throw new NotFoundException(`Anticipo ${id} no encontrado`)
+    if (!advance) throw new NotFoundException(`Viático ${id} no encontrado`)
     if (advance.userId.toString() !== userId) {
       throw new ForbiddenException(
         'Solo el colaborador solicitante puede cancelar esta solicitud.'

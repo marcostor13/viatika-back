@@ -88,7 +88,7 @@ export class ExpenseReportController {
 
   /** Fase 6 — Tesorería: rendiciones aprobadas con reembolso pendiente de comprobante */
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   @Get('pending-reimbursements/client/:clientId')
   findPendingReimbursements(
     @Param('clientId') clientId: string,
@@ -96,7 +96,8 @@ export class ExpenseReportController {
   ) {
     const role = req.user?.roles?.[0] || req.user?.role
     const canPay =
-      role === ROLES.SUPER_ADMIN || req.user?.permissions?.canApproveL2 === true
+      [ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD].includes(role) ||
+      req.user?.permissions?.canApproveL2 === true
     if (!canPay) {
       throw new ForbiddenException(
         'No tienes permiso para consultar reembolsos pendientes.'
@@ -200,7 +201,7 @@ export class ExpenseReportController {
 
   /** Fase 6 — Registro de pago de reembolso (contabilidad / tesorería con canApproveL2) */
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   @Patch(':id/register-reimbursement-payment')
   async registerReimbursementPayment(
     @Param('id') id: string,
@@ -275,7 +276,7 @@ export class ExpenseReportController {
 
   /** Valida condiciones de cierre sin cerrar. */
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
   @Get(':id/close/validate')
   validateClosure(@Param('id') id: string) {
     return this.expenseReportService.validateClosureConditions(id)
@@ -283,7 +284,7 @@ export class ExpenseReportController {
 
   /** Cierra definitivamente la rendición. */
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
   @Patch(':id/close')
   async close(@Param('id') id: string, @Request() req: any) {
     const closedBy = req.user._id || req.user.sub
@@ -301,7 +302,7 @@ export class ExpenseReportController {
 
   /** Solicita reapertura de una rendición cerrada. */
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
   @Post(':id/reopen-request')
   async requestReopening(
     @Param('id') id: string,
@@ -314,7 +315,7 @@ export class ExpenseReportController {
 
   /** Aprueba o rechaza la reapertura (SuperAdmin/Contabilidad). */
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
   @Patch(':id/reopen-approve')
   async approveReopening(
     @Param('id') id: string,
@@ -335,7 +336,7 @@ export class ExpenseReportController {
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
   @Post(':id/affidavit')
   async createAffidavit(
     @Param('id') id: string,

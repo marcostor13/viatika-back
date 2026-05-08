@@ -46,19 +46,34 @@ export class CategoryController {
   }
 
   @Get(':clientId/flat')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  @Roles(
+    ROLES.SUPER_ADMIN,
+    ROLES.ADMIN,
+    ROLES.COLABORADOR,
+    ROLES.CONTABILIDAD
+  )
   findAllFlat(@Param('clientId') clientId: string) {
     return this.categoryService.findAllFlat(clientId)
   }
 
   @Get('flat/:clientId')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  @Roles(
+    ROLES.SUPER_ADMIN,
+    ROLES.ADMIN,
+    ROLES.COLABORADOR,
+    ROLES.CONTABILIDAD
+  )
   findAllFlatLegacy(@Param('clientId') clientId: string) {
     return this.categoryService.findAllFlat(clientId)
   }
 
   @Get(':clientId')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  @Roles(
+    ROLES.SUPER_ADMIN,
+    ROLES.ADMIN,
+    ROLES.COLABORADOR,
+    ROLES.CONTABILIDAD
+  )
   findAll(
     @Param('clientId') clientId: string,
     @Query('page') page?: string,
@@ -73,14 +88,24 @@ export class CategoryController {
   }
 
   @Get(':id/:clientId')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  @Roles(
+    ROLES.SUPER_ADMIN,
+    ROLES.ADMIN,
+    ROLES.COLABORADOR,
+    ROLES.CONTABILIDAD
+  )
   @UseGuards(JwtAuthGuard, RolesGuard)
   findOne(@Param('id') id: string, @Param('clientId') clientId: string) {
     return this.categoryService.findOne(id, clientId)
   }
 
   @Get('key/:key/:clientId')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  @Roles(
+    ROLES.SUPER_ADMIN,
+    ROLES.ADMIN,
+    ROLES.COLABORADOR,
+    ROLES.CONTABILIDAD
+  )
   @UseGuards(JwtAuthGuard, RolesGuard)
   findByKey(@Param('key') key: string, @Param('clientId') clientId: string) {
     return this.categoryService.findByKey(key, clientId)

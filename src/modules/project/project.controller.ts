@@ -84,7 +84,12 @@ export class ProjectController {
   }
 
   @Get(':clientId')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  @Roles(
+    ROLES.SUPER_ADMIN,
+    ROLES.ADMIN,
+    ROLES.COLABORADOR,
+    ROLES.CONTABILIDAD
+  )
   findAll(
     @Param('clientId') clientId: string,
     @Query('page') page?: string,
@@ -101,7 +106,12 @@ export class ProjectController {
   }
 
   @Get(':id/:clientId')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  @Roles(
+    ROLES.SUPER_ADMIN,
+    ROLES.ADMIN,
+    ROLES.COLABORADOR,
+    ROLES.CONTABILIDAD
+  )
   findOne(@Param('id') id: string, @Param('clientId') clientId: string) {
     return this.projectService.findOne(id, clientId)
   }

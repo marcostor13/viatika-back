@@ -19,7 +19,6 @@ import { RolesGuard } from '../auth/guards/roles.guard'
 import { ROLES } from '../auth/enums/roles.enum'
 import { Roles } from '../auth/decorators/roles.decorador'
 
-@Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
 @Controller('sunat-config')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class SunatConfigController {
@@ -28,11 +27,37 @@ export class SunatConfigController {
   constructor(private readonly sunatConfigService: SunatConfigService) {}
 
   @Post()
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
   async create(@Body() createSunatConfigDto: CreateSunatConfigDto) {
     return this.sunatConfigService.create(createSunatConfigDto)
   }
 
+  /** Ruta estática antes de `:clientId` para no interpretar "credentials" como clientId */
+  @Get('credentials/:clientId')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  async getCredentials(@Param('clientId') clientId: string) {
+    try {
+      this.logger.log('Recibida solicitud para obtener credenciales SUNAT')
+
+      const credentials =
+        await this.sunatConfigService.getActiveCredentials(clientId)
+
+      this.logger.log('Credenciales SUNAT obtenidas exitosamente')
+      return credentials
+    } catch (error) {
+      this.logger.error(
+        `Error al obtener credenciales SUNAT: ${error.message}`,
+        error.stack
+      )
+      throw new HttpException(
+        error.message || 'Error al obtener las credenciales SUNAT',
+        error.status || HttpStatus.INTERNAL_SERVER_ERROR
+      )
+    }
+  }
+
   @Get(':clientId')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   async findOne(@Param('clientId') clientId: string) {
     try {
       this.logger.log('Recibida solicitud para obtener configuración SUNAT')
@@ -54,6 +79,7 @@ export class SunatConfigController {
   }
 
   @Patch(':id')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
   async update(
     @Param('id') _id: string,
     @Body() updateSunatConfigDto: UpdateSunatConfigDto
@@ -81,6 +107,7 @@ export class SunatConfigController {
   }
 
   @Delete(':id')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
   async remove(@Param('id') _id: string) {
     try {
       this.logger.log('Recibida solicitud para eliminar configuración SUNAT')
@@ -96,28 +123,6 @@ export class SunatConfigController {
       )
       throw new HttpException(
         error.message || 'Error al eliminar la configuración SUNAT',
-        error.status || HttpStatus.INTERNAL_SERVER_ERROR
-      )
-    }
-  }
-
-  @Get('credentials/:clientId')
-  async getCredentials(@Param('clientId') clientId: string) {
-    try {
-      this.logger.log('Recibida solicitud para obtener credenciales SUNAT')
-
-      const credentials =
-        await this.sunatConfigService.getActiveCredentials(clientId)
-
-      this.logger.log('Credenciales SUNAT obtenidas exitosamente')
-      return credentials
-    } catch (error) {
-      this.logger.error(
-        `Error al obtener credenciales SUNAT: ${error.message}`,
-        error.stack
-      )
-      throw new HttpException(
-        error.message || 'Error al obtener las credenciales SUNAT',
         error.status || HttpStatus.INTERNAL_SERVER_ERROR
       )
     }

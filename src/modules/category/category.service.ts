@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common'
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common'
 import { InjectModel } from '@nestjs/mongoose'
 import { Model, Types } from 'mongoose'
 import { Category, CategoryDocument } from './entities/category.entity'
@@ -162,6 +162,9 @@ export class CategoryService {
   }
 
   async findOne(id: string, clientId: string): Promise<CategoryDocument> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new BadRequestException(`ID de categoría inválido: ${id}`)
+    }
     const clientIdObject = new Types.ObjectId(clientId)
     try {
       const category = await this.categoryModel

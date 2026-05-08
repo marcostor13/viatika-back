@@ -51,6 +51,12 @@ export class CategoryController {
     return this.categoryService.findAllFlat(clientId)
   }
 
+  @Get('flat/:clientId')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  findAllFlatLegacy(@Param('clientId') clientId: string) {
+    return this.categoryService.findAllFlat(clientId)
+  }
+
   @Get(':clientId')
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
   findAll(

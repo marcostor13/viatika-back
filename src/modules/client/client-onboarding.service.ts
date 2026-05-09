@@ -100,7 +100,7 @@ export class ClientOnboardingService {
         firstName,
         lastName,
         password: temporaryPassword,
-        loginUrl: 'http://app.viatika.tecdidata.com/login',
+        loginUrl: this.emailService.buildAppUrl('/login'),
       })
     } catch (error) {
       this.logger.error(
@@ -123,5 +123,3 @@ export class ClientOnboardingService {
     }
   }
 }
-
-

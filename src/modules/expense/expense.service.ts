@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   HttpException,
   HttpStatus,
@@ -25,6 +26,7 @@ import { UploadService } from '../upload/upload.service'
 import { ExpenseReportService } from '../expense-report/expense-report.service'
 import { ROLES } from '../auth/enums/roles.enum'
 import { NotificationsService } from '../notifications/notifications.service'
+import { CategoryService } from '../category/category.service'
 
 /** Usuario autenticado para autorización de gastos (PATCH/DELETE/GET). */
 export interface ExpenseActorContext {
@@ -70,7 +72,8 @@ export class ExpenseService {
     private readonly httpService: HttpService,
     private readonly uploadService: UploadService,
     private readonly expenseReportService: ExpenseReportService,
-    private readonly notificationsService: NotificationsService
+    private readonly notificationsService: NotificationsService,
+    private readonly categoryService: CategoryService
   ) {
     const apiKey = this.configService.get<string>('OPENAI_API_KEY')
     if (!apiKey) {
@@ -88,8 +91,11 @@ export class ExpenseService {
   }
 
   private expenseReportIdString(expense: Expense): string | null {
-    const raw = (expense as unknown as { expenseReportId?: Types.ObjectId | { _id: Types.ObjectId } | null })
-      .expenseReportId
+    const raw = (
+      expense as unknown as {
+        expenseReportId?: Types.ObjectId | { _id: Types.ObjectId } | null
+      }
+    ).expenseReportId
     if (!raw) return null
     if (typeof raw === 'object' && '_id' in raw) {
       return String((raw as { _id: Types.ObjectId })._id)
@@ -97,16 +103,24 @@ export class ExpenseService {
     return String(raw)
   }
 
-  private assertCompanyAccess(expense: Expense, actor: ExpenseActorContext): void {
+  private assertCompanyAccess(
+    expense: Expense,
+    actor: ExpenseActorContext
+  ): void {
     if (actor.roleName === ROLES.SUPER_ADMIN) return
-    const expClient = this.normalizeClientId((expense as unknown as { clientId: unknown }).clientId)
+    const expClient = this.normalizeClientId(
+      (expense as unknown as { clientId: unknown }).clientId
+    )
     const userClient = this.normalizeClientId(actor.clientId)
     if (!userClient || expClient !== userClient) {
       throw new ForbiddenException('No autorizado para acceder a este gasto')
     }
   }
 
-  private assertCanReadExpense(expense: Expense, actor: ExpenseActorContext): void {
+  private assertCanReadExpense(
+    expense: Expense,
+    actor: ExpenseActorContext
+  ): void {
     this.assertCompanyAccess(expense, actor)
     if (actor.roleName === ROLES.COLABORADOR) {
       const ownerId = String(expense.createdBy || '').trim()
@@ -118,14 +132,14 @@ export class ExpenseService {
 
   private async assertCanMutateExpense(
     expense: Expense,
-    actor: ExpenseActorContext,
+    actor: ExpenseActorContext
   ): Promise<void> {
     this.assertCanReadExpense(expense, actor)
     if (actor.roleName !== ROLES.COLABORADOR) return
     const status = expense.status || 'pending'
     if (status === 'approved' || status === 'rejected') {
       throw new ForbiddenException(
-        'No puedes modificar un comprobante ya aprobado o rechazado.',
+        'No puedes modificar un comprobante ya aprobado o rechazado.'
       )
     }
     const reportId = this.expenseReportIdString(expense)
@@ -133,7 +147,7 @@ export class ExpenseService {
       const report = await this.expenseReportService.findOne(reportId)
       if (report.status !== 'open' && report.status !== 'rejected') {
         throw new ForbiddenException(
-          'Solo puedes editar o eliminar gastos en rendiciones abiertas o rechazadas.',
+          'Solo puedes editar o eliminar gastos en rendiciones abiertas o rechazadas.'
         )
       }
     }
@@ -188,6 +202,148 @@ export class ExpenseService {
   private formatDateForSunat(dateStr?: string): string | undefined {
     if (!dateStr) return undefined
     return dateStr.replace(/-/g, '/')
+  }
+
+  private parseExpenseDate(raw?: string | null): Date | null {
+    if (!raw || typeof raw !== 'string') return null
+    const clean = raw.trim()
+    if (!clean) return null
+
+    const ymdMatch = clean.match(/^(\d{4})[-/](\d{2})[-/](\d{2})$/)
+    if (ymdMatch) {
+      const y = Number(ymdMatch[1])
+      const m = Number(ymdMatch[2]) - 1
+      const d = Number(ymdMatch[3])
+      return new Date(Date.UTC(y, m, d))
+    }
+
+    const dmyMatch = clean.match(/^(\d{2})[-/](\d{2})[-/](\d{4})$/)
+    if (dmyMatch) {
+      const d = Number(dmyMatch[1])
+      const m = Number(dmyMatch[2]) - 1
+      const y = Number(dmyMatch[3])
+      return new Date(Date.UTC(y, m, d))
+    }
+
+    const parsed = new Date(clean)
+    if (Number.isNaN(parsed.getTime())) return null
+    return new Date(
+      Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate())
+    )
+  }
+
+  private evaluateDeadline(fechaEmisionRaw?: string | null): {
+    observado: boolean
+    observacionPlazo?: string
+    diasRetraso?: number
+  } {
+    const fechaEmision = this.parseExpenseDate(fechaEmisionRaw)
+    if (!fechaEmision) return { observado: false }
+
+    const today = new Date()
+    const fechaCarga = new Date(
+      Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
+    )
+    const diffMs = fechaCarga.getTime() - fechaEmision.getTime()
+    const diasRetraso = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+
+    if (diasRetraso <= 2) {
+      return { observado: false, diasRetraso: Math.max(0, diasRetraso) }
+    }
+
+    const mismoMes =
+      fechaEmision.getUTCMonth() === fechaCarga.getUTCMonth() &&
+      fechaEmision.getUTCFullYear() === fechaCarga.getUTCFullYear()
+
+    if (!mismoMes) {
+      throw new BadRequestException(
+        'No se permite cargar comprobantes de meses anteriores con más de 2 días de retraso. Contacte a Contabilidad.'
+      )
+    }
+
+    return {
+      observado: true,
+      diasRetraso,
+      observacionPlazo:
+        'Comprobante fuera de plazo (más de 2 días). Se registró como OBSERVADO.',
+    }
+  }
+
+  private async evaluateCategoryLimit(
+    body: CreateExpenseDto,
+    amount: number
+  ): Promise<{ percent?: number; warning?: string }> {
+    if (!body.expenseReportId || !body.categoryId || !body.clientId || amount <= 0) {
+      return {}
+    }
+
+    const category = await this.categoryService.findOne(body.categoryId, body.clientId)
+    const limit = Number(category?.limit ?? 0)
+    if (!limit || Number.isNaN(limit) || limit <= 0) return {}
+
+    const aggregation = await this.expenseRepository.aggregate([
+      {
+        $match: {
+          expenseReportId: new Types.ObjectId(body.expenseReportId),
+          categoryId: new Types.ObjectId(body.categoryId),
+          status: { $ne: 'rejected' },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: { $ifNull: ['$total', 0] } },
+        },
+      },
+    ])
+
+    const current = Number(aggregation?.[0]?.total ?? 0)
+    const projected = current + amount
+    const percent = Number(((projected / limit) * 100).toFixed(2))
+
+    if (percent >= 100) {
+      throw new BadRequestException(
+        `Límite de categoría alcanzado. No se permiten más gastos en esta categoría. Solicite ampliación de presupuesto.`
+      )
+    }
+
+    if (percent >= 90) {
+      return {
+        percent,
+        warning:
+          'Ha utilizado el 90% del presupuesto de esta categoría. Si requiere más fondos, solicite una ampliación de presupuesto antes de continuar.',
+      }
+    }
+
+    return { percent }
+  }
+
+  private buildUserInitials(name?: string | null): string {
+    const words = String(name || '')
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+    if (words.length === 0) return 'USR'
+    const initials = words
+      .slice(0, 3)
+      .map(w => w.charAt(0).toUpperCase())
+      .join('')
+    return initials.padEnd(3, 'X').slice(0, 3)
+  }
+
+  private async generateInternalCode(
+    userId: string | undefined,
+    expenseType: 'planilla_movilidad' | 'comprobante_caja'
+  ): Promise<string> {
+    if (!userId) return `USR001`
+    const user = await this.userService.findOne(userId)
+    const initials = this.buildUserInitials(user?.name)
+    const count = await this.expenseRepository.countDocuments({
+      createdBy: userId,
+      expenseType,
+    })
+    const correlativo = String(count + 1).padStart(3, '0')
+    return `${initials}${correlativo}`
   }
 
   private async validateDuplicateInvoiceIfAny(
@@ -285,17 +441,28 @@ export class ExpenseService {
     const categoryObject = Types.ObjectId.createFromHexString(body.categoryId)
     const projectObject = Types.ObjectId.createFromHexString(body.proyectId)
 
+    const deadlineMeta = this.evaluateDeadline(data.fechaEmision)
+    const amount = Number(data.montoTotal ?? 0)
+    const categoryMeta = await this.evaluateCategoryLimit(body, amount)
+
     return this.expenseRepository.create({
       categoryId: categoryObject,
       proyectId: projectObject,
       clientId: body.clientId,
-      expenseReportId: body.expenseReportId ? new Types.ObjectId(body.expenseReportId) : undefined,
+      expenseReportId: body.expenseReportId
+        ? new Types.ObjectId(body.expenseReportId)
+        : undefined,
       total: data.montoTotal,
       data: JSON.stringify({ ...data, sunatValidation: validation }),
       file: body.imageUrl,
       status: status,
       createdBy: body.userId || 'system',
       fechaEmision: data.fechaEmision,
+      observado: deadlineMeta.observado,
+      observacionPlazo: deadlineMeta.observacionPlazo,
+      diasRetraso: deadlineMeta.diasRetraso,
+      categoryLimitPercent: categoryMeta.percent,
+      categoryLimitWarning: categoryMeta.warning,
     })
   }
 
@@ -499,7 +666,10 @@ export class ExpenseService {
       )
 
       if (body.expenseReportId) {
-        await this.expenseReportService.addExpenseToReport(body.expenseReportId, expense._id.toString());
+        await this.expenseReportService.addExpenseToReport(
+          body.expenseReportId,
+          expense._id.toString()
+        )
       }
 
       const project = await this.projectService.findOne(
@@ -542,7 +712,7 @@ export class ExpenseService {
     try {
       const pdfModule = await import('pdf-parse')
       const pdfParse: (data: Buffer) => Promise<{ text: string }> =
-        (pdfModule as any).default ?? (pdfModule as any)
+        pdfModule.default ?? pdfModule
       const parsed = await pdfParse(file.buffer)
       const textFromPdf = parsed.text || ''
 
@@ -593,7 +763,10 @@ export class ExpenseService {
       )
 
       if (body.expenseReportId) {
-        await this.expenseReportService.addExpenseToReport(body.expenseReportId, expense._id.toString());
+        await this.expenseReportService.addExpenseToReport(
+          body.expenseReportId,
+          expense._id.toString()
+        )
       }
 
       const project = await this.projectService.findOne(
@@ -627,27 +800,59 @@ export class ExpenseService {
       throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
     }
     if (!body.mobilityRows || body.mobilityRows.length === 0) {
-      throw new HttpException('Se requiere al menos una fila en la planilla', HttpStatus.BAD_REQUEST)
+      throw new HttpException(
+        'Se requiere al menos una fila en la planilla',
+        HttpStatus.BAD_REQUEST
+      )
     }
 
-    const total = body.mobilityRows.reduce((sum, row) => sum + (row.total || 0), 0)
+    const total = body.mobilityRows.reduce(
+      (sum, row) => sum + (row.total || 0),
+      0
+    )
+    const earliestDate = body.mobilityRows
+      .map(r => this.parseExpenseDate(r.fecha))
+      .filter((d): d is Date => d !== null)
+      .sort((a, b) => a.getTime() - b.getTime())[0]
+    const deadlineMeta = this.evaluateDeadline(
+      earliestDate ? earliestDate.toISOString().slice(0, 10) : undefined
+    )
 
+    const categoryMeta = await this.evaluateCategoryLimit(body, total)
+    const internalCode = await this.generateInternalCode(
+      body.userId,
+      'planilla_movilidad'
+    )
     const expense = await this.expenseRepository.create({
       categoryId: new Types.ObjectId(body.categoryId),
       proyectId: new Types.ObjectId(body.proyectId),
       clientId: body.clientId,
-      expenseReportId: body.expenseReportId ? new Types.ObjectId(body.expenseReportId) : undefined,
+      expenseReportId: body.expenseReportId
+        ? new Types.ObjectId(body.expenseReportId)
+        : undefined,
       total,
       expenseType: 'planilla_movilidad',
       mobilityRows: body.mobilityRows,
       file: body.imageUrl,
       status: 'pending',
       createdBy: body.userId || 'system',
-      data: JSON.stringify({ type: 'planilla_movilidad', rows: body.mobilityRows }),
+      observado: deadlineMeta.observado,
+      observacionPlazo: deadlineMeta.observacionPlazo,
+      diasRetraso: deadlineMeta.diasRetraso,
+      categoryLimitPercent: categoryMeta.percent,
+      categoryLimitWarning: categoryMeta.warning,
+      internalCode,
+      data: JSON.stringify({
+        type: 'planilla_movilidad',
+        rows: body.mobilityRows,
+      }),
     })
 
     if (body.expenseReportId) {
-      await this.expenseReportService.addExpenseToReport(body.expenseReportId, (expense as any)._id.toString())
+      await this.expenseReportService.addExpenseToReport(
+        body.expenseReportId,
+        (expense as any)._id.toString()
+      )
     }
 
     return expense
@@ -658,17 +863,36 @@ export class ExpenseService {
       throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
     }
     if (!body.declaracionJurada) {
-      throw new HttpException('Se requiere firmar la declaración jurada', HttpStatus.BAD_REQUEST)
+      throw new HttpException(
+        'Se requiere firmar la declaración jurada',
+        HttpStatus.BAD_REQUEST
+      )
     }
     if (!body.total || body.total <= 0) {
-      throw new HttpException('Se requiere un monto válido', HttpStatus.BAD_REQUEST)
+      throw new HttpException(
+        'Se requiere un monto válido',
+        HttpStatus.BAD_REQUEST
+      )
+    }
+    if (body.userId) {
+      const profile = await this.userService.findTransactionalProfile(body.userId)
+      if (!profile?.signature) {
+        throw new HttpException(
+          'Debes registrar tu firma digital antes de enviar una Declaración Jurada. Ve a tu perfil para añadirla.',
+          HttpStatus.UNPROCESSABLE_ENTITY
+        )
+      }
     }
 
+    const deadlineMeta = this.evaluateDeadline(body.fechaEmision)
+    const categoryMeta = await this.evaluateCategoryLimit(body, body.total)
     const expense = await this.expenseRepository.create({
       categoryId: new Types.ObjectId(body.categoryId),
       proyectId: new Types.ObjectId(body.proyectId),
       clientId: body.clientId,
-      expenseReportId: body.expenseReportId ? new Types.ObjectId(body.expenseReportId) : undefined,
+      expenseReportId: body.expenseReportId
+        ? new Types.ObjectId(body.expenseReportId)
+        : undefined,
       total: body.total,
       description: body.data,
       expenseType: 'otros_gastos',
@@ -677,6 +901,12 @@ export class ExpenseService {
       file: body.imageUrl || undefined,
       status: 'pending',
       createdBy: body.userId || 'system',
+      fechaEmision: body.fechaEmision,
+      observado: deadlineMeta.observado,
+      observacionPlazo: deadlineMeta.observacionPlazo,
+      diasRetraso: deadlineMeta.diasRetraso,
+      categoryLimitPercent: categoryMeta.percent,
+      categoryLimitWarning: categoryMeta.warning,
       data: JSON.stringify({
         type: 'otros_gastos',
         declaracionJurada: true,
@@ -685,7 +915,148 @@ export class ExpenseService {
     })
 
     if (body.expenseReportId) {
-      await this.expenseReportService.addExpenseToReport(body.expenseReportId, (expense as any)._id.toString())
+      await this.expenseReportService.addExpenseToReport(
+        body.expenseReportId,
+        (expense as any)._id.toString()
+      )
+    }
+
+    return expense
+  }
+
+  async createCashReceiptExpense(body: CreateExpenseDto): Promise<Expense> {
+    if (!body.clientId) {
+      throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
+    }
+    if (!body.imageUrl) {
+      throw new HttpException(
+        'Debe adjuntar la foto/archivo del recibo de caja',
+        HttpStatus.BAD_REQUEST
+      )
+    }
+    if (!body.total || body.total <= 0) {
+      throw new HttpException(
+        'Se requiere un monto válido',
+        HttpStatus.BAD_REQUEST
+      )
+    }
+    if (!body.fechaEmision) {
+      throw new HttpException(
+        'La fecha del comprobante es obligatoria',
+        HttpStatus.BAD_REQUEST
+      )
+    }
+
+    const receiptDate = this.parseExpenseDate(body.fechaEmision)
+    if (!receiptDate) {
+      throw new HttpException(
+        'La fecha del comprobante es inválida',
+        HttpStatus.BAD_REQUEST
+      )
+    }
+    const today = new Date()
+    const todayUtc = new Date(
+      Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
+    )
+    if (receiptDate.getTime() > todayUtc.getTime()) {
+      throw new HttpException(
+        'La fecha del comprobante no puede ser futura',
+        HttpStatus.BAD_REQUEST
+      )
+    }
+
+    const deadlineMeta = this.evaluateDeadline(body.fechaEmision)
+    const categoryMeta = await this.evaluateCategoryLimit(body, body.total)
+    const expense = await this.expenseRepository.create({
+      categoryId: new Types.ObjectId(body.categoryId),
+      proyectId: new Types.ObjectId(body.proyectId),
+      clientId: body.clientId,
+      expenseReportId: body.expenseReportId
+        ? new Types.ObjectId(body.expenseReportId)
+        : undefined,
+      total: body.total,
+      description: body.data,
+      expenseType: 'recibo_caja',
+      file: body.imageUrl,
+      status: 'pending',
+      createdBy: body.userId || 'system',
+      fechaEmision: body.fechaEmision,
+      observado: deadlineMeta.observado,
+      observacionPlazo: deadlineMeta.observacionPlazo,
+      diasRetraso: deadlineMeta.diasRetraso,
+      categoryLimitPercent: categoryMeta.percent,
+      categoryLimitWarning: categoryMeta.warning,
+      data: JSON.stringify({
+        type: 'recibo_caja',
+        payload: body.data || '',
+      }),
+    })
+
+    if (body.expenseReportId) {
+      await this.expenseReportService.addExpenseToReport(
+        body.expenseReportId,
+        (expense as any)._id.toString()
+      )
+    }
+
+    return expense
+  }
+
+  async createCashVoucherExpense(body: CreateExpenseDto): Promise<Expense> {
+    if (!body.clientId) {
+      throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
+    }
+    if (!body.total || body.total <= 0) {
+      throw new HttpException(
+        'Se requiere un monto válido',
+        HttpStatus.BAD_REQUEST
+      )
+    }
+    const description = (body.data || '').trim()
+    if (!description) {
+      throw new HttpException(
+        'El concepto del comprobante es obligatorio',
+        HttpStatus.BAD_REQUEST
+      )
+    }
+
+    const deadlineMeta = this.evaluateDeadline(body.fechaEmision)
+    const categoryMeta = await this.evaluateCategoryLimit(body, body.total)
+    const internalCode = await this.generateInternalCode(
+      body.userId,
+      'comprobante_caja'
+    )
+
+    const expense = await this.expenseRepository.create({
+      categoryId: new Types.ObjectId(body.categoryId),
+      proyectId: new Types.ObjectId(body.proyectId),
+      clientId: body.clientId,
+      expenseReportId: body.expenseReportId
+        ? new Types.ObjectId(body.expenseReportId)
+        : undefined,
+      total: body.total,
+      description,
+      expenseType: 'comprobante_caja',
+      status: 'pending',
+      createdBy: body.userId || 'system',
+      fechaEmision: body.fechaEmision,
+      observado: deadlineMeta.observado,
+      observacionPlazo: deadlineMeta.observacionPlazo,
+      diasRetraso: deadlineMeta.diasRetraso,
+      categoryLimitPercent: categoryMeta.percent,
+      categoryLimitWarning: categoryMeta.warning,
+      internalCode,
+      data: JSON.stringify({
+        type: 'comprobante_caja',
+        payload: body.data || '',
+      }),
+    })
+
+    if (body.expenseReportId) {
+      await this.expenseReportService.addExpenseToReport(
+        body.expenseReportId,
+        (expense as any)._id.toString()
+      )
     }
 
     return expense
@@ -700,7 +1071,7 @@ export class ExpenseService {
       if (typeof dataObj === 'string') {
         try {
           dataObj = JSON.parse(dataObj)
-        } catch { }
+        } catch {}
       }
       if (dataObj && dataObj.fechaEmision) {
         fechaEmisionDate = parseFechaEmision(dataObj.fechaEmision)
@@ -713,17 +1084,23 @@ export class ExpenseService {
       fechaEmision: fechaEmisionDate,
       createdBy: createExpenseDto.userId,
     })
-    const expense = await createdExpense.save();
+    const expense = await createdExpense.save()
 
     if (createExpenseDto.expenseReportId) {
-      await this.expenseReportService.addExpenseToReport(createExpenseDto.expenseReportId, expense._id.toString());
+      await this.expenseReportService.addExpenseToReport(
+        createExpenseDto.expenseReportId,
+        expense._id.toString()
+      )
     }
 
-    return expense;
+    return expense
   }
 
-  async findAll(clientId: string, filters: any = {}): Promise<Expense[]> {
+  async findAll(clientId: string, filters: any = {}): Promise<{ data: Expense[]; total: number; page: number; pages: number; limit: number }> {
     const query: any = { clientId }
+    const page = filters.page ? Math.max(1, parseInt(String(filters.page), 10)) : 1
+    const limit = filters.limit ? Math.min(200, parseInt(String(filters.limit), 10)) : 20
+    const skip = (page - 1) * limit
 
     const isValidObjectId = (id: string): boolean => {
       return /^[0-9a-fA-F]{24}$/.test(id)
@@ -798,7 +1175,8 @@ export class ExpenseService {
         filters.correlativo,
         clientId
       )
-      return expense ? [expense] : []
+      const data = expense ? [expense] : []
+      return { data, total: data.length, page: 1, pages: 1, limit }
     }
 
     // Si hay filtros de fecha, usar agregación para comparar fechas correctamente
@@ -853,21 +1231,35 @@ export class ExpenseService {
       }
 
       // Agregar stage para convertir fechaEmision a fecha real y filtrar
+      // Handles both dd-mm-yyyy and yyyy-mm-dd storage formats
       pipeline.push({
         $addFields: {
           fechaEmisionDate: {
             $dateFromString: {
               dateString: {
-                $concat: [
-                  { $arrayElemAt: [{ $split: ['$fechaEmision', '-'] }, 2] }, // año
-                  '-',
-                  { $arrayElemAt: [{ $split: ['$fechaEmision', '-'] }, 1] }, // mes
-                  '-',
-                  { $arrayElemAt: [{ $split: ['$fechaEmision', '-'] }, 0] }, // día
-                ],
+                $let: {
+                  vars: { parts: { $split: ['$fechaEmision', '-'] } },
+                  in: {
+                    $cond: {
+                      if: { $eq: [{ $strLenCP: { $ifNull: [{ $arrayElemAt: ['$$parts', 0] }, ''] } }, 4] },
+                      then: '$fechaEmision',
+                      else: {
+                        $concat: [
+                          { $arrayElemAt: ['$$parts', 2] },
+                          '-',
+                          { $arrayElemAt: ['$$parts', 1] },
+                          '-',
+                          { $arrayElemAt: ['$$parts', 0] },
+                        ],
+                      },
+                    },
+                  },
+                },
               },
               format: '%Y-%m-%d',
-              timezone: 'UTC', // Usar UTC para evitar problemas de zona horaria
+              timezone: 'UTC',
+              onError: null,
+              onNull: null,
             },
           },
         },
@@ -903,70 +1295,61 @@ export class ExpenseService {
         pipeline.push({ $match: dateFilter })
       }
 
-      // Remover el campo temporal
-      pipeline.push({
-        $project: {
-          fechaEmisionDate: 0,
-        },
-      })
-
-      // Aplicar ordenamiento
+      // Sort by parsed date for correct ordering, then paginate
       const sortBy = filters.sortBy || 'fechaEmision'
       const sortOrder = filters.sortOrder || 'desc'
-      const sortOptions: any = {}
-      sortOptions[sortBy] = sortOrder === 'desc' ? -1 : 1
-      pipeline.push({ $sort: sortOptions })
+      const sortField = sortBy === 'fechaEmision' ? 'fechaEmisionDate' : sortBy
+      pipeline.push({ $sort: { [sortField]: sortOrder === 'desc' ? -1 : 1 } })
 
-      // Ejecutar agregación
-      const result = await this.expenseRepository.aggregate(pipeline)
-
-      // Populate las referencias
-      const populatedResult = await this.expenseRepository.populate(result, [
+      const [facetResult] = await this.expenseRepository.aggregate([
+        ...pipeline,
+        {
+          $facet: {
+            data: [{ $skip: skip }, { $limit: limit }, { $project: { fechaEmisionDate: 0 } }],
+            count: [{ $count: 'total' }],
+          },
+        },
+      ])
+      const rawData = facetResult?.data ?? []
+      const total = facetResult?.count?.[0]?.total ?? 0
+      const populatedResult = await this.expenseRepository.populate(rawData, [
         { path: 'proyectId' },
         { path: 'categoryId' },
-      ])
-
-      // Ordenar por fechaEmision si es necesario (ya que MongoDB no puede ordenar strings de fecha correctamente)
-      if (sortBy === 'fechaEmision') {
-        return populatedResult.sort((a, b) => {
-          if (!a.fechaEmision || !b.fechaEmision) return 0
-          const dateA = new Date(a.fechaEmision.split('-').reverse().join('-'))
-          const dateB = new Date(b.fechaEmision.split('-').reverse().join('-'))
-          return sortOrder === 'desc'
-            ? dateB.getTime() - dateA.getTime()
-            : dateA.getTime() - dateB.getTime()
-        })
-      }
-
-      return populatedResult
+      ]) as unknown as Expense[]
+      return { data: populatedResult, total, page, pages: Math.ceil(total / limit), limit }
     }
 
     const sortBy = filters.sortBy || 'fechaEmision'
     const sortOrder = filters.sortOrder || 'desc'
-
     const sortOptions: any = {}
     sortOptions[sortBy] = sortOrder === 'desc' ? -1 : 1
 
-    const result = await this.expenseRepository
-      .find(query)
-      .populate('proyectId')
-      .populate('categoryId')
-      .sort(sortOptions)
-      .exec()
+    const [result, total] = await Promise.all([
+      this.expenseRepository.find(query).populate('proyectId').populate('categoryId').sort(sortOptions).skip(skip).limit(limit).exec(),
+      this.expenseRepository.countDocuments(query),
+    ])
 
-    // Ordenar por fechaEmision si es necesario (ya que MongoDB no puede ordenar strings de fecha correctamente)
+    let data: Expense[] = result
     if (sortBy === 'fechaEmision') {
-      return result.sort((a, b) => {
+      data = result.sort((a, b) => {
         if (!a.fechaEmision || !b.fechaEmision) return 0
         const dateA = new Date(a.fechaEmision.split('-').reverse().join('-'))
         const dateB = new Date(b.fechaEmision.split('-').reverse().join('-'))
-        return sortOrder === 'desc'
-          ? dateB.getTime() - dateA.getTime()
-          : dateA.getTime() - dateB.getTime()
+        return sortOrder === 'desc' ? dateB.getTime() - dateA.getTime() : dateA.getTime() - dateB.getTime()
       })
     }
 
-    return result
+    return { data, total, page, pages: Math.ceil(total / limit), limit }
+  }
+
+  async getStatusCounts(clientId: string): Promise<{ pending: number; approved: number; rejected: number; total: number }> {
+    const match = { clientId: new Types.ObjectId(clientId) }
+    const [total, approved, rejected] = await Promise.all([
+      this.expenseRepository.countDocuments(match),
+      this.expenseRepository.countDocuments({ ...match, status: { $in: ['approved', 'APPROVED'] } }),
+      this.expenseRepository.countDocuments({ ...match, status: { $in: ['rejected', 'REJECTED'] } }),
+    ])
+    return { total, approved, rejected, pending: total - approved - rejected }
   }
 
   async findOne(id: string): Promise<Expense | null> {
@@ -995,14 +1378,16 @@ export class ExpenseService {
 
   async getSunatValidationInfoForActor(
     id: string,
-    actor: ExpenseActorContext,
+    actor: ExpenseActorContext
   ): Promise<Record<string, unknown>> {
     const expense = await this.loadExpenseOrThrow(id)
     this.assertCanReadExpense(expense, actor)
     return this.buildSunatValidationInfoPayload(expense)
   }
 
-  private buildSunatValidationInfoPayload(expense: Expense): Record<string, unknown> {
+  private buildSunatValidationInfoPayload(
+    expense: Expense
+  ): Record<string, unknown> {
     try {
       const data = JSON.parse(expense.data)
       const sunatValidation = data.sunatValidation
@@ -1038,7 +1423,7 @@ export class ExpenseService {
 
   async findOneForActor(
     id: string,
-    actor: ExpenseActorContext,
+    actor: ExpenseActorContext
   ): Promise<Expense> {
     const expense = await this.loadExpenseOrThrow(id)
     this.assertCanReadExpense(expense, actor)
@@ -1048,7 +1433,7 @@ export class ExpenseService {
   async update(
     id: string,
     updateExpenseDto: UpdateExpenseDto,
-    actor: ExpenseActorContext,
+    actor: ExpenseActorContext
   ): Promise<Expense | null> {
     if (!/^[0-9a-fA-F]{24}$/.test(id)) {
       throw new Error(`ID de expense inválido: ${id}`)
@@ -1080,11 +1465,11 @@ export class ExpenseService {
       )
     }
 
-
-    let validUserId = null
-    let userEmail = null
-    let userName = null
-    let userLastName = null
+    const validUserId = null
+    const userEmail = null
+    const userName = null
+    const userLastName = null
+    const reviewerId = approvalDto.userId || undefined
 
     const updatedExpense = await this.expenseRepository
       .findByIdAndUpdate(
@@ -1093,22 +1478,33 @@ export class ExpenseService {
           status: 'approved',
           statusDate: new Date(),
           approvedBy: validUserId,
+          $push: {
+            reviewHistory: {
+              action: 'approved',
+              reviewerId,
+              reviewedAt: new Date(),
+            },
+          },
         },
         { new: true }
       )
       .exec()
 
     if (updatedExpense && updatedExpense.createdBy) {
-      const invoiceData = updatedExpense.data ? JSON.parse(updatedExpense.data) : {}
+      const invoiceData = updatedExpense.data
+        ? JSON.parse(updatedExpense.data)
+        : {}
       const nombreComprobante = `${invoiceData.serie || ''}-${invoiceData.correlativo || ''}`
-      
-      this.notificationsService.create({
-        userId: updatedExpense.createdBy as unknown as string,
-        title: 'Comprobante Aprobado',
-        message: `Tu comprobante ${nombreComprobante} ha sido aprobado.`,
-        type: 'success',
-        actionUrl: `/mis-rendiciones/${this.expenseReportIdString(updatedExpense)}/detalle`
-      }).catch(err => this.logger.error('Error creando notificación', err))
+
+      this.notificationsService
+        .create({
+          userId: updatedExpense.createdBy as unknown as string,
+          title: 'Comprobante Aprobado',
+          message: `Tu comprobante ${nombreComprobante} ha sido aprobado.`,
+          type: 'success',
+          actionUrl: `/mis-rendiciones/${this.expenseReportIdString(updatedExpense)}/detalle`,
+        })
+        .catch(err => this.logger.error('Error creando notificación', err))
     }
 
     this.logger.log(`Factura ${id} aprobada exitosamente`)
@@ -1201,8 +1597,9 @@ export class ExpenseService {
                   colaborador.email,
                   {
                     providerName: colaborador.name,
-                    invoiceNumber: `${invoiceData.serie || ''}-${invoiceData.correlativo || ''
-                      }`,
+                    invoiceNumber: `${invoiceData.serie || ''}-${
+                      invoiceData.correlativo || ''
+                    }`,
                     date:
                       invoiceData.fechaEmision ||
                       new Date().toISOString().split('T')[0],
@@ -1264,9 +1661,10 @@ export class ExpenseService {
       )
     }
 
-    let validUserId = null
-    let userName = null
-    let userLastName = null
+    const validUserId = null
+    const userName = null
+    const userLastName = null
+    const reviewerId = approvalDto.userId || undefined
 
     const updatedExpense = await this.expenseRepository
       .findByIdAndUpdate(
@@ -1276,22 +1674,36 @@ export class ExpenseService {
           statusDate: new Date(),
           rejectedBy: validUserId,
           rejectionReason: approvalDto.reason,
+          $push: {
+            reviewHistory: {
+              action: 'rejected',
+              reviewerId,
+              reviewedAt: new Date(),
+              reason: approvalDto.reason,
+            },
+          },
         },
         { new: true }
       )
       .exec()
 
     if (updatedExpense && updatedExpense.createdBy) {
-      const invoiceData = updatedExpense.data ? JSON.parse(updatedExpense.data) : {}
+      const invoiceData = updatedExpense.data
+        ? JSON.parse(updatedExpense.data)
+        : {}
       const nombreComprobante = `${invoiceData.serie || ''}-${invoiceData.correlativo || ''}`
-      
-      this.notificationsService.create({
-        userId: updatedExpense.createdBy as unknown as string,
-        title: 'Comprobante Rechazado',
-        message: `Tu comprobante ${nombreComprobante} ha sido rechazado. Motivo: ${approvalDto.reason}`,
-        type: 'error',
-        actionUrl: `/mis-rendiciones/${this.expenseReportIdString(updatedExpense)}/detalle`
-      }).catch(err => this.logger.error('Error creando notificación de rechazo', err))
+
+      this.notificationsService
+        .create({
+          userId: updatedExpense.createdBy as unknown as string,
+          title: 'Comprobante Rechazado',
+          message: `Tu comprobante ${nombreComprobante} ha sido rechazado. Motivo: ${approvalDto.reason}`,
+          type: 'error',
+          actionUrl: `/mis-rendiciones/${this.expenseReportIdString(updatedExpense)}/detalle`,
+        })
+        .catch(err =>
+          this.logger.error('Error creando notificación de rechazo', err)
+        )
     }
 
     this.logger.log(`Factura ${id} rechazada exitosamente`)
@@ -1476,7 +1888,7 @@ export class ExpenseService {
       tipoComprobante?: string
     },
     clientId: string,
-    actor: ExpenseActorContext,
+    actor: ExpenseActorContext
   ) {
     const expense = await this.loadExpenseOrThrow(id)
     await this.assertCanMutateExpense(expense, actor)

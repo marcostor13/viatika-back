@@ -1,7 +1,7 @@
-import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document } from 'mongoose';
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose'
+import { Document } from 'mongoose'
 
-export type AuditLogDocument = AuditLog & Document;
+export type AuditLogDocument = AuditLog & Document
 
 export type AuditAction =
   | 'login'
@@ -14,43 +14,70 @@ export type AuditAction =
   | 'create_rendicion'
   | 'delete_rendicion'
   | 'update_rendicion_status'
+  | 'register_reimbursement_payment'
   | 'approve_advance_l1'
   | 'approve_advance_l2'
   | 'reject_advance'
+  | 'resubmit_advance'
+  | 'resend_coordinator_notification'
   | 'pay_advance'
   | 'settle_advance'
   | 'create_user'
   | 'update_user'
   | 'update_permissions'
-  | 'update_signature';
+  | 'update_signature'
+  | 'generate_affidavit'
+  | 'reset_password'
+  | 'create_project'
+  | 'update_project'
+  | 'delete_project'
+  | 'bulk_import_projects'
+  | 'bulk_import_users'
+  | 'create_category'
+  | 'update_category'
+  | 'delete_category'
+  | 'close_rendicion'
+  | 'approve_reopen_rendicion'
+  | 'reject_reopen_rendicion'
+  | 'create_reembolso_directo'
+  | 'coordinator_approve_reembolso_directo'
+  | 'accounting_approve_reembolso_directo'
+  | 'accounting_reject_reembolso_directo'
+  | 'pay_reembolso_directo'
+  | 'close_reembolso_directo'
+  | 'create_petty_cash'
+  | 'fund_petty_cash'
+  | 'close_petty_cash'
+  | 'cancel_rendicion'
+  | 'cancel_advance'
 
 @Schema({ timestamps: true })
 export class AuditLog {
   @Prop({ required: true })
-  userId: string;
+  userId: string
 
   @Prop({ required: true })
-  userName: string;
+  userName: string
 
   @Prop({ required: true })
-  action: AuditAction;
+  action: AuditAction
 
   @Prop({ required: true })
-  module: string;
+  module: string
 
   @Prop()
-  entityId?: string;
+  entityId?: string
 
   @Prop()
-  details?: string;
+  details?: string
 
   @Prop()
-  clientId?: string;
+  clientId?: string
 
   @Prop()
-  ip?: string;
+  ip?: string
 
-  createdAt: Date;
+  createdAt: Date
 }
 
-export const AuditLogSchema = SchemaFactory.createForClass(AuditLog);
+export const AuditLogSchema = SchemaFactory.createForClass(AuditLog)

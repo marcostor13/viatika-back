@@ -15,11 +15,16 @@ export class SunatConfigService {
   constructor(
     @InjectModel(SunatConfig.name)
     private sunatConfigModel: Model<SunatConfigDocument>
-  ) { }
+  ) {}
 
-  async create(createSunatConfigDto: CreateSunatConfigDto, session?: ClientSession) {
+  async create(
+    createSunatConfigDto: CreateSunatConfigDto,
+    session?: ClientSession
+  ) {
     try {
-      const query = this.sunatConfigModel.findOne({ clientId: createSunatConfigDto.clientId })
+      const query = this.sunatConfigModel.findOne({
+        clientId: createSunatConfigDto.clientId,
+      })
       if (session) {
         query.session(session)
       }
@@ -52,7 +57,6 @@ export class SunatConfigService {
 
   async update(_id: string, updateSunatConfigDto: UpdateSunatConfigDto) {
     try {
-
       const config = await this.sunatConfigModel
         .findOneAndUpdate(
           { _id },
@@ -72,7 +76,6 @@ export class SunatConfigService {
 
   async remove(_id: string) {
     try {
-
       const result = await this.sunatConfigModel
         .findOneAndDelete({ _id })
         .exec()
@@ -81,7 +84,6 @@ export class SunatConfigService {
       }
       return result
     } catch (error) {
-
       throw new NotFoundException('Error al eliminar configuración SUNAT')
     }
   }
@@ -113,7 +115,7 @@ export class SunatConfigService {
     try {
       const config = await this.sunatConfigModel
         .findOne({
-          clientId
+          clientId,
         })
         .exec()
 

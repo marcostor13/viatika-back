@@ -5,10 +5,26 @@ import {
   IsMongoId,
   MinLength,
   IsBoolean,
+  IsArray,
+  ValidateNested,
 } from 'class-validator'
+import { Type } from 'class-transformer'
+
+class CreatePermissionsDto {
+  @IsArray()
+  @IsOptional()
+  modules?: string[]
+
+  @IsBoolean()
+  @IsOptional()
+  canApproveL1?: boolean
+
+  @IsBoolean()
+  @IsOptional()
+  canApproveL2?: boolean
+}
 
 export class CreateUserDto {
-
   @IsString()
   @IsNotEmpty()
   name: string
@@ -18,8 +34,8 @@ export class CreateUserDto {
 
   @IsString()
   @MinLength(6)
-  @IsNotEmpty()
-  password: string
+  @IsOptional()
+  password?: string
 
   @IsNotEmpty()
   roleId: string
@@ -43,9 +59,26 @@ export class CreateUserDto {
 
   @IsString()
   @IsOptional()
+  area?: string
+
+  @IsString()
+  @IsOptional()
+  cargo?: string
+
+  @IsString()
+  @IsOptional()
   address?: string
 
   @IsString()
   @IsOptional()
   phone?: string
+
+  @IsMongoId()
+  @IsOptional()
+  coordinatorId?: string
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CreatePermissionsDto)
+  permissions?: CreatePermissionsDto
 }

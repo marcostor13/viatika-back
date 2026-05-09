@@ -1,4 +1,12 @@
-import { IsString, IsNotEmpty, IsOptional, IsEnum, IsDateString } from 'class-validator'
+import {
+  IsString,
+  IsNotEmpty,
+  IsOptional,
+  IsEnum,
+  IsDateString,
+  IsUrl,
+  IsNumber,
+} from 'class-validator'
 
 export class PayAdvanceDto {
   @IsEnum(['transferencia_bancaria', 'efectivo', 'cheque'])
@@ -23,4 +31,20 @@ export class PayAdvanceDto {
   @IsString()
   @IsOptional()
   reference?: string
+
+  @IsUrl()
+  @IsNotEmpty()
+  paymentReceiptUrl: string
+
+  @IsString()
+  @IsOptional()
+  paymentReceiptFileName?: string
+
+  @IsString()
+  @IsOptional()
+  paymentReceiptMimeType?: string
+
+  @IsOptional()
+  @IsNumber()
+  paymentReceiptSizeBytes?: number
 }

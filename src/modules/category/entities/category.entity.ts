@@ -4,9 +4,12 @@ import { ClientDocument } from '../../client/entities/client.entity'
 
 export interface CategoryDocument extends Document {
   name: string
+  key: string
   description?: string
   isActive: boolean
+  limit: number | null
   clientId: Types.ObjectId
+  parentId: Types.ObjectId | null
   createdAt: Date
   updatedAt: Date
 }
@@ -21,7 +24,7 @@ export class Category {
   @Prop({ required: true })
   name: string
 
-  @Prop({ unique: true })
+  @Prop()
   key: string
 
   @Prop()
@@ -30,10 +33,16 @@ export class Category {
   @Prop({ default: true })
   isActive: boolean
 
+  @Prop({ type: Number, default: null })
+  limit: number | null
+
   @Prop({ required: true, type: Types.ObjectId, ref: 'Client' })
   clientId: Types.ObjectId
+
+  @Prop({ type: Types.ObjectId, ref: 'Category', default: null })
+  parentId: Types.ObjectId | null
 }
 
 export const CategorySchema = SchemaFactory.createForClass(Category)
 
-CategorySchema.index({ key: 1, companyId: 1 }, { unique: true })
+CategorySchema.index({ key: 1, clientId: 1 }, { unique: true, sparse: true })

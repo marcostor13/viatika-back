@@ -38,7 +38,7 @@ export class InvoiceController {
 
   constructor(
     private readonly invoiceService: InvoiceService,
-    private readonly auditLogService: AuditLogService,
+    private readonly auditLogService: AuditLogService
   ) {}
 
   @Get('token-sunat')
@@ -160,8 +160,18 @@ export class InvoiceController {
     @Req() req: any
   ) {
     const companyId = req.user.companyId
-    const result = await this.invoiceService.updateStatus(id, body.status, companyId, body.reason)
-    const action = body.status === InvoiceStatus.APPROVED ? 'approve_invoice' : body.status === InvoiceStatus.REJECTED ? 'reject_invoice' : 'approve_invoice'
+    const result = await this.invoiceService.updateStatus(
+      id,
+      body.status,
+      companyId,
+      body.reason
+    )
+    const action =
+      body.status === InvoiceStatus.APPROVED
+        ? 'approve_invoice'
+        : body.status === InvoiceStatus.REJECTED
+          ? 'reject_invoice'
+          : 'approve_invoice'
     this.auditLogService.log({
       userId: req.user._id || req.user.sub,
       userName: req.user.name || req.user.email,

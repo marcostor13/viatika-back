@@ -1,4 +1,12 @@
-import { IsMongoId, IsNotEmpty, IsOptional, IsString, IsIn, IsBoolean, IsObject } from 'class-validator'
+import {
+  IsMongoId,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  IsIn,
+  IsBoolean,
+  IsObject,
+} from 'class-validator'
 import { NotificationType } from '../entities/notification.entity'
 
 export class CreateNotificationDto {

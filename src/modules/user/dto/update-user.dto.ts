@@ -58,6 +58,14 @@ export class UpdateUserDto {
 
   @IsString()
   @IsOptional()
+  area?: string
+
+  @IsString()
+  @IsOptional()
+  cargo?: string
+
+  @IsString()
+  @IsOptional()
   address?: string
 
   @IsString()
@@ -72,4 +80,12 @@ export class UpdateUserDto {
   @IsString()
   @IsOptional()
   signature?: string
+
+  @IsMongoId()
+  @IsOptional()
+  coordinatorId?: string | null
+
+  @IsBoolean()
+  @IsOptional()
+  mustChangePassword?: boolean
 }

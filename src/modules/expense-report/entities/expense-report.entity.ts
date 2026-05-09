@@ -1,88 +1,137 @@
-import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document, Types } from 'mongoose';
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose'
+import { Document, Types } from 'mongoose'
 
-export type ExpenseReportStatus = 'solicited' | 'open' | 'submitted' | 'approved' | 'rejected' | 'closed';
-export type SettlementType = 'reembolso' | 'devolucion' | 'equilibrado';
+export type ExpenseReportStatus =
+  | 'solicited'
+  | 'open'
+  | 'submitted'
+  | 'approved'
+  | 'rejected'
+  | 'reimbursed'
+  | 'closed'
+  | 'cancelled'
+
+export type ReopeningStatus = 'none' | 'requested' | 'approved'
+
+export interface ClosureRecord {
+  closedAt: Date
+  closedBy: string
+  documentHashes?: string[]
+  reopeningStatus: ReopeningStatus
+  reopeningRequestedBy?: string
+  reopeningRequestedAt?: Date
+  reopeningReason?: string
+  reopeningApprovedBy?: string
+  reopeningApprovedAt?: Date
+  reopenedAt?: Date
+}
+export type SettlementType = 'reembolso' | 'devolucion' | 'equilibrado'
 
 export interface Settlement {
-  advanceTotal: number;
-  expenseTotal: number;
-  difference: number;
-  type: SettlementType;
-  settledAt: Date;
+  advanceTotal: number
+  expenseTotal: number
+  difference: number
+  type: SettlementType
+  settledAt: Date
 }
 
 export interface ExpenseReportBudgetItem {
-  description: string;
-  amount: number;
-  peopleCount: number;
-  fuelAmount: number;
-  daysCount: number;
-  total: number;
+  description: string
+  amount: number
+  peopleCount: number
+  fuelAmount: number
+  daysCount: number
+  total: number
+}
+
+export interface ExpenseReportAffidavit {
+  type: 'viaticos_nacionales' | 'viajes_exterior'
+  expenseIds: Types.ObjectId[]
+  generatedBy: Types.ObjectId
+  generatedAt: Date
+}
+
+/** Comprobante del pago de reembolso al colaborador (Fase 6) — mismo criterio que pago de anticipo */
+export interface ReimbursementPaymentInfo {
+  method: 'transferencia_bancaria' | 'efectivo' | 'cheque'
+  bankName?: string
+  accountNumber?: string
+  cci?: string
+  transferDate: Date
+  reference?: string
+  paymentReceiptUrl: string
+  paymentReceiptFileName?: string
+  paymentReceiptMimeType?: string
+  paymentReceiptSizeBytes?: number
 }
 
 export interface ExpenseReportDocument extends Document {
-  title: string;
-  description: string;
-  budget: number;
-  userId: Types.ObjectId;
-  clientId: Types.ObjectId;
-  status: ExpenseReportStatus;
-  rejectionReason?: string;
-  expenseIds: Types.ObjectId[];
-  advanceIds?: Types.ObjectId[];
-  settlement?: Settlement;
-  createdBy: Types.ObjectId;
-  approvedBy?: Types.ObjectId;
-  projectId?: Types.ObjectId;
+  title: string
+  description: string
+  budget: number
+  userId: Types.ObjectId
+  clientId: Types.ObjectId
+  status: ExpenseReportStatus
+  rejectionReason?: string
+  expenseIds: Types.ObjectId[]
+  advanceIds?: Types.ObjectId[]
+  settlement?: Settlement
+  createdBy: Types.ObjectId
+  approvedBy?: Types.ObjectId
+  projectId?: Types.ObjectId
   // New fields
-  accountNumber?: string;
-  idDocument?: string;
-  peopleNames?: string[];
-  location?: string;
-  startDate?: Date;
-  endDate?: Date;
-  items?: ExpenseReportBudgetItem[];
+  accountNumber?: string
+  idDocument?: string
+  peopleNames?: string[]
+  location?: string
+  startDate?: Date
+  endDate?: Date
+  items?: ExpenseReportBudgetItem[]
+  affidavits?: ExpenseReportAffidavit[]
+  reimbursementPaymentInfo?: ReimbursementPaymentInfo
+  reimbursedAt?: Date
+  reimbursementAccountingNotifiedAt?: Date
+  closureRecord?: ClosureRecord
 }
 
 @Schema({ timestamps: true })
 export class ExpenseReport {
   @Prop({ required: true })
-  title: string;
+  title: string
 
   @Prop()
-  description: string;
+  description: string
 
   @Prop({ required: true, default: 0 })
-  budget: number;
+  budget: number
 
   @Prop({ required: true, type: Types.ObjectId, ref: 'User' })
-  userId: Types.ObjectId;
+  userId: Types.ObjectId
 
   @Prop({ required: true, type: Types.ObjectId, ref: 'Client' })
-  clientId: Types.ObjectId;
+  clientId: Types.ObjectId
 
   @Prop({ default: 'open' })
-  status: ExpenseReportStatus;
+  status: ExpenseReportStatus
 
   /** Motivo cuando el administrador rechaza la rendición (visible para el colaborador) */
   @Prop({ required: false })
-  rejectionReason?: string;
+  rejectionReason?: string
 
   @Prop({ type: [{ type: Types.ObjectId, ref: 'Expense' }], default: [] })
-  expenseIds: Types.ObjectId[];
+  expenseIds: Types.ObjectId[]
 
   @Prop({ type: Types.ObjectId, ref: 'User', required: true })
-  createdBy: Types.ObjectId;
+  createdBy: Types.ObjectId
 
   @Prop({ type: Types.ObjectId, ref: 'User', required: false })
-  approvedBy?: Types.ObjectId;
+  approvedBy?: Types.ObjectId
 
   @Prop({ type: Types.ObjectId, ref: 'Project', required: false })
-  projectId?: Types.ObjectId;
+  projectId?: Types.ObjectId
 
   @Prop({ type: [{ type: Types.ObjectId, ref: 'Advance' }], default: [] })
-  advanceIds?: Types.ObjectId[];
+  advanceIds?: Types.ObjectId[]
 
   @Prop({
     type: {
@@ -94,25 +143,25 @@ export class ExpenseReport {
       _id: false,
     },
   })
-  settlement?: Settlement;
+  settlement?: Settlement
 
   @Prop()
-  accountNumber?: string;
+  accountNumber?: string
 
   @Prop()
-  idDocument?: string;
+  idDocument?: string
 
   @Prop({ type: [String], default: [] })
-  peopleNames?: string[];
+  peopleNames?: string[]
 
   @Prop()
-  location?: string;
+  location?: string
 
   @Prop()
-  startDate?: Date;
+  startDate?: Date
 
   @Prop()
-  endDate?: Date;
+  endDate?: Date
 
   @Prop({
     type: [
@@ -128,7 +177,55 @@ export class ExpenseReport {
     ],
     default: [],
   })
-  items?: ExpenseReportBudgetItem[];
+  items?: ExpenseReportBudgetItem[]
+
+  @Prop({
+    type: [
+      {
+        type: {
+          type: String,
+          enum: ['viaticos_nacionales', 'viajes_exterior'],
+          required: true,
+        },
+        expenseIds: [{ type: Types.ObjectId, ref: 'Expense', required: true }],
+        generatedBy: { type: Types.ObjectId, ref: 'User', required: true },
+        generatedAt: { type: Date, required: true },
+        _id: false,
+      },
+    ],
+    default: [],
+  })
+  affidavits?: ExpenseReportAffidavit[]
+
+  @Prop({
+    type: {
+      method: {
+        type: String,
+        enum: ['transferencia_bancaria', 'efectivo', 'cheque'],
+      },
+      bankName: { type: String },
+      accountNumber: { type: String },
+      cci: { type: String },
+      transferDate: { type: Date },
+      reference: { type: String },
+      paymentReceiptUrl: { type: String, required: true },
+      paymentReceiptFileName: { type: String },
+      paymentReceiptMimeType: { type: String },
+      paymentReceiptSizeBytes: { type: Number },
+      _id: false,
+    },
+    required: false,
+  })
+  reimbursementPaymentInfo?: ReimbursementPaymentInfo
+
+  @Prop({ type: Date, required: false })
+  reimbursedAt?: Date
+
+  @Prop({ type: Date, required: false })
+  reimbursementAccountingNotifiedAt?: Date
+
+  @Prop({ type: Object, required: false })
+  closureRecord?: ClosureRecord
 }
 
-export const ExpenseReportSchema = SchemaFactory.createForClass(ExpenseReport);
+export const ExpenseReportSchema = SchemaFactory.createForClass(ExpenseReport)

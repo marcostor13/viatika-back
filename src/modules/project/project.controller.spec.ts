@@ -1,20 +1,23 @@
-import { Test, TestingModule } from '@nestjs/testing';
-import { ProyectController } from './project.controller';
-import { ProyectService } from './project.service';
+import { Test, TestingModule } from '@nestjs/testing'
+import { ProjectController } from './project.controller'
+import { ProjectService } from './project.service'
+import { AuditLogService } from '../audit-log/audit-log.service'
 
-describe('ProyectController', () => {
-  let controller: ProyectController;
+describe('ProjectController', () => {
+  let controller: ProjectController
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
-      controllers: [ProyectController],
-      providers: [ProyectService],
-    }).compile();
-
-    controller = module.get<ProyectController>(ProyectController);
-  });
+      controllers: [ProjectController],
+      providers: [
+        { provide: ProjectService, useValue: {} },
+        { provide: AuditLogService, useValue: { log: jest.fn() } },
+      ],
+    }).compile()
+    controller = module.get<ProjectController>(ProjectController)
+  })
 
   it('should be defined', () => {
-    expect(controller).toBeDefined();
-  });
-});
+    expect(controller).toBeDefined()
+  })
+})

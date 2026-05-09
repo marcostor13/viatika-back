@@ -1,5 +1,17 @@
-import { IsString, IsOptional, IsNotEmpty, IsEnum, IsBoolean, IsArray, IsNumber } from 'class-validator'
-import { ExpenseStatus, ExpenseType, MobilityRow } from '../entities/expense.entity'
+import {
+  IsString,
+  IsOptional,
+  IsNotEmpty,
+  IsEnum,
+  IsBoolean,
+  IsArray,
+  IsNumber,
+} from 'class-validator'
+import {
+  ExpenseStatus,
+  ExpenseType,
+  MobilityRow,
+} from '../entities/expense.entity'
 
 export class CreateExpenseDto {
   @IsString()
@@ -46,7 +58,13 @@ export class CreateExpenseDto {
   @IsOptional()
   expenseReportId?: string
 
-  @IsEnum(['factura', 'planilla_movilidad', 'otros_gastos'])
+  @IsEnum([
+    'factura',
+    'planilla_movilidad',
+    'otros_gastos',
+    'recibo_caja',
+    'comprobante_caja',
+  ])
   @IsOptional()
   expenseType?: ExpenseType
 
@@ -61,4 +79,8 @@ export class CreateExpenseDto {
   @IsString()
   @IsOptional()
   declaracionJuradaFirmante?: string
+
+  @IsString()
+  @IsOptional()
+  fechaEmision?: string
 }

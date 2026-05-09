@@ -1,83 +1,92 @@
-import { IsString, IsNumber, IsOptional, IsMongoId, IsIn, IsArray, ValidateNested, IsDateString } from 'class-validator';
-import { Type } from 'class-transformer';
+import {
+  IsString,
+  IsNumber,
+  IsOptional,
+  IsMongoId,
+  IsIn,
+  IsArray,
+  ValidateNested,
+  IsDateString,
+} from 'class-validator'
+import { Type } from 'class-transformer'
 
 class BudgetItemDto {
   @IsString()
-  description: string;
+  description: string
 
   @IsNumber()
-  amount: number;
-
-  @IsNumber()
-  @IsOptional()
-  peopleCount?: number;
+  amount: number
 
   @IsNumber()
   @IsOptional()
-  fuelAmount?: number;
+  peopleCount?: number
 
   @IsNumber()
   @IsOptional()
-  daysCount?: number;
+  fuelAmount?: number
 
   @IsNumber()
-  total: number;
+  @IsOptional()
+  daysCount?: number
+
+  @IsNumber()
+  total: number
 }
 
 export class CreateExpenseReportDto {
   @IsString()
-  title: string;
+  title: string
 
   @IsString()
   @IsOptional()
-  description?: string;
+  description?: string
 
   @IsNumber()
   @IsOptional()
-  budget?: number;
+  budget?: number
 
   @IsMongoId()
-  userId: string; // The collaborator assigned
+  userId: string // The collaborator assigned
 
   @IsMongoId()
-  clientId: string; // The company
-
-  @IsMongoId()
-  @IsOptional()
-  createdBy?: string; // The admin creating it
+  clientId: string // The company
 
   @IsMongoId()
   @IsOptional()
-  projectId?: string;
+  createdBy?: string // The admin creating it
+
+  @IsMongoId()
+  @IsOptional()
+  projectId?: string
 
   @IsString()
   @IsOptional()
-  accountNumber?: string;
+  accountNumber?: string
 
   @IsString()
   @IsOptional()
-  idDocument?: string;
+  idDocument?: string
 
   @IsArray()
   @IsString({ each: true })
   @IsOptional()
-  peopleNames?: string[];
+  peopleNames?: string[]
 
   @IsString()
   @IsOptional()
-  location?: string;
+  location?: string
 
   @IsDateString()
   @IsOptional()
-  startDate?: string;
+  startDate?: string
 
   @IsDateString()
   @IsOptional()
-  endDate?: string;
+  endDate?: string
 
   @IsArray()
   @IsOptional()
   @ValidateNested({ each: true })
   @Type(() => BudgetItemDto)
-  items?: BudgetItemDto[];
+  items?: BudgetItemDto[]
 }

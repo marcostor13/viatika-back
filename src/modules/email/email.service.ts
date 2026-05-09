@@ -7,6 +7,52 @@ export class EmailService {
 
   constructor(private readonly mailerService: MailerService) {}
 
+  /**
+   * URL pública del front (local vs prod vía env).
+   * Preferir `APP_PUBLIC_URL` o `FRONTEND_URL` en `.env`.
+   */
+  getPublicAppBaseUrl(): string {
+    const raw = (
+      process.env.APP_PUBLIC_URL ||
+      process.env.FRONTEND_URL ||
+      ''
+    ).trim()
+    if (raw) {
+      return raw.replace(/\/+$/, '')
+    }
+    return process.env.NODE_ENV === 'production'
+      ? 'https://app.viatica.tecdidata.com'
+      : 'http://localhost:4200'
+  }
+
+  /** Ruta absoluta en el front, p. ej. `/tesoreria` → `https://…/tesoreria` */
+  buildAppUrl(path?: string): string {
+    const base = this.getPublicAppBaseUrl()
+    if (!path?.trim()) return base
+    const p = path.trim()
+    if (/^https?:\/\//i.test(p)) {
+      return p.replace(/\/+$/, '')
+    }
+    const suffix = p.startsWith('/') ? p : `/${p}`
+    return `${base}${suffix}`
+  }
+
+  getLogoUrl(): string {
+    const logo = process.env.APP_LOGO_URL?.trim()
+    if (logo) return logo
+    return this.buildAppUrl('/logo.svg')
+  }
+
+  /** `platformUrl` en plantillas: absoluta del caller o base + ruta relativa. */
+  resolvePlatformHref(url?: string | null): string {
+    const s = url?.trim()
+    if (!s) return this.getPublicAppBaseUrl()
+    if (/^https?:\/\//i.test(s)) {
+      return s.replace(/\/+$/, '')
+    }
+    return this.buildAppUrl(s)
+  }
+
   getCode() {
     const code = Math.floor(100000 + Math.random() * 900000).toString()
     return code
@@ -20,7 +66,7 @@ export class EmailService {
         subject: 'Confirma tu correo en Nuestra App',
         template: './confirmation', // se añade automáticamente la extensión (.hbs)
         context: {
-          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          logoUrl: this.getLogoUrl(),
           verificationCode: this.getCode(),
           year: new Date().getFullYear(),
         },
@@ -53,7 +99,7 @@ export class EmailService {
         subject: 'Nueva Factura Subida',
         template: './invoice-notification',
         context: {
-          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          logoUrl: this.getLogoUrl(),
           providerName: data.providerName,
           invoiceNumber: data.invoiceNumber,
           date: data.date,
@@ -126,7 +172,7 @@ export class EmailService {
         subject: 'Acta de Aceptación Subida',
         template: './acta-notification',
         context: {
-          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          logoUrl: this.getLogoUrl(),
           providerName: data.providerName,
           invoiceNumber: data.invoiceNumber,
           date: data.date,
@@ -169,7 +215,7 @@ export class EmailService {
           'Nueva factura subida por ' + (data.createdBy || data.providerName),
         template: './invoice-notification',
         context: {
-          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          logoUrl: this.getLogoUrl(),
           providerName: data.providerName,
           invoiceNumber: data.invoiceNumber,
           date:
@@ -225,7 +271,7 @@ export class EmailService {
           (data.createdBy || data.providerName),
         template: './acta-notification',
         context: {
-          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          logoUrl: this.getLogoUrl(),
           providerName: data.providerName,
           invoiceNumber: data.invoiceNumber,
           date:
@@ -278,7 +324,7 @@ export class EmailService {
           (data.createdBy || data.providerName),
         template: './invoice-notification',
         context: {
-          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          logoUrl: this.getLogoUrl(),
           providerName: data.providerName,
           invoiceNumber: data.invoiceNumber,
           date: data.date,
@@ -429,7 +475,7 @@ export class EmailService {
         subject: 'Bienvenido a Nuestra Plataforma de Proveedores',
         template: './provider-welcome',
         context: {
-          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          logoUrl: this.getLogoUrl(),
           firstName: data.firstName,
           lastName: data.lastName,
           email: email,
@@ -540,7 +586,7 @@ export class EmailService {
       userName: string
       title: string
       budget: number
-      platformUrl: string
+      platformUrl?: string
     }
   ) {
     try {
@@ -550,22 +596,451 @@ export class EmailService {
         subject: '¡Rendición de Gastos Aprobada!',
         template: './rendicion-approved',
         context: {
-          logoUrl: 'https://app.viatica.tecdidata.com/logo.svg',
+          logoUrl: this.getLogoUrl(),
           userName: data.userName,
           title: data.title,
           budget: `S/ ${Number(data.budget).toFixed(2)}`,
-          platformUrl: data.platformUrl,
+          platformUrl: this.resolvePlatformHref(data.platformUrl),
           year: new Date().getFullYear(),
         },
       })
-      this.logger.debug(
-        `Correo de rendición aprobada enviado a ${email}`
-      )
+      this.logger.debug(`Correo de rendición aprobada enviado a ${email}`)
     } catch (error) {
       this.logger.error(
         `Error al enviar correo de rendición aprobada a ${email}:`,
         error
       )
+    }
+  }
+
+  /** Fase 3 — rechazo al colaborador (Funcionalidades.md §3.1) */
+  async sendViaticoRechazoColaborador(
+    email: string,
+    data: {
+      collaboratorName: string
+      collaboratorDocument: string
+      collaboratorArea: string
+      collaboratorCargo: string
+      projectLabel: string
+      rejectionReason: string
+      platformUrl?: string
+    }
+  ) {
+    try {
+      const subject = `Rechazo de solicitud de viáticos - ${data.projectLabel}`
+      const { platformUrl, ...rest } = data
+      await this.mailerService.sendMail({
+        to: email,
+        subject,
+        template: './viatico-rechazo-colaborador',
+        context: {
+          logoUrl: this.getLogoUrl(),
+          year: new Date().getFullYear(),
+          ...rest,
+          platformUrl: this.resolvePlatformHref(platformUrl),
+        },
+      })
+      this.logger.debug(`Correo rechazo viático enviado a ${email}`)
+    } catch (error) {
+      this.logger.error(`Error rechazo viático a ${email}:`, error)
+      throw error
+    }
+  }
+
+  /** Fase 3 — aprobación a contabilidad / tesorería (Funcionalidades.md §3.2) */
+  async sendViaticoAprobacionContabilidad(
+    email: string,
+    data: {
+      recipientName: string
+      urgent: boolean
+      urgentBanner: string
+      emailTitle: string
+      detailBody: string
+      /** Etiqueta N° centro de costo ej. `[CODE - Nombre]` (Fase 3). */
+      projectLabel: string
+      platformUrl?: string
+    }
+  ) {
+    try {
+      const prefix = data.urgent ? '[🔴 URGENTE] ' : ''
+      const subject = `${prefix}Solicitud aprobada - ${data.projectLabel}`
+      const { platformUrl, ...rest } = data
+      await this.mailerService.sendMail({
+        to: email,
+        subject,
+        template: './viatico-aprobacion-contabilidad',
+        context: {
+          logoUrl: this.getLogoUrl(),
+          year: new Date().getFullYear(),
+          ...rest,
+          platformUrl: this.resolvePlatformHref(platformUrl),
+        },
+      })
+      this.logger.debug(`Correo aprobación viático (contabilidad) enviado a ${email}`)
+    } catch (error) {
+      this.logger.error(`Error aprobación viático a ${email}:`, error)
+      throw error
+    }
+  }
+
+  /** Fase 2 — nueva solicitud de viáticos al coordinador (Funcionalidades.md §2.2) */
+  async sendViaticoSolicitudToCoordinator(
+    email: string,
+    data: {
+      coordinatorName: string
+      collaboratorName: string
+      place: string
+      startDate: string
+      endDate: string
+      totalFormatted: string
+      projectLabel: string
+      plainSummary: string
+      platformUrl?: string
+    }
+  ) {
+    try {
+      const subject = `Nueva solicitud de viáticos, ${data.projectLabel}`
+      this.logger.debug(`Enviando solicitud de viáticos a coordinador ${email}`)
+      const { platformUrl, ...rest } = data
+      await this.mailerService.sendMail({
+        to: email,
+        subject,
+        template: './viatico-solicitud-coordinator',
+        attachments: [
+          {
+            filename: 'resumen-solicitud-viaticos.txt',
+            content: data.plainSummary,
+            contentType: 'text/plain; charset=utf-8',
+          },
+        ],
+        context: {
+          logoUrl: this.getLogoUrl(),
+          year: new Date().getFullYear(),
+          ...rest,
+          platformUrl: this.resolvePlatformHref(platformUrl),
+        },
+      })
+      this.logger.debug(`Correo de solicitud de viáticos enviado a ${email}`)
+    } catch (error) {
+      this.logger.error(
+        `Error al enviar solicitud de viáticos a ${email}:`,
+        error
+      )
+      throw error
+    }
+  }
+
+  async sendViaticoCancelacion(
+    email: string,
+    data: {
+      coordinatorName: string
+      collaboratorName: string
+      place: string
+      startDate: string
+      endDate: string
+      totalFormatted: string
+      projectLabel: string
+      plainSummary: string
+      cancelReason?: string
+      platformUrl?: string
+    }
+  ) {
+    try {
+      const { platformUrl, ...rest } = data
+      await this.mailerService.sendMail({
+        to: email,
+        subject: `Solicitud de viáticos cancelada — ${data.projectLabel}`,
+        template: './viatico-cancelacion-coordinator',
+        context: {
+          logoUrl: this.getLogoUrl(),
+          year: new Date().getFullYear(),
+          ...rest,
+          platformUrl: this.resolvePlatformHref(platformUrl),
+        },
+      })
+      this.logger.debug(`Correo cancelación viático enviado a ${email}`)
+    } catch (error) {
+      this.logger.error(`Error al enviar cancelación viático a ${email}:`, error)
+    }
+  }
+
+  /** Fase 6 — rendición aprobada con saldo a favor del colaborador (pendiente de pago). */
+  async sendRendicionReembolsoContabilidad(
+    email: string,
+    data: {
+      recipientName: string
+      /** Identificador legible para el asunto (ej. título + ref. corta), alineado a Funcionalidades §6.1 */
+      reportLabel: string
+      reportTitle: string
+      collaboratorName: string
+      amountFormatted: string
+      detailUrl: string
+    }
+  ) {
+    try {
+      const subject = `Rendición «${data.reportLabel}» requiere reembolso de S/ ${data.amountFormatted} a ${data.collaboratorName}`
+      const { detailUrl, ...rest } = data
+      await this.mailerService.sendMail({
+        to: email,
+        subject,
+        template: './rendicion-reembolso-contabilidad',
+        context: {
+          logoUrl: this.getLogoUrl(),
+          year: new Date().getFullYear(),
+          ...rest,
+          detailUrl: this.resolvePlatformHref(detailUrl),
+        },
+      })
+    } catch (error) {
+      this.logger.error(`Error correo reembolso contabilidad a ${email}:`, error)
+      throw error
+    }
+  }
+
+  /** Fase 6 — reembolso pagado al colaborador (adjunta comprobante). */
+  async sendRendicionReembolsoPagado(
+    email: string,
+    data: {
+      recipientName: string
+      collaboratorName: string
+      coordinatorName?: string
+      reportTitle: string
+      amountFormatted: string
+      transferDate: string
+      reference?: string
+      paymentMethod: string
+      paymentReceiptUrl: string
+      paymentReceiptFileName?: string
+      platformUrl?: string
+    }
+  ) {
+    try {
+      const subject = `Reembolso de gastos registrado — ${data.reportTitle}`
+      const { platformUrl, ...rest } = data
+      await this.mailerService.sendMail({
+        to: email,
+        subject,
+        template: './rendicion-reembolso-pagado',
+        attachments: data.paymentReceiptUrl
+          ? [
+              {
+                filename:
+                  data.paymentReceiptFileName ||
+                  'comprobante-reembolso-rendicion.pdf',
+                path: data.paymentReceiptUrl,
+              },
+            ]
+          : [],
+        context: {
+          logoUrl: this.getLogoUrl(),
+          year: new Date().getFullYear(),
+          ...rest,
+          platformUrl: this.resolvePlatformHref(platformUrl),
+        },
+      })
+      this.logger.debug(`Correo reembolso pagado enviado a ${email}`)
+    } catch (error) {
+      this.logger.error(`Error correo reembolso pagado a ${email}:`, error)
+      throw error
+    }
+  }
+
+  /** Fase 4 — pago de viáticos registrado para colaborador y coordinador. */
+  async sendViaticoPagoRealizado(
+    email: string,
+    data: {
+      recipientName: string
+      collaboratorName: string
+      coordinatorName?: string
+      projectLabel: string
+      amountFormatted: string
+      transferDate: string
+      reference?: string
+      paymentMethod: string
+      paymentReceiptUrl: string
+      paymentReceiptFileName?: string
+      platformUrl?: string
+    }
+  ) {
+    try {
+      const subject = `Viáticos aprobados y pagados — ${data.projectLabel}`
+      const { platformUrl, ...rest } = data
+      await this.mailerService.sendMail({
+        to: email,
+        subject,
+        template: './viatico-pago-realizado',
+        attachments: data.paymentReceiptUrl
+          ? [
+              {
+                filename:
+                  data.paymentReceiptFileName || 'comprobante-pago-viaticos.pdf',
+                path: data.paymentReceiptUrl,
+              },
+            ]
+          : [],
+        context: {
+          logoUrl: this.getLogoUrl(),
+          year: new Date().getFullYear(),
+          ...rest,
+          platformUrl: this.resolvePlatformHref(platformUrl),
+        },
+      })
+      this.logger.debug(`Correo de pago viático enviado a ${email}`)
+    } catch (error) {
+      this.logger.error(`Error correo pago viático a ${email}:`, error)
+      throw error
+    }
+  }
+
+  // ─── Fase 8 — Cierre definitivo ──────────────────────────────────────────
+
+  async sendRendicionCerrada(
+    email: string,
+    data: { recipientName: string; reportTitle: string; closedAt: string }
+  ) {
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: `Rendición Cerrada Definitivamente — ${data.reportTitle}`,
+        template: './rendicion-cerrada',
+        context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data },
+      })
+    } catch (error) {
+      this.logger.error(`Error correo rendición cerrada a ${email}:`, error)
+    }
+  }
+
+  async sendRendicionCancelada(
+    email: string,
+    data: { adminName: string; collaboratorName: string; reportTitle: string; cancelReason?: string }
+  ) {
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: `Rendición cancelada por el colaborador — ${data.reportTitle}`,
+        template: './rendicion-cancelada',
+        context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data },
+      })
+    } catch (error) {
+      this.logger.error(`Error correo rendición cancelada a ${email}:`, error)
+    }
+  }
+
+  // ─── Fase 7 — Devolución de saldos ───────────────────────────────────────
+
+  async sendDevolucionPendiente(
+    email: string,
+    data: { recipientName: string; amountDue: string; dueDate: string; advanceId: string }
+  ) {
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: `DEVOLUCIÓN PENDIENTE — Viático N° ${data.advanceId} — Monto S/ ${data.amountDue}`,
+        template: './devolucion-pendiente',
+        context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data },
+      })
+    } catch (error) {
+      this.logger.error(`Error correo devolución pendiente a ${email}:`, error)
+    }
+  }
+
+  async sendDevolucionValidada(
+    email: string,
+    data: { recipientName: string; amountDue: string; advanceId: string }
+  ) {
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: `Devolución validada — Viático N° ${data.advanceId}`,
+        template: './devolucion-validada',
+        context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data },
+      })
+    } catch (error) {
+      this.logger.error(`Error correo devolución validada a ${email}:`, error)
+    }
+  }
+
+  async sendDevolucionRechazada(
+    email: string,
+    data: { recipientName: string; amountDue: string; rejectionReason?: string; advanceId: string }
+  ) {
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: `Comprobante de devolución rechazado — Viático N° ${data.advanceId}`,
+        template: './devolucion-rechazada',
+        context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data },
+      })
+    } catch (error) {
+      this.logger.error(`Error correo devolución rechazada a ${email}:`, error)
+    }
+  }
+
+  // ─── Fase 9 — Reembolso Directo ──────────────────────────────────────────
+
+  async sendReembolsoDirectoAbierto(
+    email: string,
+    data: { recipientName: string; code: string; estimatedAmount: number; justification: string }
+  ) {
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: `Reembolso Directo Abierto — Código ${data.code}`,
+        template: './reembolso-directo-abierto',
+        context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data },
+      })
+    } catch (error) {
+      this.logger.error(`Error correo reembolso directo abierto a ${email}:`, error)
+    }
+  }
+
+  async sendReembolsoDirectoPagado(
+    email: string,
+    data: { recipientName: string; code: string; amount: number; receiptUrl: string }
+  ) {
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: `Pago Registrado — Reembolso Directo ${data.code}`,
+        template: './reembolso-directo-pagado',
+        context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data },
+      })
+    } catch (error) {
+      this.logger.error(`Error correo reembolso directo pagado a ${email}:`, error)
+    }
+  }
+
+  // ─── Fase 10 — Caja Chica ────────────────────────────────────────────────
+
+  async sendCajaChicaCreada(
+    email: string,
+    data: { recipientName: string; code: string; period: string; fundAmount: number }
+  ) {
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: `Caja Chica Creada — ${data.code}`,
+        template: './caja-chica-creada',
+        context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data },
+      })
+    } catch (error) {
+      this.logger.error(`Error correo caja chica creada a ${email}:`, error)
+    }
+  }
+
+  async sendCajaChicaFondeada(
+    email: string,
+    data: { recipientName: string; code: string; fundAmount: number }
+  ) {
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: `Caja Chica Fondeada y Activa — ${data.code}`,
+        template: './caja-chica-fondeada',
+        context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data },
+      })
+    } catch (error) {
+      this.logger.error(`Error correo caja chica fondeada a ${email}:`, error)
     }
   }
 }

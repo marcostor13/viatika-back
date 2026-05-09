@@ -1,18 +1,22 @@
-import { Test, TestingModule } from '@nestjs/testing';
-import { RoleService } from './role.service';
+import { Test, TestingModule } from '@nestjs/testing'
+import { getModelToken } from '@nestjs/mongoose'
+import { RoleService } from './role.service'
+import { Role } from './entities/role.entity'
 
 describe('RoleService', () => {
-  let service: RoleService;
+  let service: RoleService
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
-      providers: [RoleService],
-    }).compile();
-
-    service = module.get<RoleService>(RoleService);
-  });
+      providers: [
+        RoleService,
+        { provide: getModelToken(Role.name), useValue: {} },
+      ],
+    }).compile()
+    service = module.get<RoleService>(RoleService)
+  })
 
   it('should be defined', () => {
-    expect(service).toBeDefined();
-  });
-});
+    expect(service).toBeDefined()
+  })
+})

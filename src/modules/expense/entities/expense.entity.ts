@@ -10,7 +10,12 @@ export type ExpenseStatus =
   | 'sunat_not_found'
   | 'sunat_error'
 
-export type ExpenseType = 'factura' | 'planilla_movilidad' | 'otros_gastos'
+export type ExpenseType =
+  | 'factura'
+  | 'planilla_movilidad'
+  | 'otros_gastos'
+  | 'recibo_caja'
+  | 'comprobante_caja'
 
 export interface MobilityRowCoords {
   lat: number
@@ -30,6 +35,13 @@ export interface MobilityRow {
   gestion: string
 }
 
+export interface ExpenseReviewHistory {
+  action: 'approved' | 'rejected'
+  reviewerId?: string
+  reviewedAt: Date
+  reason?: string
+}
+
 export interface ExpenseDocument extends Document {
   proyectId: Types.ObjectId
   total: number
@@ -44,11 +56,18 @@ export interface ExpenseDocument extends Document {
   rejectionReason?: string
   clientId: string
   fechaEmision?: string
+  observado?: boolean
+  observacionPlazo?: string
+  diasRetraso?: number
+  categoryLimitPercent?: number
+  categoryLimitWarning?: string
   expenseReportId?: Types.ObjectId
   expenseType?: ExpenseType
   mobilityRows?: MobilityRow[]
   declaracionJurada?: boolean
   declaracionJuradaFirmante?: string
+  reviewHistory?: ExpenseReviewHistory[]
+  internalCode?: string
 }
 
 export interface GetExpenseDocument extends Omit<ExpenseDocument, '_id'> {
@@ -99,31 +118,75 @@ export class Expense {
   @Prop({ type: String, required: false })
   fechaEmision?: string
 
+  @Prop({ type: Boolean, default: false })
+  observado?: boolean
+
+  @Prop({ type: String, required: false })
+  observacionPlazo?: string
+
+  @Prop({ type: Number, required: false })
+  diasRetraso?: number
+
+  @Prop({ type: Number, required: false })
+  categoryLimitPercent?: number
+
+  @Prop({ type: String, required: false })
+  categoryLimitWarning?: string
+
+  @Prop({
+    type: [
+      {
+        action: { type: String, enum: ['approved', 'rejected'], required: true },
+        reviewerId: { type: String, required: false },
+        reviewedAt: { type: Date, required: true },
+        reason: { type: String, required: false },
+        _id: false,
+      },
+    ],
+    default: [],
+  })
+  reviewHistory?: ExpenseReviewHistory[]
+
+  @Prop({ type: String, required: false })
+  internalCode?: string
+
   @Prop({ type: Types.ObjectId, ref: 'ExpenseReport', required: false })
   expenseReportId?: Types.ObjectId
 
-  @Prop({ type: String, default: 'factura', enum: ['factura', 'planilla_movilidad', 'otros_gastos'] })
+  @Prop({
+    type: String,
+    default: 'factura',
+    enum: [
+      'factura',
+      'planilla_movilidad',
+      'otros_gastos',
+      'recibo_caja',
+      'comprobante_caja',
+    ],
+  })
   expenseType?: ExpenseType
 
   @Prop({
-    type: [{
-      fecha: { type: String },
-      concepto: { type: String },
-      total: { type: Number },
-      clienteProveedor: { type: String },
-      origen: { type: String },
-      origenCoords: {
-        lat: { type: Number },
-        lng: { type: Number },
+    type: [
+      {
+        fecha: { type: String },
+        concepto: { type: String },
+        total: { type: Number },
+        clienteProveedor: { type: String },
+        origen: { type: String },
+        origenCoords: {
+          lat: { type: Number },
+          lng: { type: Number },
+        },
+        destino: { type: String },
+        destinoCoords: {
+          lat: { type: Number },
+          lng: { type: Number },
+        },
+        distanciaKm: { type: Number },
+        gestion: { type: String },
       },
-      destino: { type: String },
-      destinoCoords: {
-        lat: { type: Number },
-        lng: { type: Number },
-      },
-      distanciaKm: { type: Number },
-      gestion: { type: String },
-    }],
+    ],
     required: false,
     default: undefined,
   })

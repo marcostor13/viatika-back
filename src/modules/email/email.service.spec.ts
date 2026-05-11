@@ -5,6 +5,9 @@ import { EmailService } from './email.service'
 describe('EmailService', () => {
   let service: EmailService
   let mailerService: { sendMail: jest.Mock }
+  const originalNodeEnv = process.env.NODE_ENV
+  const originalAppPublicUrl = process.env.APP_PUBLIC_URL
+  const originalFrontendUrl = process.env.FRONTEND_URL
 
   beforeEach(async () => {
     mailerService = { sendMail: jest.fn().mockResolvedValue(undefined) }
@@ -17,6 +20,22 @@ describe('EmailService', () => {
     service = module.get<EmailService>(EmailService)
   })
 
+  afterEach(() => {
+    process.env.NODE_ENV = originalNodeEnv
+
+    if (originalAppPublicUrl === undefined) {
+      delete process.env.APP_PUBLIC_URL
+    } else {
+      process.env.APP_PUBLIC_URL = originalAppPublicUrl
+    }
+
+    if (originalFrontendUrl === undefined) {
+      delete process.env.FRONTEND_URL
+    } else {
+      process.env.FRONTEND_URL = originalFrontendUrl
+    }
+  })
+
   it('should be defined', () => {
     expect(service).toBeDefined()
   })
@@ -24,6 +43,24 @@ describe('EmailService', () => {
   it('generates a 6-digit code', () => {
     const code = service.getCode()
     expect(code).toMatch(/^\d{6}$/)
+  })
+
+  it('uses the corrected production fallback URL', () => {
+    delete process.env.APP_PUBLIC_URL
+    delete process.env.FRONTEND_URL
+    process.env.NODE_ENV = 'production'
+
+    expect(service.getPublicAppBaseUrl()).toBe(
+      'https://app.viatika.tecdidata.com'
+    )
+  })
+
+  it('normalizes the legacy viatica host from env', () => {
+    process.env.APP_PUBLIC_URL = 'https://app.viatica.tecdidata.com/'
+
+    expect(service.getPublicAppBaseUrl()).toBe(
+      'https://app.viatika.tecdidata.com'
+    )
   })
 
   it('sends viatico payment email with receipt attachment', async () => {
@@ -38,7 +75,7 @@ describe('EmailService', () => {
       paymentMethod: 'transferencia_bancaria',
       paymentReceiptUrl: 'https://files.example.com/receipts/viatico-001.pdf',
       paymentReceiptFileName: 'viatico-001.pdf',
-      platformUrl: 'https://app.viatica.tecdidata.com',
+      platformUrl: 'https://app.viatika.tecdidata.com',
     })
 
     expect(mailerService.sendMail).toHaveBeenCalledTimes(1)

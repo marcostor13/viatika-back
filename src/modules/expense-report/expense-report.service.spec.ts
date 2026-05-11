@@ -24,6 +24,7 @@ const userId = new Types.ObjectId().toString()
 const mockEmailService = {
   sendRendicionFullyApprovedEmail: jest.fn().mockResolvedValue(undefined),
   sendRendicionReembolsoPagado: jest.fn().mockResolvedValue(undefined),
+  buildAppUrl: jest.fn().mockReturnValue('http://localhost:4200/app'),
 }
 
 const mockNotificationsService = {

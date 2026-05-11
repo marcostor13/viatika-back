@@ -1,6 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common'
 import { MailerService } from '@nestjs-modules/mailer'
 
+const DEFAULT_PROD_APP_URL = 'https://app.viatika.tecdidata.com'
+const LEGACY_PROD_APP_HOST = 'app.viatica.tecdidata.com'
+const CURRENT_PROD_APP_HOST = 'app.viatika.tecdidata.com'
+
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name)
@@ -11,6 +15,21 @@ export class EmailService {
    * URL pública del front (local vs prod vía env).
    * Preferir `APP_PUBLIC_URL` o `FRONTEND_URL` en `.env`.
    */
+  private normalizePublicAppBaseUrl(url: string): string {
+    const trimmed = url.trim().replace(/\/+$/, '')
+    if (!trimmed) return trimmed
+
+    try {
+      const parsed = new URL(trimmed)
+      if (parsed.hostname === LEGACY_PROD_APP_HOST) {
+        parsed.hostname = CURRENT_PROD_APP_HOST
+      }
+      return parsed.toString().replace(/\/+$/, '')
+    } catch {
+      return trimmed
+    }
+  }
+
   getPublicAppBaseUrl(): string {
     const raw = (
       process.env.APP_PUBLIC_URL ||
@@ -18,10 +37,10 @@ export class EmailService {
       ''
     ).trim()
     if (raw) {
-      return raw.replace(/\/+$/, '')
+      return this.normalizePublicAppBaseUrl(raw)
     }
     return process.env.NODE_ENV === 'production'
-      ? 'https://app.viatica.tecdidata.com'
+      ? DEFAULT_PROD_APP_URL
       : 'http://localhost:4200'
   }
 

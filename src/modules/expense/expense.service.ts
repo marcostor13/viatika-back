@@ -481,7 +481,8 @@ export class ExpenseService {
     data: ExtractedInvoiceData,
     body: CreateExpenseDto,
     projectName: string,
-    creatorName: string
+    creatorName: string,
+    categoryName: string
   ) {
     return {
       providerName: creatorName,
@@ -492,7 +493,7 @@ export class ExpenseService {
       montoTotal: data.montoTotal || 0,
       moneda: data.moneda || 'PEN',
       createdBy: creatorName,
-      category: body.categoryId || 'No especificada',
+      category: categoryName || 'No especificada',
       projectName: projectName || 'No especificado',
       razonSocial: data.razonSocial || 'No especificada',
       direccionEmisor: data.direccionEmisor,
@@ -505,6 +506,30 @@ export class ExpenseService {
     projectName: string
   ) {
     const creatorName = await this.getCreatorName(body.userId)
+    let categoryName = 'No especificada'
+
+    if (body.categoryId && body.clientId) {
+      try {
+        const category = await this.categoryService.findOne(
+          body.categoryId,
+          body.clientId
+        )
+        categoryName = category?.name || categoryName
+      } catch (error) {
+        this.logger.warn(
+          `No se pudo obtener el nombre de la categoría ${body.categoryId}:`,
+          error
+        )
+      }
+    }
+
+    const notificationPayload = this.buildNotificationPayload(
+      data,
+      body,
+      projectName,
+      creatorName,
+      categoryName
+    )
 
     if (body.userId) {
       try {
@@ -512,7 +537,7 @@ export class ExpenseService {
         if (creator?.email) {
           await this.emailService.sendInvoiceUploadedExpenseNotification(
             creator.email,
-            this.buildNotificationPayload(data, body, projectName, creatorName)
+            notificationPayload
           )
         }
       } catch (error) {
@@ -540,7 +565,7 @@ export class ExpenseService {
         try {
           await this.emailService.sendInvoiceUploadedExpenseNotification(
             colaborador.email,
-            this.buildNotificationPayload(data, body, projectName, creatorName)
+            notificationPayload
           )
           this.logger.debug(
             `Notificación enviada al colaborador: ${colaborador.email}`

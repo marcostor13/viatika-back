@@ -92,4 +92,35 @@ describe('EmailService', () => {
       })
     )
   })
+
+  it('formats uploaded expense invoice amounts with the currency prefix', async () => {
+    await service.sendInvoiceUploadedExpenseNotification('colab@test.com', {
+      providerName: 'Ivan Ruiz',
+      invoiceNumber: 'F001-00001234',
+      date: '11-05-2026',
+      type: 'Factura Electronica',
+      status: 'PENDIENTE',
+      montoTotal: 3,
+      moneda: 'PEN',
+      category: 'Combustible',
+      projectName: 'OPERACION',
+      razonSocial: 'Proveedor Demo SAC',
+    })
+
+    const [mailPayload] = mailerService.sendMail.mock.calls[0] as [
+      {
+        to: string
+        template: string
+        context: {
+          montoTotalFormatted: string
+          category: string
+        }
+      },
+    ]
+
+    expect(mailPayload.to).toBe('colab@test.com')
+    expect(mailPayload.template).toBe('./invoice-notification')
+    expect(mailPayload.context.montoTotalFormatted).toBe('S/ 3')
+    expect(mailPayload.context.category).toBe('Combustible')
+  })
 })

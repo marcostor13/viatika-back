@@ -22,6 +22,39 @@ export class ProjectService {
       .slice(0, 20)
   }
 
+  private buildDuplicateCodeMessage(code: string): string {
+    return `Ya existe un centro de costo con el código "${code}". Usa un código diferente.`
+  }
+
+  private async ensureUniqueCode(
+    code: string,
+    clientId: Types.ObjectId,
+    excludeProjectId?: string
+  ): Promise<void> {
+    const filter: Record<string, unknown> = { code, clientId }
+    if (excludeProjectId) {
+      filter['_id'] = { $ne: new Types.ObjectId(excludeProjectId) }
+    }
+
+    const existingProject = await this.projectModel.findOne(filter).exec()
+    if (existingProject) {
+      throw new BadRequestException(this.buildDuplicateCodeMessage(code))
+    }
+  }
+
+  private rethrowDuplicateCodeError(error: unknown, code: string): never {
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      error.code === 11000
+    ) {
+      throw new BadRequestException(this.buildDuplicateCodeMessage(code))
+    }
+
+    throw error
+  }
+
   private toResponse(project: ProjectDocument) {
     return {
       _id: project._id,
@@ -65,11 +98,19 @@ export class ProjectService {
   async create(createProjectDto: CreateProjectDto) {
     const clientId = new Types.ObjectId(createProjectDto.clientId)
     const code = createProjectDto.code?.trim() || this.generateCode(createProjectDto.name)
-    const project = await this.projectModel.create({
-      ...createProjectDto,
-      code,
-      clientId,
-    })
+    await this.ensureUniqueCode(code, clientId)
+
+    let project: ProjectDocument
+    try {
+      project = await this.projectModel.create({
+        ...createProjectDto,
+        code,
+        clientId,
+      })
+    } catch (error) {
+      this.rethrowDuplicateCodeError(error, code)
+    }
+
     return this.toResponse(project)
   }
 
@@ -124,8 +165,20 @@ export class ProjectService {
     clientId: string
   ) {
     const clientIdObject = new Types.ObjectId(clientId)
+    const updatePayload: UpdateProjectDto = { ...updateProjectDto }
 
-    if (updateProjectDto.isActive === false) {
+    if (typeof updatePayload.code === 'string') {
+      updatePayload.code = updatePayload.code.trim()
+      if (!updatePayload.code) {
+        delete updatePayload.code
+      }
+    }
+
+    if (updatePayload.code) {
+      await this.ensureUniqueCode(updatePayload.code, clientIdObject, id)
+    }
+
+    if (updatePayload.isActive === false) {
       const activeExpenses = await (this.projectModel.db.model('Expense') as any)
         .countDocuments({ proyectId: new Types.ObjectId(id), status: { $nin: ['rejected'] } })
         .catch(() => 0)
@@ -136,14 +189,19 @@ export class ProjectService {
       }
     }
 
-    const project = await this.projectModel
-      .findOneAndUpdate(
-        { _id: new Types.ObjectId(id), clientId: clientIdObject },
-        updateProjectDto,
-        { new: true }
-      )
-      .populate('clientId')
-      .exec()
+    let project: ProjectDocument | null
+    try {
+      project = await this.projectModel
+        .findOneAndUpdate(
+          { _id: new Types.ObjectId(id), clientId: clientIdObject },
+          updatePayload,
+          { new: true }
+        )
+        .populate('clientId')
+        .exec()
+    } catch (error) {
+      this.rethrowDuplicateCodeError(error, updatePayload.code ?? updateProjectDto.code ?? '')
+    }
 
     if (!project) {
       throw new NotFoundException('Proyecto no encontrado')

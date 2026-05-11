@@ -22,7 +22,7 @@ const mockUserDoc = {
   name: 'Test User',
   password: 'hashed',
   roleId: mockRoleAdmin,
-  clientId: { _id: new Types.ObjectId(clientId), name: 'Client Co' },
+  clientId: new Types.ObjectId(clientId),
   isActive: true,
   permissions: { modules: [], canApproveL1: false, canApproveL2: false },
 }

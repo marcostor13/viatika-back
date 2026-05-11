@@ -62,6 +62,47 @@ export class EmailService {
     return this.buildAppUrl('/logo.svg')
   }
 
+  private normalizeCurrencySymbol(currency?: string | null): string {
+    const value = currency?.trim()
+    if (!value) return ''
+
+    switch (value.toUpperCase()) {
+      case 'PEN':
+      case 'S/':
+      case 'SOL':
+      case 'SOLES':
+        return 'S/'
+      case 'USD':
+      case '$':
+      case 'US$':
+      case 'DOLAR':
+      case 'DOLARES':
+      case 'DÓLAR':
+      case 'DÓLARES':
+        return '$'
+      default:
+        return value
+    }
+  }
+
+  private formatCurrencyAmount(
+    amount?: number | string | null,
+    currency?: string | null
+  ): string {
+    if (amount === undefined || amount === null || amount === '') return ''
+
+    const numericAmount =
+      typeof amount === 'number' ? amount : Number.parseFloat(String(amount))
+    const amountText = Number.isFinite(numericAmount)
+      ? Number.isInteger(numericAmount)
+        ? String(numericAmount)
+        : numericAmount.toFixed(2)
+      : String(amount).trim()
+
+    const symbol = this.normalizeCurrencySymbol(currency)
+    return symbol ? `${symbol} ${amountText}` : amountText
+  }
+
   /** `platformUrl` en plantillas: absoluta del caller o base + ruta relativa. */
   resolvePlatformHref(url?: string | null): string {
     const s = url?.trim()
@@ -245,8 +286,10 @@ export class EmailService {
           createdBy: data.createdBy || data.providerName,
           year: new Date().getFullYear(),
           razonSocial: data.razonSocial,
-          montoTotal: data.montoTotal,
-          moneda: data.moneda,
+          montoTotalFormatted: this.formatCurrencyAmount(
+            data.montoTotal,
+            data.moneda
+          ),
           status: data.status,
           showAdditionalInfo: data.showAdditionalInfo,
           category: data.category,
@@ -301,8 +344,10 @@ export class EmailService {
           createdBy: data.createdBy || data.providerName,
           year: new Date().getFullYear(),
           razonSocial: data.razonSocial,
-          montoTotal: data.montoTotal,
-          moneda: data.moneda,
+          montoTotalFormatted: this.formatCurrencyAmount(
+            data.montoTotal,
+            data.moneda
+          ),
           status: data.status,
           showAdditionalInfo: data.showAdditionalInfo,
           category: data.category,
@@ -349,8 +394,10 @@ export class EmailService {
           date: data.date,
           type: data.type,
           status: data.status,
-          montoTotal: data.montoTotal,
-          moneda: data.moneda,
+          montoTotalFormatted: this.formatCurrencyAmount(
+            data.montoTotal,
+            data.moneda
+          ),
           createdBy: data.createdBy || data.providerName,
           year: new Date().getFullYear(),
           category: data.category || 'No especificada',

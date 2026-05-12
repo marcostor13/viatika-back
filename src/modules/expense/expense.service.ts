@@ -237,36 +237,8 @@ export class ExpenseService {
     observacionPlazo?: string
     diasRetraso?: number
   } {
-    const fechaEmision = this.parseExpenseDate(fechaEmisionRaw)
-    if (!fechaEmision) return { observado: false }
-
-    const today = new Date()
-    const fechaCarga = new Date(
-      Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
-    )
-    const diffMs = fechaCarga.getTime() - fechaEmision.getTime()
-    const diasRetraso = Math.floor(diffMs / (1000 * 60 * 60 * 24))
-
-    if (diasRetraso <= 2) {
-      return { observado: false, diasRetraso: Math.max(0, diasRetraso) }
-    }
-
-    const mismoMes =
-      fechaEmision.getUTCMonth() === fechaCarga.getUTCMonth() &&
-      fechaEmision.getUTCFullYear() === fechaCarga.getUTCFullYear()
-
-    if (!mismoMes) {
-      throw new BadRequestException(
-        'No se permite cargar comprobantes de meses anteriores con más de 2 días de retraso. Contacte a Contabilidad.'
-      )
-    }
-
-    return {
-      observado: true,
-      diasRetraso,
-      observacionPlazo:
-        'Comprobante fuera de plazo (más de 2 días). Se registró como OBSERVADO.',
-    }
+    void fechaEmisionRaw
+    return { observado: false }
   }
 
   private async evaluateCategoryLimit(
@@ -481,7 +453,8 @@ export class ExpenseService {
     data: ExtractedInvoiceData,
     body: CreateExpenseDto,
     projectName: string,
-    creatorName: string
+    creatorName: string,
+    categoryName: string
   ) {
     return {
       providerName: creatorName,
@@ -492,7 +465,7 @@ export class ExpenseService {
       montoTotal: data.montoTotal || 0,
       moneda: data.moneda || 'PEN',
       createdBy: creatorName,
-      category: body.categoryId || 'No especificada',
+      category: categoryName || 'No especificada',
       projectName: projectName || 'No especificado',
       razonSocial: data.razonSocial || 'No especificada',
       direccionEmisor: data.direccionEmisor,
@@ -505,6 +478,30 @@ export class ExpenseService {
     projectName: string
   ) {
     const creatorName = await this.getCreatorName(body.userId)
+    let categoryName = 'No especificada'
+
+    if (body.categoryId && body.clientId) {
+      try {
+        const category = await this.categoryService.findOne(
+          body.categoryId,
+          body.clientId
+        )
+        categoryName = category?.name || categoryName
+      } catch (error) {
+        this.logger.warn(
+          `No se pudo obtener el nombre de la categoría ${body.categoryId}:`,
+          error
+        )
+      }
+    }
+
+    const notificationPayload = this.buildNotificationPayload(
+      data,
+      body,
+      projectName,
+      creatorName,
+      categoryName
+    )
 
     if (body.userId) {
       try {
@@ -512,7 +509,7 @@ export class ExpenseService {
         if (creator?.email) {
           await this.emailService.sendInvoiceUploadedExpenseNotification(
             creator.email,
-            this.buildNotificationPayload(data, body, projectName, creatorName)
+            notificationPayload
           )
         }
       } catch (error) {
@@ -540,7 +537,7 @@ export class ExpenseService {
         try {
           await this.emailService.sendInvoiceUploadedExpenseNotification(
             colaborador.email,
-            this.buildNotificationPayload(data, body, projectName, creatorName)
+            notificationPayload
           )
           this.logger.debug(
             `Notificación enviada al colaborador: ${colaborador.email}`

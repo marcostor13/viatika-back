@@ -237,36 +237,8 @@ export class ExpenseService {
     observacionPlazo?: string
     diasRetraso?: number
   } {
-    const fechaEmision = this.parseExpenseDate(fechaEmisionRaw)
-    if (!fechaEmision) return { observado: false }
-
-    const today = new Date()
-    const fechaCarga = new Date(
-      Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
-    )
-    const diffMs = fechaCarga.getTime() - fechaEmision.getTime()
-    const diasRetraso = Math.floor(diffMs / (1000 * 60 * 60 * 24))
-
-    if (diasRetraso <= 2) {
-      return { observado: false, diasRetraso: Math.max(0, diasRetraso) }
-    }
-
-    const mismoMes =
-      fechaEmision.getUTCMonth() === fechaCarga.getUTCMonth() &&
-      fechaEmision.getUTCFullYear() === fechaCarga.getUTCFullYear()
-
-    if (!mismoMes) {
-      throw new BadRequestException(
-        'No se permite cargar comprobantes de meses anteriores con más de 2 días de retraso. Contacte a Contabilidad.'
-      )
-    }
-
-    return {
-      observado: true,
-      diasRetraso,
-      observacionPlazo:
-        'Comprobante fuera de plazo (más de 2 días). Se registró como OBSERVADO.',
-    }
+    void fechaEmisionRaw
+    return { observado: false }
   }
 
   private async evaluateCategoryLimit(

@@ -63,6 +63,7 @@ describe('ProjectService', () => {
     jest.clearAllMocks()
     mockProjectModel.db.model.mockReturnValue(mockExpenseModel)
     mockExpenseModel.countDocuments.mockReturnValue(Promise.resolve(0))
+    mockProjectModel.findOne.mockReturnValue(makeQuery(null))
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -100,6 +101,19 @@ describe('ProjectService', () => {
       expect(mockProjectModel.create).toHaveBeenCalledWith(
         expect.objectContaining({ code: 'CUSTOM' })
       )
+    })
+
+    it('throws a friendly error when the code already exists', async () => {
+      mockProjectModel.findOne.mockReturnValue(makeQuery(mockProject))
+
+      await expect(
+        service.create({ name: 'Duplicado', code: 'CC-001', clientId })
+      ).rejects.toThrow(
+        new BadRequestException(
+          'Ya existe un centro de costo con el código "CC-001". Usa un código diferente.'
+        )
+      )
+      expect(mockProjectModel.create).not.toHaveBeenCalled()
     })
   })
 
@@ -190,6 +204,21 @@ describe('ProjectService', () => {
       mockProjectModel.findOneAndUpdate.mockReturnValue(makeQuery(updated))
       const result = await service.update(projectId, { isActive: false }, clientId)
       expect(result).toEqual({ ...expectedResponse, isActive: false })
+    })
+
+    it('throws a friendly error when updating with a duplicate code from another record', async () => {
+      mockProjectModel.findOne.mockReturnValue(
+        makeQuery({ ...mockProject, _id: new Types.ObjectId() })
+      )
+
+      await expect(
+        service.update(projectId, { code: 'CC-001' }, clientId)
+      ).rejects.toThrow(
+        new BadRequestException(
+          'Ya existe un centro de costo con el código "CC-001". Usa un código diferente.'
+        )
+      )
+      expect(mockProjectModel.findOneAndUpdate).not.toHaveBeenCalled()
     })
   })
 

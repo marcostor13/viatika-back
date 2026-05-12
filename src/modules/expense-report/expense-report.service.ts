@@ -238,7 +238,7 @@ export class ExpenseReportService {
     const report = await this.expenseReportModel
       .findById(id)
       .populate('userId', 'name email signature')
-      .populate('expenseIds')
+      .populate({ path: 'expenseIds', populate: [{ path: 'categoryId', select: 'name' }, { path: 'proyectId', select: 'name' }] })
       .populate('createdBy', 'name email')
       .populate('approvedBy', 'name email')
       .populate('projectId', 'name')
@@ -797,7 +797,7 @@ export class ExpenseReportService {
     const report = await this.expenseReportModel
       .findById(id)
       .populate('userId', 'name email signature')
-      .populate('expenseIds')
+      .populate({ path: 'expenseIds', populate: [{ path: 'categoryId', select: 'name' }, { path: 'proyectId', select: 'name' }] })
       .populate('advanceIds')
       .populate('createdBy', 'name email')
       .populate('approvedBy', 'name email')

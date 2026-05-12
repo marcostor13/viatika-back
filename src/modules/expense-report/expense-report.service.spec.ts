@@ -138,23 +138,11 @@ describe('ExpenseReportService — Fase 5 (envío y aprobación final)', () => {
     expect(mockExpenseReportModel.findByIdAndUpdate).not.toHaveBeenCalled()
   })
 
-  it('update(submitted): rechaza si falta archivo en algún gasto', async () => {
+  it('update(submitted): persiste aunque algún gasto no tenga archivo adjunto', async () => {
     mockFindByIdSequence({
       existingStatus: 'open',
       submitPopulateResult: {
         expenseIds: [{ _id: expenseId1, status: 'approved', file: '' }],
-      },
-    })
-
-    await expect(service.update(reportId, { status: 'submitted' })).rejects.toThrow(/comprobante adjunto/)
-    expect(mockExpenseReportModel.findByIdAndUpdate).not.toHaveBeenCalled()
-  })
-
-  it('update(submitted): persiste cuando los gastos cumplen validación', async () => {
-    mockFindByIdSequence({
-      existingStatus: 'open',
-      submitPopulateResult: {
-        expenseIds: [{ _id: expenseId1, status: 'approved', file: '/ok.pdf' }],
       },
     })
 

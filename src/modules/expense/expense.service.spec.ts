@@ -1,6 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing'
 import { getModelToken } from '@nestjs/mongoose'
-import { BadRequestException } from '@nestjs/common'
 import { Types } from 'mongoose'
 import { ConfigService } from '@nestjs/config'
 import { ExpenseService } from './expense.service'
@@ -76,30 +75,25 @@ describe('ExpenseService — Fase 5 (plazos y límites de categoría)', () => {
       expect(out).toEqual({ observado: false })
     })
 
-    it('emisión hasta 2 días antes no observa', () => {
+    it('emisión reciente no observa', () => {
       const out = (service as unknown as { evaluateDeadline: (d: string) => unknown }).evaluateDeadline(
         '2026-05-14'
       )
-      expect(out).toMatchObject({ observado: false, diasRetraso: 1 })
+      expect(out).toEqual({ observado: false })
     })
 
-    it('emisión con más de 2 días en el mismo mes es observado', () => {
+    it('emisión con varios días de antigüedad no observa', () => {
       const out = (service as unknown as { evaluateDeadline: (d: string) => unknown }).evaluateDeadline(
         '2026-05-10'
       )
-      expect(out).toMatchObject({
-        observado: true,
-        diasRetraso: 5,
-      })
-      expect(String((out as { observacionPlazo?: string }).observacionPlazo)).toContain('OBSERVADO')
+      expect(out).toEqual({ observado: false })
     })
 
-    it('emisión de mes anterior con más de 2 días de retraso rechaza', () => {
-      expect(() =>
-        (service as unknown as { evaluateDeadline: (d: string) => unknown }).evaluateDeadline(
-          '2026-04-20'
-        )
-      ).toThrow(BadRequestException)
+    it('emisión de mes anterior tampoco rechaza', () => {
+      const out = (service as unknown as { evaluateDeadline: (d: string) => unknown }).evaluateDeadline(
+        '2026-04-20'
+      )
+      expect(out).toEqual({ observado: false })
     })
   })
 

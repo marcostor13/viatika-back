@@ -98,15 +98,6 @@ export class ExpenseReportService {
       )
     }
 
-    const hasMissingFile = expenses.some((e: any) => {
-      const file = e?.file
-      return typeof file !== 'string' || !file.trim()
-    })
-    if (hasMissingFile) {
-      throw new BadRequestException(
-        'Todos los gastos deben tener comprobante adjunto antes de enviar la rendición.'
-      )
-    }
   }
 
   private async validateBeforeFinalApproval(reportId: string): Promise<void> {

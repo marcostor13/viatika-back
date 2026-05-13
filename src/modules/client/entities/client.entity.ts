@@ -1,6 +1,10 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose'
 import { Document, Types } from 'mongoose'
 
+export interface ClientLimits {
+  movilidadDiario?: number
+}
+
 export interface ClientDocument extends Document {
   comercialName: string
   businessName: string
@@ -9,6 +13,7 @@ export interface ClientDocument extends Document {
   phone: string
   email: string
   logo: string
+  limits?: ClientLimits
 }
 
 export interface GetClientDocument extends ClientDocument {
@@ -37,6 +42,14 @@ export class Client {
 
   @Prop()
   logo: string
+
+  @Prop({
+    type: {
+      movilidadDiario: { type: Number, default: null },
+    },
+    default: {},
+  })
+  limits: ClientLimits
 }
 
 export const ClientSchema = SchemaFactory.createForClass(Client)

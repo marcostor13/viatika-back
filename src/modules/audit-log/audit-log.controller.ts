@@ -6,7 +6,7 @@ import { ROLES } from '../auth/enums/roles.enum'
 import { AuditLogService } from './audit-log.service'
 
 @UseGuards(AuthGuard('jwt'), RolesGuard)
-@Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
+@Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
 @Controller('audit-log')
 export class AuditLogController {
   constructor(private readonly auditLogService: AuditLogService) {}

@@ -370,9 +370,9 @@ export class ExpenseReportService {
         const admins = await this.userService.findAdminsByClient(
           String(fullyUpdatedReport.clientId)
         )
-        const user = await this.userService.findOne(
-          String(fullyUpdatedReport.userId)
-        )
+        const ownerRef = fullyUpdatedReport.userId as any
+        const ownerId = ownerRef?._id ? String(ownerRef._id) : String(ownerRef)
+        const user = await this.userService.findOne(ownerId)
         const creatorName = user.name || 'Un colaborador'
         for (const admin of admins) {
           await this.notificationsService.create({
@@ -428,21 +428,22 @@ export class ExpenseReportService {
       }
     }
 
-    // Si la rendición fue enviada a aprobación (submitted), notificar a los administradores
+    // Si la rendición fue enviada a aprobación (submitted), notificar a coordinador + contabilidad
     if (dto.status === 'submitted') {
       try {
-        const admins = await this.userService.findAdminsByClient(
-          String(fullyUpdatedReport.clientId)
-        )
-        const user = await this.userService.findOne(
-          String(fullyUpdatedReport.userId)
-        )
+        const ownerRef2 = fullyUpdatedReport.userId as any
+        const ownerId2 = ownerRef2?._id ? String(ownerRef2._id) : String(ownerRef2)
+        const user = await this.userService.findOne(ownerId2)
         const creatorName = user.name || 'Un colaborador'
-
-        console.log(
-          `[ExpenseReportService] Status changed to submitted. Notifying ${admins.length} admins.`
+        const clientId = String(fullyUpdatedReport.clientId)
+        const budgetFormatted = Number(fullyUpdatedReport.budget).toFixed(2)
+        const expenseCount = fullyUpdatedReport.expenseIds?.length ?? 0
+        const platformUrl = this.emailService.buildAppUrl(
+          `/mis-rendiciones/${id}/detalle`
         )
 
+        // Notificaciones in-app a admins
+        const admins = await this.userService.findAdminsByClient(clientId)
         for (const admin of admins) {
           await this.notificationsService.create({
             userId: String(admin._id),
@@ -450,6 +451,43 @@ export class ExpenseReportService {
             message: `${creatorName} ha enviado la rendición "${fullyUpdatedReport.title}" para tu revisión.`,
             type: 'warning',
             actionUrl: `/mis-rendiciones/${id}/detalle`,
+          })
+        }
+
+        const emailData = {
+          collaboratorName: creatorName,
+          reportTitle: fullyUpdatedReport.title,
+          budgetFormatted,
+          expenseCount,
+          platformUrl,
+        }
+
+        // Control de duplicados por email
+        const sentEmails = new Set<string>()
+
+        // Correo al coordinador del colaborador
+        const profile = await this.userService.findTransactionalProfile(ownerId2)
+        const coordinatorId = profile?.coordinatorId?.toString?.()
+        if (coordinatorId) {
+          const coordinator = await this.userService.findEmailNameClient(coordinatorId)
+          if (coordinator?.email) {
+            sentEmails.add(coordinator.email.trim().toLowerCase())
+            await this.emailService.sendRendicionSubmitted(coordinator.email, {
+              recipientName: coordinator.name,
+              ...emailData,
+            })
+          }
+        }
+
+        // Correo a usuarios de contabilidad/tesorería (sin incluir admins que no tengan esos módulos)
+        const accountingRecipients =
+          await this.userService.findContabilidadRecipients(clientId)
+        for (const r of accountingRecipients) {
+          if (sentEmails.has(r.email.trim().toLowerCase())) continue
+          sentEmails.add(r.email.trim().toLowerCase())
+          await this.emailService.sendRendicionSubmitted(r.email, {
+            recipientName: r.name,
+            ...emailData,
           })
         }
       } catch (error) {
@@ -699,7 +737,29 @@ export class ExpenseReportService {
         'Solo se puede registrar el reembolso cuando la rendición está aprobada o cerrada.'
       )
     }
-    if (report.settlement?.type !== 'reembolso') {
+
+    // Calcular liquidación efectiva desde los montos reales (no confiar en el tipo almacenado)
+    let settlementType = report.settlement?.type
+    let preSettlement: Record<string, unknown> | null = null
+    if (!settlementType || settlementType !== 'reembolso') {
+      const populated = await this.expenseReportModel.findById(reportId).populate('expenseIds', 'total').exec()
+      const expenses = ((populated?.expenseIds ?? []) as any[])
+      const expenseTotal = expenses.reduce((s: number, e: any) => s + (Number(e.total) || 0), 0)
+      const rawAdvanceIds = ((report as any).advanceIds ?? []).map((x: any) =>
+        (x && typeof x === 'object' && '_id' in x) ? String((x as any)._id) : String(x)
+      )
+      const linkedAdvances = await this.advanceService.findByExpenseReportId(reportId, rawAdvanceIds)
+      const activeAdvances = linkedAdvances.filter((a: any) => ['approved', 'paid', 'settled'].includes(a.status))
+      // Si no hay anticipos activos, el colaborador gastó de su propio bolsillo (saldo = 0 - gastos)
+      const advanceTotal = activeAdvances.reduce((s: number, a: any) => s + (Number(a.amount) || 0), 0)
+      const difference = advanceTotal - expenseTotal
+      if (Math.abs(difference) >= 0.01) {
+        settlementType = difference > 0 ? 'devolucion' : 'reembolso'
+        preSettlement = { advanceTotal, expenseTotal, difference, type: settlementType, settledAt: new Date() }
+      }
+    }
+
+    if (settlementType !== 'reembolso') {
       throw new BadRequestException(
         'Esta rendición no tiene saldo a favor del colaborador que deba reembolsarse.'
       )
@@ -708,23 +768,29 @@ export class ExpenseReportService {
       throw new BadRequestException('El reembolso de esta rendición ya fue registrado.')
     }
 
-    report.reimbursementPaymentInfo = {
-      method: dto.method,
-      bankName: dto.bankName,
-      accountNumber: dto.accountNumber,
-      cci: dto.cci,
-      transferDate: new Date(dto.transferDate),
-      reference: dto.reference,
-      paymentReceiptUrl: dto.paymentReceiptUrl,
-      paymentReceiptFileName: dto.paymentReceiptFileName,
-      paymentReceiptMimeType: dto.paymentReceiptMimeType,
-      paymentReceiptSizeBytes: dto.paymentReceiptSizeBytes,
+    // Usar findByIdAndUpdate con $set para evitar el conflicto de Mongoose con el campo 'type' en settlement
+    const updateFields: Record<string, unknown> = {
+      reimbursementPaymentInfo: {
+        method: dto.method,
+        bankName: dto.bankName,
+        accountNumber: dto.accountNumber,
+        cci: dto.cci,
+        transferDate: new Date(dto.transferDate),
+        reference: dto.reference,
+        paymentReceiptUrl: dto.paymentReceiptUrl,
+        paymentReceiptFileName: dto.paymentReceiptFileName,
+        paymentReceiptMimeType: dto.paymentReceiptMimeType,
+        paymentReceiptSizeBytes: dto.paymentReceiptSizeBytes,
+      },
+      reimbursedAt: new Date(),
     }
-    report.reimbursedAt = new Date()
     if (report.status !== 'closed') {
-      report.status = 'reimbursed'
+      updateFields.status = 'reimbursed'
     }
-    await report.save()
+    if (preSettlement) {
+      updateFields.settlement = preSettlement
+    }
+    await this.expenseReportModel.findByIdAndUpdate(reportId, { $set: updateFields }).exec()
 
     await this.notifyCollaboratorReimbursementPaid(reportId)
 
@@ -836,6 +902,35 @@ export class ExpenseReportService {
     if (returnRecord && returnRecord.status !== 'validated') {
       errors.push(`Devolución pendiente en estado: ${returnRecord.status}. Se requiere validación de Contabilidad.`)
     }
+
+    // Determinar tipo de liquidación para validar comprobantes previos al cierre
+    {
+      const existingSettlement = (report as any).settlement
+      let effectiveSettlementType = existingSettlement?.type as string | undefined
+      if (!effectiveSettlementType) {
+        const expenses = (report.expenseIds as any[]) || []
+        const expenseTotal = expenses.reduce((s: number, e: any) => s + (Number(e.total) || 0), 0)
+        const rawAdvanceIds = ((report as any).advanceIds ?? []).map((x: any) =>
+          (x && typeof x === 'object' && '_id' in x) ? String((x as any)._id) : String(x)
+        )
+        const linkedAdvances = await this.advanceService.findByExpenseReportId(id, rawAdvanceIds)
+        const activeAdvances = linkedAdvances.filter((a: any) =>
+          ['approved', 'paid', 'settled'].includes(a.status)
+        )
+        const advanceTotal = activeAdvances.reduce((s: number, a: any) => s + (Number(a.amount) || 0), 0)
+        const difference = advanceTotal - expenseTotal
+        if (Math.abs(difference) >= 0.01) {
+          effectiveSettlementType = difference > 0 ? 'devolucion' : 'reembolso'
+        }
+      }
+      if (effectiveSettlementType === 'devolucion' && !(report as any).returnVoucher) {
+        errors.push('El colaborador debe adjuntar el comprobante de devolución antes de cerrar la rendición.')
+      }
+      if (effectiveSettlementType === 'reembolso' && !(report as any).reimbursementPaymentInfo) {
+        errors.push('Contabilidad debe registrar el comprobante de reembolso al colaborador antes de cerrar la rendición.')
+      }
+    }
+
     return errors
   }
 
@@ -931,8 +1026,8 @@ export class ExpenseReportService {
       .populate('expenseIds', 'total status')
       .exec()
     if (!report) throw new NotFoundException(`Rendición ${id} no encontrada`)
-    if (report.status !== 'closed') {
-      throw new BadRequestException('Solo se puede cargar el comprobante de devolución en una rendición cerrada.')
+    if (report.status !== 'closed' && report.status !== 'approved') {
+      throw new BadRequestException('El comprobante de devolución solo puede cargarse cuando la rendición está aprobada o cerrada.')
     }
     if ((report as any).returnVoucher) {
       throw new BadRequestException('Ya se ha cargado un comprobante de devolución para esta rendición.')

@@ -1,6 +1,12 @@
-import { IsString } from 'class-validator'
+import { IsString, IsNotEmpty, IsOptional, IsNumber, Min, ValidateNested } from 'class-validator'
+import { Type } from 'class-transformer'
 
-import { IsNotEmpty } from 'class-validator'
+class ClientLimitsDto {
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  movilidadDiario?: number
+}
 
 export class CreateClientDto {
   @IsNotEmpty()
@@ -24,4 +30,9 @@ export class CreateClientDto {
 
   @IsString()
   logo: string
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ClientLimitsDto)
+  limits?: ClientLimitsDto
 }

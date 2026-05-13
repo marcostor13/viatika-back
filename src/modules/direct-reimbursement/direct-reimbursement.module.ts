@@ -6,6 +6,7 @@ import { DirectReimbursement, DirectReimbursementSchema } from './entities/direc
 import { EmailModule } from '../email/email.module'
 import { UserModule } from '../user/user.module'
 import { AuditLogModule } from '../audit-log/audit-log.module'
+import { NotificationsModule } from '../notifications/notifications.module'
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { AuditLogModule } from '../audit-log/audit-log.module'
     EmailModule,
     UserModule,
     AuditLogModule,
+    NotificationsModule,
   ],
   controllers: [DirectReimbursementController],
   providers: [DirectReimbursementService],

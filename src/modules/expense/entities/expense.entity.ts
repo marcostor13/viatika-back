@@ -28,8 +28,14 @@ export interface MobilityRow {
   total: number
   clienteProveedor: string
   origen: string
+  origenDepartamento?: string
+  origenProvincia?: string
+  origenDistrito?: string
   origenCoords?: MobilityRowCoords
   destino: string
+  destinoDepartamento?: string
+  destinoProvincia?: string
+  destinoDistrito?: string
   destinoCoords?: MobilityRowCoords
   distanciaKm?: number
   gestion: string
@@ -174,11 +180,17 @@ export class Expense {
         total: { type: Number },
         clienteProveedor: { type: String },
         origen: { type: String },
+        origenDepartamento: { type: String },
+        origenProvincia: { type: String },
+        origenDistrito: { type: String },
         origenCoords: {
           lat: { type: Number },
           lng: { type: Number },
         },
         destino: { type: String },
+        destinoDepartamento: { type: String },
+        destinoProvincia: { type: String },
+        destinoDistrito: { type: String },
         destinoCoords: {
           lat: { type: Number },
           lng: { type: Number },

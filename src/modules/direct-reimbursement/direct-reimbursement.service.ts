@@ -14,6 +14,7 @@ import { CreateDirectReimbursementDto } from './dto/create-direct-reimbursement.
 import { RegisterDirectReimbursementPaymentDto } from './dto/register-payment.dto'
 import { EmailService } from '../email/email.service'
 import { UserService } from '../user/user.service'
+import { NotificationsService } from '../notifications/notifications.service'
 
 export const OVERRUN_TOLERANCE = 0.20
 
@@ -24,6 +25,7 @@ export class DirectReimbursementService {
     private readonly model: Model<DirectReimbursementDocument>,
     private readonly emailService: EmailService,
     private readonly userService: UserService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   private async generateCode(clientId: string): Promise<string> {
@@ -46,8 +48,8 @@ export class DirectReimbursementService {
     dto: CreateDirectReimbursementDto,
     coordinatorId: string
   ): Promise<DirectReimbursementDocument> {
-    if (dto.justification.trim().length < 100) {
-      throw new BadRequestException('La justificacion debe tener al menos 100 caracteres')
+    if (dto.justification.trim().length < 20) {
+      throw new BadRequestException('La justificacion debe tener al menos 20 caracteres')
     }
     const code = await this.generateCode(dto.clientId)
     const doc = await this.model.create({
@@ -69,6 +71,30 @@ export class DirectReimbursementService {
         justification: dto.justification,
       }).catch(() => {})
     }
+
+    // Notify Contabilidad of the new direct reimbursement request
+    const recipients = await this.userService.findAccountingRecipientsWithIds(dto.clientId)
+    const amountFormatted = Number(dto.estimatedAmount).toFixed(2)
+    for (const r of recipients) {
+      this.notificationsService.create({
+        userId: r._id,
+        title: 'Nueva solicitud de reembolso directo',
+        message: `${collaborator?.name ?? 'Un colaborador'} solicitó un reembolso directo (${code}) por S/ ${amountFormatted}. Revisa la sección de Pagos.`,
+        type: 'info',
+        actionUrl: '/tesoreria',
+        metadata: { directReimbursementId: String(doc._id), code, event: 'direct_reimbursement_created' },
+      }).catch(() => {})
+      if (r.email) {
+        this.emailService.sendReembolsoDirectoNuevoContabilidad(r.email, {
+          recipientName: r.name,
+          collaboratorName: collaborator?.name ?? 'Colaborador',
+          code,
+          estimatedAmount: dto.estimatedAmount,
+          justification: dto.justification,
+        }).catch(() => {})
+      }
+    }
+
     return doc
   }
 
@@ -175,8 +201,9 @@ export class DirectReimbursementService {
   ): Promise<DirectReimbursementDocument> {
     const doc = await this.model.findById(id).exec()
     if (!doc) throw new NotFoundException(`Reembolso directo ${id} no encontrado`)
-    if (doc.status !== 'accounting_approved') {
-      throw new BadRequestException('Solo se puede registrar el pago desde el estado accounting_approved')
+    const payableStatuses = ['open', 'expenses_loaded', 'coordinator_approved', 'accounting_approved']
+    if (!payableStatuses.includes(doc.status)) {
+      throw new BadRequestException('No se puede registrar el pago en el estado actual')
     }
     const now = new Date()
     const updated = await this.model
@@ -260,9 +287,10 @@ export class DirectReimbursementService {
     return this.model
       .find({
         clientId: new Types.ObjectId(clientId),
-        status: 'accounting_approved',
+        status: { $in: ['open', 'expenses_loaded', 'coordinator_approved', 'accounting_approved'] },
       })
       .populate('collaboratorId', 'name email')
+      .populate('coordinatorId', 'name email')
       .sort({ createdAt: -1 })
       .exec()
   }

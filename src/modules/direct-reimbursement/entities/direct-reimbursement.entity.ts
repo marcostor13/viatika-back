@@ -56,7 +56,7 @@ export class DirectReimbursement {
   @Prop({ default: 'open' })
   status: DirectReimbursementStatus
 
-  @Prop({ required: true, minlength: 100 })
+  @Prop({ required: true, minlength: 20 })
   justification: string
 
   @Prop({ required: true, default: 0 })

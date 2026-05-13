@@ -1157,6 +1157,22 @@ export class EmailService {
     }
   }
 
+  async sendReembolsoDirectoNuevoContabilidad(
+    email: string,
+    data: { recipientName: string; collaboratorName: string; code: string; estimatedAmount: number; justification: string }
+  ) {
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: `Nueva solicitud de Reembolso Directo — ${data.code}`,
+        template: './reembolso-directo-nuevo-contabilidad',
+        context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data },
+      })
+    } catch (error) {
+      this.logger.error(`Error correo reembolso directo contabilidad a ${email}:`, error)
+    }
+  }
+
   async sendReembolsoDirectoPagado(
     email: string,
     data: { recipientName: string; code: string; amount: number; receiptUrl: string }

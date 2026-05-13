@@ -30,6 +30,7 @@ export class DirectReimbursementController {
   async create(@Body() dto: CreateDirectReimbursementDto, @Request() req: any) {
     const coordinatorId = req.user._id || req.user.sub
     dto.clientId = dto.clientId || req.user?.clientId
+    dto.collaboratorId = dto.collaboratorId || String(coordinatorId)
     const result = await this.service.create(dto, String(coordinatorId))
     this.auditLogService.log({
       userId: req.user._id || req.user.sub,
@@ -43,26 +44,26 @@ export class DirectReimbursementController {
   }
 
   @Get('client/:clientId')
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD)
   findAllByClient(@Param('clientId') clientId: string) {
     return this.service.findAllByClient(clientId)
   }
 
   @Get('pending-payments/client/:clientId')
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
   findPendingPayments(@Param('clientId') clientId: string) {
     return this.service.findPendingPayments(clientId)
   }
 
   @Get('my/client/:clientId')
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD)
   findMyExpedients(@Param('clientId') clientId: string, @Request() req: any) {
     const coordinatorId = req.user._id || req.user.sub
     return this.service.findByCoordinator(String(coordinatorId), clientId)
   }
 
   @Get(':id')
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD)
   findOne(@Param('id') id: string) {
     return this.service.findOne(id)
   }
@@ -96,7 +97,7 @@ export class DirectReimbursementController {
   }
 
   @Patch(':id/accounting-approve')
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
   async accountingApprove(@Param('id') id: string, @Request() req: any) {
     const approvedBy = req.user._id || req.user.sub
     const result = await this.service.accountingApprove(id, String(approvedBy))
@@ -112,7 +113,7 @@ export class DirectReimbursementController {
   }
 
   @Patch(':id/accounting-reject')
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
   async accountingReject(
     @Param('id') id: string,
     @Body() body: { reason: string },
@@ -133,7 +134,7 @@ export class DirectReimbursementController {
   }
 
   @Patch(':id/register-payment')
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
   async registerPayment(
     @Param('id') id: string,
     @Body() dto: RegisterDirectReimbursementPaymentDto,
@@ -153,7 +154,7 @@ export class DirectReimbursementController {
   }
 
   @Patch(':id/close')
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
   async close(@Param('id') id: string, @Request() req: any) {
     const closedBy = req.user._id || req.user.sub
     const result = await this.service.close(id, String(closedBy))

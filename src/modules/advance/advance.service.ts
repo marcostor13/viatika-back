@@ -709,6 +709,181 @@ export class AdvanceService {
     ].join('')
   }
 
+  /**
+   * Notifica a Contabilidad/Tesorería cuando una solicitud queda en pending_l2,
+   * para que procedan con la segunda aprobación.
+   */
+  private async notifyL2ApproversViaticoAprobadoL1(
+    advance: AdvanceDocument
+  ): Promise<void> {
+    const recipients =
+      await this.userService.findViaticoAccountingNotifyRecipients(
+        advance.clientId.toString()
+      )
+    if (!recipients.length) {
+      this.logger.warn(
+        `Pendiente L2 viático ${advance._id}: sin destinatarios contabilidad/tesorería`
+      )
+      return
+    }
+
+    const populated = await this.advanceModel
+      .findById(advance._id)
+      .populate('projectId')
+      .populate({ path: 'lines.categoryId', select: 'name key' })
+      .exec()
+    const doc = populated ?? advance
+
+    let projectLabelSubject = '— - —'
+    if (doc.projectId && typeof doc.projectId === 'object' && doc.projectId !== null) {
+      const pr = doc.projectId as { code?: string; name?: string }
+      if (pr.code !== undefined || pr.name !== undefined) {
+        projectLabelSubject = `${pr.code ?? '—'} - ${pr.name ?? '—'}`
+      }
+    }
+
+    const collabId = advance.userId.toString()
+    const collabProfile =
+      await this.userService.findCollaboratorViaticoNotifyProfile(collabId)
+
+    const lastAppr = [...doc.approvalHistory]
+      .reverse()
+      .find(h => h.action === 'approved')
+    let approverName = '—'
+    if (lastAppr?.approvedBy) {
+      const ap = await this.userService.findEmailNameClient(String(lastAppr.approvedBy))
+      approverName = ap?.name ?? String(lastAppr.approvedBy)
+    }
+
+    const urgent = this.isViaticoTravelStartUrgent(doc.startDate)
+    const platformUrl = this.emailService.buildAppUrl('/tesoreria')
+
+    const detailBody = this.buildViaticoL2PendingDetailBody(
+      doc,
+      {
+        name: collabProfile?.name ?? 'Colaborador',
+        dni: collabProfile?.dni,
+        employeeCode: collabProfile?.employeeCode,
+        area: collabProfile?.area,
+        cargo: collabProfile?.cargo,
+      },
+      approverName,
+      lastAppr?.date ?? new Date()
+    )
+
+    const emailTitle = urgent
+      ? 'Aprobación final requerida — inicio de viaje próximo'
+      : 'Solicitud de viáticos pendiente de aprobación final'
+
+    const urgentBanner =
+      '🟥 URGENTE: la fecha de inicio del viaje es hoy o mañana. Priorizar aprobación y gestión de desembolso.'
+
+    for (const r of recipients) {
+      try {
+        await this.emailService.sendViaticoPendienteL2(r.email, {
+          recipientName: r.name,
+          urgent,
+          urgentBanner,
+          emailTitle,
+          detailBody,
+          projectLabel: projectLabelSubject,
+          platformUrl,
+        })
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.logger.error(`Correo pendiente L2 a ${r.email}: ${msg}`)
+      }
+    }
+  }
+
+  /** Cuerpo HTML del correo de notificación a Contabilidad cuando queda en pending_l2. */
+  private buildViaticoL2PendingDetailBody(
+    advance: AdvanceDocument,
+    collaboratorMeta: {
+      name: string
+      dni?: string
+      employeeCode?: string
+      area?: string
+      cargo?: string
+    },
+    approverL1Name: string,
+    approvedAt: Date
+  ): string {
+    const project = advance.projectId as unknown
+    let cc = '—'
+    if (project && typeof project === 'object' && project !== null) {
+      const pr = project as { code?: string; name?: string }
+      if (pr.code !== undefined || pr.name !== undefined) {
+        cc = `${pr.code ?? '—'} - ${pr.name ?? '—'}`
+      }
+    }
+    const start =
+      advance.startDate instanceof Date
+        ? advance.startDate.toISOString().slice(0, 10)
+        : advance.startDate ? String(advance.startDate).slice(0, 10) : '—'
+    const end =
+      advance.endDate instanceof Date
+        ? advance.endDate.toISOString().slice(0, 10)
+        : advance.endDate ? String(advance.endDate).slice(0, 10) : '—'
+
+    const lines = advance.lines ?? []
+    const breakdownItems: string[] = []
+    for (const row of lines) {
+      const cat = (row as { categoryId?: unknown }).categoryId
+      const catName =
+        cat && typeof cat === 'object' && cat !== null && 'name' in cat
+          ? String((cat as { name?: string }).name)
+          : 'Categoría'
+      breakdownItems.push(
+        `<li style="margin:6px 0;">${this.escapeHtmlForEmail(`${catName}: S/ ${Number(row.lineTotal).toFixed(2)}`)}</li>`
+      )
+    }
+    const breakdownHtml =
+      breakdownItems.length > 0
+        ? `<ul style="margin:8px 0 16px 0;padding-left:22px;color:#0f172a;">${breakdownItems.join('')}</ul>`
+        : `<p style="margin:8px 0 16px;color:#64748b;font-size:13px;">${this.escapeHtmlForEmail('(sin líneas)')}</p>`
+
+    const apprDate = approvedAt.toISOString().slice(0, 16).replace('T', ' ')
+    const amountStr = `S/ ${Number(advance.amount).toFixed(2)}`
+
+    const tableOpen =
+      '<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;">'
+    const tableClose = '</table>'
+
+    const detalleRows = [
+      this.viaticoEmailKvRow('Centro de costo', cc),
+      this.viaticoEmailKvRow('Lugar', advance.place?.trim() ? advance.place.trim() : '—'),
+      this.viaticoEmailKvRow('Fechas del viaje', `${start} al ${end}`),
+      this.viaticoEmailKvRow('Monto solicitado', amountStr),
+    ].join('')
+
+    const solicitanteRows = [
+      this.viaticoEmailKvRow('Nombre', collaboratorMeta.name),
+      this.viaticoEmailKvRow('Documento', this.viaticoNotifyField(collaboratorMeta.dni)),
+      this.viaticoEmailKvRow('Área', this.viaticoNotifyField(collaboratorMeta.area)),
+      this.viaticoEmailKvRow('Cargo', this.viaticoCargoDisplay(collaboratorMeta.cargo, collaboratorMeta.employeeCode)),
+    ].join('')
+
+    const aprobadorL1Rows = [
+      this.viaticoEmailKvRow('Nombre', approverL1Name),
+      this.viaticoEmailKvRow('Fecha y hora', apprDate),
+    ].join('')
+
+    return [
+      `<div style="font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;font-size:14px;line-height:1.55;color:#334155;">`,
+      `<h2 style="margin:0 0 14px;font-size:16px;color:#0f172a;font-weight:700;">${this.escapeHtmlForEmail('Detalle de la solicitud')}</h2>`,
+      tableOpen, detalleRows, tableClose,
+      `<p style="margin:14px 0 6px;font-weight:600;color:#0f172a;font-size:13px;">${this.escapeHtmlForEmail('Desglose por categoría')}</p>`,
+      breakdownHtml,
+      `<p style="margin:0;padding:12px 14px;background-color:#fffbeb;border-radius:6px;border-left:4px solid #f59e0b;font-size:13px;color:#92400e;"><strong>${this.escapeHtmlForEmail('Acción requerida')}</strong><br/>${this.escapeHtmlForEmail('Esta solicitud requiere tu aprobación (Nivel 2) para ser procesada.')}</p>`,
+      this.viaticoEmailSectionTitle('Solicitante'),
+      tableOpen, solicitanteRows, tableClose,
+      this.viaticoEmailSectionTitle('Aprobador Nivel 1'),
+      tableOpen, aprobadorL1Rows, tableClose,
+      `</div>`,
+    ].join('')
+  }
+
   private async notifyAccountingViaticoApproved(
     advance: AdvanceDocument
   ): Promise<void> {
@@ -1083,6 +1258,7 @@ export class AdvanceService {
         type: 'info',
         actionUrl: '/mis-rendiciones',
       }).catch(() => { })
+      this.notifyL2ApproversViaticoAprobadoL1(saved as AdvanceDocument).catch(() => { })
     }
     return saved
   }

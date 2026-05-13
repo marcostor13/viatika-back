@@ -713,6 +713,41 @@ export class EmailService {
     }
   }
 
+  /** Notificación a Contabilidad cuando una solicitud queda en pending_l2. */
+  async sendViaticoPendienteL2(
+    email: string,
+    data: {
+      recipientName: string
+      urgent: boolean
+      urgentBanner: string
+      emailTitle: string
+      detailBody: string
+      projectLabel: string
+      platformUrl?: string
+    }
+  ) {
+    try {
+      const prefix = data.urgent ? '[🔴 URGENTE] ' : ''
+      const subject = `${prefix}Solicitud pendiente de aprobación final - ${data.projectLabel}`
+      const { platformUrl, ...rest } = data
+      await this.mailerService.sendMail({
+        to: email,
+        subject,
+        template: './viatico-pendiente-l2',
+        context: {
+          logoUrl: this.getLogoUrl(),
+          year: new Date().getFullYear(),
+          ...rest,
+          platformUrl: this.resolvePlatformHref(platformUrl),
+        },
+      })
+      this.logger.debug(`Correo pendiente L2 enviado a ${email}`)
+    } catch (error) {
+      this.logger.error(`Error pendiente L2 a ${email}:`, error)
+      throw error
+    }
+  }
+
   /** Fase 3 — aprobación a contabilidad / tesorería (Funcionalidades.md §3.2) */
   async sendViaticoAprobacionContabilidad(
     email: string,
@@ -973,6 +1008,38 @@ export class EmailService {
       })
     } catch (error) {
       this.logger.error(`Error correo rendición cerrada a ${email}:`, error)
+    }
+  }
+
+  async sendRendicionDevolucionColaborador(
+    email: string,
+    data: { recipientName: string; reportTitle: string; amountFormatted: string; closedAt: string; platformUrl?: string }
+  ) {
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: `Devolución pendiente — ${data.reportTitle} — S/ ${data.amountFormatted}`,
+        template: './rendicion-devolucion-colaborador',
+        context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data, platformUrl: this.resolvePlatformHref(data.platformUrl) },
+      })
+    } catch (error) {
+      this.logger.error(`Error correo devolucion colaborador a ${email}:`, error)
+    }
+  }
+
+  async sendRendicionDevolucionCargada(
+    email: string,
+    data: { recipientName: string; collaboratorName: string; reportTitle: string; amountFormatted: string; depositDate: string; bankOrigin?: string; operationNumber?: string; platformUrl?: string }
+  ) {
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: `Comprobante de devolución cargado — ${data.reportTitle} — ${data.collaboratorName}`,
+        template: './rendicion-devolucion-cargada',
+        context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data, platformUrl: this.resolvePlatformHref(data.platformUrl) },
+      })
+    } catch (error) {
+      this.logger.error(`Error correo devolucion cargada a ${email}:`, error)
     }
   }
 

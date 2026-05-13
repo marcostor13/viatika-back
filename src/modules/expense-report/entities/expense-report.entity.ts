@@ -224,6 +224,27 @@ export class ExpenseReport {
   @Prop({ type: Date, required: false })
   reimbursementAccountingNotifiedAt?: Date
 
+  @Prop({
+    type: {
+      url: { type: String, required: true },
+      fileName: { type: String },
+      depositDate: { type: String, required: true },
+      bankOrigin: { type: String },
+      operationNumber: { type: String },
+      uploadedAt: { type: Date, required: true },
+      _id: false,
+    },
+    required: false,
+  })
+  returnVoucher?: {
+    url: string
+    fileName?: string
+    depositDate: string
+    bankOrigin?: string
+    operationNumber?: string
+    uploadedAt: Date
+  }
+
   @Prop({ type: Object, required: false })
   closureRecord?: ClosureRecord
 }

@@ -78,6 +78,32 @@ export class UserService {
     }))
   }
 
+  async findAllByEmail(email: string): Promise<IUserResponse[]> {
+    const users = await this.userModel
+      .find({ email })
+      .populate('roleId')
+      .populate('clientId')
+      .exec()
+    return users.map(user => ({
+      _id: user._id,
+      email: user.email,
+      name: user.name,
+      role: user.roleId as unknown as RoleDocument,
+      client: user.clientId as unknown as ClientDocument,
+      password: user.password,
+      isActive: user.isActive,
+      permissions: (user as any).permissions || { modules: [], canApproveL1: false, canApproveL2: false },
+      dni: (user as any).dni,
+      employeeCode: (user as any).employeeCode,
+      area: (user as any).area,
+      cargo: (user as any).cargo,
+      address: (user as any).address,
+      phone: (user as any).phone,
+      mustChangePassword: !!(user as any).mustChangePassword,
+      signature: (user as any).signature,
+    }))
+  }
+
   async findByEmail(email: string): Promise<IUserResponse | null> {
     const user = await this.userModel
       .findOne({ email })
@@ -149,17 +175,12 @@ export class UserService {
       : null
     const roleId = new Types.ObjectId(userData.roleId)
 
-    const issetUser = await this.userModel.findOne({ email: userData.email })
+    const issetUser = await this.userModel.findOne({
+      email: userData.email,
+      clientId: clientId || null,
+    })
     if (issetUser) {
-      const sameClient =
-        clientId &&
-        issetUser.clientId &&
-        issetUser.clientId.toString() === clientId.toString()
-      throw new BadRequestException(
-        sameClient
-          ? 'El correo ya se encuentra registrado en esta empresa'
-          : 'El usuario se encuentra registrado para otra empresa'
-      )
+      throw new BadRequestException('El correo ya se encuentra registrado en esta empresa')
     }
     const temporaryPassword =
       Math.random().toString(36).slice(-8) +
@@ -353,27 +374,73 @@ export class UserService {
   ): Promise<{ email: string; name: string }[]> {
     const adminRoles = await this.roleService.getAdminRoles()
     const contabilidadRole = await this.roleService.getByName('Contabilidad')
-    const roleIds = [...adminRoles.map(r => (r as any)._id)]
-    if (contabilidadRole) roleIds.push((contabilidadRole as any)._id)
-    const users = await this.userModel
+
+    // Users scoped to this client (admins + tesoreria/contabilidad modules)
+    const scopedUsers = await this.userModel
       .find({
         clientId: new Types.ObjectId(clientId),
         isActive: true,
         $or: [
-          { roleId: { $in: roleIds } },
+          { roleId: { $in: adminRoles.map(r => (r as any)._id) } },
           { 'permissions.modules': 'tesoreria' },
           { 'permissions.modules': 'contabilidad' },
         ],
       })
       .select('email name')
       .exec()
+
+    // Global Contabilidad users (clientId = null) — always notified
+    const contabilidadUsers = contabilidadRole
+      ? await this.userModel
+          .find({ clientId: null, roleId: (contabilidadRole as any)._id, isActive: true })
+          .select('email name')
+          .exec()
+      : []
+
     const seen = new Set<string>()
     const out: { email: string; name: string }[] = []
-    for (const u of users) {
+    for (const u of [...scopedUsers, ...contabilidadUsers]) {
       const em = u.email?.trim().toLowerCase()
       if (!em || seen.has(em)) continue
       seen.add(em)
       out.push({ email: u.email, name: u.name })
+    }
+    return out
+  }
+
+  async findAccountingRecipientsWithIds(
+    clientId: string
+  ): Promise<{ _id: string; email: string; name: string }[]> {
+    const adminRoles = await this.roleService.getAdminRoles()
+    const contabilidadRole = await this.roleService.getByName('Contabilidad')
+
+    const scopedUsers = await this.userModel
+      .find({
+        clientId: new Types.ObjectId(clientId),
+        isActive: true,
+        $or: [
+          { roleId: { $in: adminRoles.map(r => (r as any)._id) } },
+          { 'permissions.modules': 'tesoreria' },
+          { 'permissions.modules': 'contabilidad' },
+        ],
+      })
+      .select('_id email name')
+      .exec()
+
+    const contabilidadUsers = contabilidadRole
+      ? await this.userModel
+          .find({ clientId: null, roleId: (contabilidadRole as any)._id, isActive: true })
+          .select('_id email name')
+          .exec()
+      : []
+
+    const seen = new Set<string>()
+    const out: { _id: string; email: string; name: string }[] = []
+    for (const u of [...scopedUsers, ...contabilidadUsers]) {
+      const em = u.email?.trim().toLowerCase()
+      if (!em || seen.has(em)) continue
+      seen.add(em)
+      out.push({ _id: String((u as any)._id), email: u.email, name: u.name })
     }
     return out
   }

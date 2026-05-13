@@ -12,47 +12,54 @@ import {
 import { AuthService } from './auth.service'
 import { AuthGuard } from '@nestjs/passport'
 import { RegisterDto } from './dto/register.dto'
+import { JwtAuthGuard } from './guards/jwt-auth.guard'
 import { RolesGuard } from './guards/roles.guard'
 import { Roles } from './decorators/roles.decorador'
 import { ROLES } from './enums/roles.enum'
+
 @Controller('auth')
 export class AuthController {
   constructor(private authService: AuthService) {}
 
-  // @UseGuards(AuthGuard('jwt'), RolesGuard)
-  // @Roles(ROLES.SUPER_ADMIN)
   @Post('register')
   async register(@Body() registerDto: RegisterDto) {
     return await this.authService.register(registerDto)
   }
 
-  // Ruta de login con la estrategia 'local'
-  @UseGuards(AuthGuard('local'))
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  async login(@Body() req) {
-    return this.authService.login(req)
+  async login(@Body() body: { email: string; password: string }) {
+    return this.authService.login(body.email, body.password)
   }
 
-  // Ejemplo de ruta protegida con JWT
+  @Post('select-client')
+  @HttpCode(HttpStatus.OK)
+  async selectClient(
+    @Body() body: { hubToken?: string; email?: string; password?: string; clientId: string }
+  ) {
+    return this.authService.selectClient(body)
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(ROLES.CONTABILIDAD)
+  @Get('companies')
+  async getCompanies() {
+    return this.authService.getHubCompanies()
+  }
+
   @UseGuards(AuthGuard('jwt'))
   @Get('profile')
   getProfile(@Request() req) {
     return req.user
   }
 
-  // Inicia el flujo de Google OAuth
   @Get('google')
   @UseGuards(AuthGuard('google'))
-  async googleAuth(@Req() req) {
-    // Este método no se ejecuta, la guard redirige a Google
-  }
+  async googleAuth(@Req() _req) {}
 
-  // Callback de Google OAuth
   @Get('google/callback')
   @UseGuards(AuthGuard('google'))
   googleAuthRedirect(@Req() req) {
-    // Aquí procesas la información del usuario y generas un JWT si es necesario
     return req.user
   }
 }

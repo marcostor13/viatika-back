@@ -229,6 +229,7 @@ export class ExpenseReportService {
         userId: new Types.ObjectId(userId),
         clientId: new Types.ObjectId(clientId),
       })
+      .populate('expenseIds', 'total')
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 })
       .exec()
@@ -693,9 +694,9 @@ export class ExpenseReportService {
       }
     }
 
-    if (report.status !== 'approved') {
+    if (report.status !== 'approved' && report.status !== 'closed') {
       throw new BadRequestException(
-        'Solo se puede registrar el reembolso cuando la rendición está aprobada y pendiente de pago al colaborador.'
+        'Solo se puede registrar el reembolso cuando la rendición está aprobada o cerrada.'
       )
     }
     if (report.settlement?.type !== 'reembolso') {
@@ -720,7 +721,9 @@ export class ExpenseReportService {
       paymentReceiptSizeBytes: dto.paymentReceiptSizeBytes,
     }
     report.reimbursedAt = new Date()
-    report.status = 'reimbursed'
+    if (report.status !== 'closed') {
+      report.status = 'reimbursed'
+    }
     await report.save()
 
     await this.notifyCollaboratorReimbursementPaid(reportId)
@@ -833,9 +836,6 @@ export class ExpenseReportService {
     if (returnRecord && returnRecord.status !== 'validated') {
       errors.push(`Devolución pendiente en estado: ${returnRecord.status}. Se requiere validación de Contabilidad.`)
     }
-    if (report.settlement?.type === 'reembolso' && report.status !== 'reimbursed') {
-      errors.push('El reembolso al colaborador aún no ha sido registrado')
-    }
     return errors
   }
 
@@ -856,14 +856,138 @@ export class ExpenseReportService {
       .exec()
     if (!updated) throw new NotFoundException(`Rendición ${id} no encontrada`)
     const collaborator = await this.userService.findEmailNameClient(updated.userId.toString())
+    const closedAtStr = closureRecord.closedAt.toLocaleDateString('es-PE')
     if (collaborator?.email) {
       this.emailService.sendRendicionCerrada(collaborator.email, {
         recipientName: collaborator.name,
         reportTitle: updated.title,
-        closedAt: closureRecord.closedAt.toLocaleDateString('es-PE'),
-      }).catch((err: any) => {})
+        closedAt: closedAtStr,
+      }).catch(() => {})
     }
+
+    const settlement = (updated as any).settlement
+    const clientId = updated.clientId.toString()
+    const platformUrl = this.emailService.buildAppUrl(`/mis-rendiciones/${id}/detalle`)
+
+    if (settlement?.type === 'devolucion') {
+      const amountFormatted = Math.abs(Number(settlement.difference)).toFixed(2)
+      if (collaborator?.email) {
+        this.emailService.sendRendicionDevolucionColaborador(collaborator.email, {
+          recipientName: collaborator.name,
+          reportTitle: updated.title,
+          amountFormatted,
+          closedAt: closedAtStr,
+          platformUrl,
+        }).catch(() => {})
+      }
+      if (collaborator) {
+        this.notificationsService.create({
+          userId: updated.userId.toString(),
+          title: 'Devolución de saldo pendiente',
+          message: `Tu rendición "${updated.title}" fue cerrada. Tienes un saldo de S/ ${amountFormatted} a devolver a la empresa. Por favor, adjunta el comprobante de depósito.`,
+          type: 'warning',
+          actionUrl: `/mis-rendiciones/${id}/detalle`,
+        }).catch(() => {})
+      }
+    } else if (settlement?.type === 'reembolso') {
+      const amountFormatted = Math.abs(Number(settlement.difference)).toFixed(2)
+      const accountingUsers = await this.userService.findAccountingRecipientsWithIds(clientId)
+      for (const u of accountingUsers) {
+        this.emailService.sendRendicionReembolsoContabilidad(u.email, {
+          recipientName: u.name,
+          reportLabel: `${updated.title} · ${id}`,
+          reportTitle: updated.title,
+          collaboratorName: collaborator?.name || 'Colaborador',
+          amountFormatted,
+          detailUrl: platformUrl,
+        }).catch(() => {})
+        this.notificationsService.create({
+          userId: u._id,
+          title: 'Reembolso pendiente — Rendición cerrada',
+          message: `La rendición "${updated.title}" fue cerrada. Hay un reembolso de S/ ${amountFormatted} pendiente de pago al colaborador ${collaborator?.name || ''}.`,
+          type: 'info',
+          actionUrl: `/mis-rendiciones/${id}/detalle`,
+        }).catch(() => {})
+      }
+    }
+
     return updated
+  }
+
+  async registerReturnVoucher(
+    id: string,
+    dto: { depositDate: string; bankOrigin?: string; operationNumber?: string; fileUrl: string; fileName?: string },
+    userId: string
+  ): Promise<ExpenseReportDocument> {
+    const report = await this.expenseReportModel.findById(id).exec()
+    if (!report) throw new NotFoundException(`Rendición ${id} no encontrada`)
+    if (report.status !== 'closed') {
+      throw new BadRequestException('Solo se puede cargar el comprobante de devolución en una rendición cerrada.')
+    }
+    if ((report as any).settlement?.type !== 'devolucion') {
+      throw new BadRequestException('Esta rendición no tiene saldo a devolver.')
+    }
+    if ((report as any).returnVoucher) {
+      throw new BadRequestException('Ya se ha cargado un comprobante de devolución para esta rendición.')
+    }
+    if (report.userId.toString() !== userId) {
+      throw new ForbiddenException('Solo el colaborador dueño puede cargar el comprobante de devolución.')
+    }
+
+    const voucher = {
+      url: dto.fileUrl,
+      fileName: dto.fileName,
+      depositDate: dto.depositDate,
+      bankOrigin: dto.bankOrigin,
+      operationNumber: dto.operationNumber,
+      uploadedAt: new Date(),
+    }
+    await this.expenseReportModel.findByIdAndUpdate(id, { $set: { returnVoucher: voucher } }).exec()
+
+    const settlement = (report as any).settlement
+    const amountFormatted = Math.abs(Number(settlement?.difference ?? 0)).toFixed(2)
+    const clientId = report.clientId.toString()
+    const platformUrl = this.emailService.buildAppUrl(`/mis-rendiciones/${id}/detalle`)
+    const collaborator = await this.userService.findEmailNameClient(userId)
+    const collaboratorName = collaborator?.name || 'Colaborador'
+
+    if (collaborator?.email) {
+      this.emailService.sendRendicionCerrada(collaborator.email, {
+        recipientName: collaboratorName,
+        reportTitle: report.title,
+        closedAt: voucher.uploadedAt.toLocaleDateString('es-PE'),
+      }).catch(() => {})
+    }
+    this.notificationsService.create({
+      userId,
+      title: 'Comprobante de devolución enviado',
+      message: `Tu comprobante de devolución para la rendición "${report.title}" fue enviado correctamente. Contabilidad verificará el depósito.`,
+      type: 'success',
+      actionUrl: `/mis-rendiciones/${id}/detalle`,
+    }).catch(() => {})
+
+    const accountingUsers = await this.userService.findAccountingRecipientsWithIds(clientId)
+    for (const u of accountingUsers) {
+      this.emailService.sendRendicionDevolucionCargada(u.email, {
+        recipientName: u.name,
+        collaboratorName,
+        reportTitle: report.title,
+        amountFormatted,
+        depositDate: dto.depositDate,
+        bankOrigin: dto.bankOrigin,
+        operationNumber: dto.operationNumber,
+        platformUrl,
+      }).catch(() => {})
+      this.notificationsService.create({
+        userId: u._id,
+        title: 'Comprobante de devolución recibido',
+        message: `${collaboratorName} adjuntó el comprobante de devolución de S/ ${amountFormatted} para la rendición "${report.title}". Por favor, verifica el depósito.`,
+        type: 'info',
+        actionUrl: `/mis-rendiciones/${id}/detalle`,
+      }).catch(() => {})
+    }
+
+    return this.expenseReportModel.findById(id).exec() as Promise<ExpenseReportDocument>
   }
 
   /** Solicita reapertura (rol Gerencia/Admin). */

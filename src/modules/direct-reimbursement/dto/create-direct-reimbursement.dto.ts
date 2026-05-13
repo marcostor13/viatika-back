@@ -8,7 +8,7 @@ export class CreateDirectReimbursementDto {
   clientId: string
 
   @IsString()
-  @MinLength(100)
+  @MinLength(20)
   justification: string
 
   @IsNumber()

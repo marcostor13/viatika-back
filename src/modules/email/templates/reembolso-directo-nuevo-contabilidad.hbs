@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"><title>Nueva Solicitud de Reembolso Directo</title></head>
+<body style="font-family:Arial,sans-serif;color:#333;max-width:600px;margin:0 auto">
+  <img src="{{logoUrl}}" alt="Viatika" style="height:40px;margin:20px 0">
+  <h2 style="color:#2b6cb0">Nueva Solicitud de Reembolso Directo</h2>
+  <p>Estimado/a <strong>{{recipientName}}</strong>,</p>
+  <p><strong>{{collaboratorName}}</strong> ha solicitado un reembolso directo que requiere tu revisión y aprobación.</p>
+  <table style="width:100%;border-collapse:collapse;margin:16px 0">
+    <tr><td style="padding:8px;background:#f7f7f7;font-weight:bold">Codigo</td><td style="padding:8px">{{code}}</td></tr>
+    <tr><td style="padding:8px;background:#f7f7f7;font-weight:bold">Solicitante</td><td style="padding:8px">{{collaboratorName}}</td></tr>
+    <tr><td style="padding:8px;background:#f7f7f7;font-weight:bold">Monto estimado</td><td style="padding:8px">S/ {{estimatedAmount}}</td></tr>
+    <tr><td style="padding:8px;background:#f7f7f7;font-weight:bold">Justificacion</td><td style="padding:8px">{{justification}}</td></tr>
+  </table>
+  <p>Ingresa a la sección de <strong>Pagos</strong> en la plataforma para revisar y aprobar esta solicitud.</p>
+  <p style="color:#718096;font-size:12px">© {{year}} Viatika</p>
+</body>
+</html>

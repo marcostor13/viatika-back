@@ -370,9 +370,9 @@ export class ExpenseReportService {
         const admins = await this.userService.findAdminsByClient(
           String(fullyUpdatedReport.clientId)
         )
-        const user = await this.userService.findOne(
-          String(fullyUpdatedReport.userId)
-        )
+        const ownerRef = fullyUpdatedReport.userId as any
+        const ownerId = ownerRef?._id ? String(ownerRef._id) : String(ownerRef)
+        const user = await this.userService.findOne(ownerId)
         const creatorName = user.name || 'Un colaborador'
         for (const admin of admins) {
           await this.notificationsService.create({
@@ -428,21 +428,22 @@ export class ExpenseReportService {
       }
     }
 
-    // Si la rendición fue enviada a aprobación (submitted), notificar a los administradores
+    // Si la rendición fue enviada a aprobación (submitted), notificar a coordinador + contabilidad
     if (dto.status === 'submitted') {
       try {
-        const admins = await this.userService.findAdminsByClient(
-          String(fullyUpdatedReport.clientId)
-        )
-        const user = await this.userService.findOne(
-          String(fullyUpdatedReport.userId)
-        )
+        const ownerRef2 = fullyUpdatedReport.userId as any
+        const ownerId2 = ownerRef2?._id ? String(ownerRef2._id) : String(ownerRef2)
+        const user = await this.userService.findOne(ownerId2)
         const creatorName = user.name || 'Un colaborador'
-
-        console.log(
-          `[ExpenseReportService] Status changed to submitted. Notifying ${admins.length} admins.`
+        const clientId = String(fullyUpdatedReport.clientId)
+        const budgetFormatted = Number(fullyUpdatedReport.budget).toFixed(2)
+        const expenseCount = fullyUpdatedReport.expenseIds?.length ?? 0
+        const platformUrl = this.emailService.buildAppUrl(
+          `/mis-rendiciones/${id}/detalle`
         )
 
+        // Notificaciones in-app a admins
+        const admins = await this.userService.findAdminsByClient(clientId)
         for (const admin of admins) {
           await this.notificationsService.create({
             userId: String(admin._id),
@@ -450,6 +451,43 @@ export class ExpenseReportService {
             message: `${creatorName} ha enviado la rendición "${fullyUpdatedReport.title}" para tu revisión.`,
             type: 'warning',
             actionUrl: `/mis-rendiciones/${id}/detalle`,
+          })
+        }
+
+        const emailData = {
+          collaboratorName: creatorName,
+          reportTitle: fullyUpdatedReport.title,
+          budgetFormatted,
+          expenseCount,
+          platformUrl,
+        }
+
+        // Control de duplicados por email
+        const sentEmails = new Set<string>()
+
+        // Correo al coordinador del colaborador
+        const profile = await this.userService.findTransactionalProfile(ownerId2)
+        const coordinatorId = profile?.coordinatorId?.toString?.()
+        if (coordinatorId) {
+          const coordinator = await this.userService.findEmailNameClient(coordinatorId)
+          if (coordinator?.email) {
+            sentEmails.add(coordinator.email.trim().toLowerCase())
+            await this.emailService.sendRendicionSubmitted(coordinator.email, {
+              recipientName: coordinator.name,
+              ...emailData,
+            })
+          }
+        }
+
+        // Correo a usuarios de contabilidad/tesorería (sin incluir admins que no tengan esos módulos)
+        const accountingRecipients =
+          await this.userService.findContabilidadRecipients(clientId)
+        for (const r of accountingRecipients) {
+          if (sentEmails.has(r.email.trim().toLowerCase())) continue
+          sentEmails.add(r.email.trim().toLowerCase())
+          await this.emailService.sendRendicionSubmitted(r.email, {
+            recipientName: r.name,
+            ...emailData,
           })
         }
       } catch (error) {

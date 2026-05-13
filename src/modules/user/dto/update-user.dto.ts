@@ -88,4 +88,8 @@ export class UpdateUserDto {
   @IsBoolean()
   @IsOptional()
   mustChangePassword?: boolean
+
+  @IsString()
+  @IsOptional()
+  profilePic?: string
 }

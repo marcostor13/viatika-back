@@ -35,6 +35,7 @@ export interface UserDocument extends Document {
   signature?: string
   coordinatorId?: Types.ObjectId
   mustChangePassword?: boolean
+  profilePic?: string
 }
 
 @Schema({ timestamps: true })
@@ -106,6 +107,9 @@ export class User {
 
   @Prop({ type: Boolean, default: false })
   mustChangePassword?: boolean
+
+  @Prop({ type: String, required: false })
+  profilePic?: string
 }
 
 export const UserSchema = SchemaFactory.createForClass(User)

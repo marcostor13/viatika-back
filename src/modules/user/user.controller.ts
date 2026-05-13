@@ -88,6 +88,19 @@ export class UserController {
     return await this.userService.findOne(id.toString())
   }
 
+  @UseGuards(AuthGuard('jwt'))
+  @Patch('profile')
+  async updateOwnProfile(
+    @Body() body: { name?: string; profilePic?: string },
+    @Request() req: any
+  ) {
+    const userId = req.user._id || req.user.sub
+    const updateData: UpdateUserDto = {}
+    if (body.name?.trim()) updateData.name = body.name.trim()
+    if (body.profilePic !== undefined) updateData.profilePic = body.profilePic
+    return await this.userService.update(userId, updateData)
+  }
+
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
   @Patch(':id')

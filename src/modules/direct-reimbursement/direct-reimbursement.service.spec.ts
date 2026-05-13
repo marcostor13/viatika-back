@@ -6,6 +6,7 @@ import { DirectReimbursementService, OVERRUN_TOLERANCE } from './direct-reimburs
 import { DirectReimbursement } from './entities/direct-reimbursement.entity'
 import { EmailService } from '../email/email.service'
 import { UserService } from '../user/user.service'
+import { NotificationsService } from '../notifications/notifications.service'
 
 const mockEmailService = {
   sendReembolsoDirectoAbierto: jest.fn().mockResolvedValue(undefined),
@@ -14,6 +15,11 @@ const mockEmailService = {
 
 const mockUserService = {
   findEmailNameClient: jest.fn().mockResolvedValue({ name: 'Test User', email: 't@test.com' }),
+  findAccountingRecipientsWithIds: jest.fn().mockResolvedValue([]),
+}
+
+const mockNotificationsService = {
+  create: jest.fn().mockResolvedValue(undefined),
 }
 
 const coordinatorId = new Types.ObjectId().toString()
@@ -57,6 +63,7 @@ describe('DirectReimbursementService', () => {
         { provide: getModelToken(DirectReimbursement.name), useValue: mockModel },
         { provide: EmailService, useValue: mockEmailService },
         { provide: UserService, useValue: mockUserService },
+        { provide: NotificationsService, useValue: mockNotificationsService },
       ],
     }).compile()
 
@@ -201,8 +208,8 @@ describe('DirectReimbursementService', () => {
       receiptUrl: 'https://cdn.example.com/receipt.pdf',
     }
 
-    it('lanza BadRequestException si estado no es accounting_approved', async () => {
-      mockModel.findById.mockReturnValue({ exec: jest.fn().mockResolvedValue(makeDoc({ status: 'coordinator_approved' })) })
+    it('lanza BadRequestException si el estado no permite pago (ej: closed)', async () => {
+      mockModel.findById.mockReturnValue({ exec: jest.fn().mockResolvedValue(makeDoc({ status: 'closed' })) })
       await expect(service.registerPayment(docId, dto, coordinatorId)).rejects.toThrow(BadRequestException)
     })
 

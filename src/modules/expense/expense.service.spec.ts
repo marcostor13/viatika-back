@@ -14,6 +14,7 @@ import { ExpenseReportService } from '../expense-report/expense-report.service'
 import { NotificationsService } from '../notifications/notifications.service'
 import { CategoryService } from '../category/category.service'
 import { CreateExpenseDto } from './dto/create-expense.dto'
+import { Client } from '../client/entities/client.entity'
 
 describe('ExpenseService — Fase 5 (plazos y límites de categoría)', () => {
   let service: ExpenseService
@@ -50,6 +51,7 @@ describe('ExpenseService — Fase 5 (plazos y límites de categoría)', () => {
           useValue: { get: jest.fn().mockReturnValue('sk-test-openai-key') },
         },
         { provide: getModelToken(Expense.name), useValue: mockExpenseRepository },
+        { provide: getModelToken(Client.name), useValue: {} },
         { provide: EmailService, useValue: noopDeps.emailService },
         { provide: ProjectService, useValue: noopDeps.projectService },
         { provide: UserService, useValue: noopDeps.userService },

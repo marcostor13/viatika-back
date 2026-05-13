@@ -35,11 +35,12 @@ export interface UserDocument extends Document {
   signature?: string
   coordinatorId?: Types.ObjectId
   mustChangePassword?: boolean
+  profilePic?: string
 }
 
 @Schema({ timestamps: true })
 export class User {
-  @Prop({ required: true, unique: true })
+  @Prop({ required: true })
   email: string
 
   @Prop({ required: true })
@@ -106,6 +107,11 @@ export class User {
 
   @Prop({ type: Boolean, default: false })
   mustChangePassword?: boolean
+
+  @Prop({ type: String, required: false })
+  profilePic?: string
 }
 
 export const UserSchema = SchemaFactory.createForClass(User)
+// Unique per (email, clientId) — allows same email across different companies
+UserSchema.index({ email: 1, clientId: 1 }, { unique: true })

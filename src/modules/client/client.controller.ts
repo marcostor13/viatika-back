@@ -39,19 +39,19 @@ export class ClientController {
   }
 
   @Get()
-  @Roles(ROLES.SUPER_ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
   findAll() {
     return this.clientService.findAll()
   }
 
   @Get(':id')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   findOne(@Param('id') id: string) {
     return this.clientService.findOne(id)
   }
 
   @Patch(':id')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   update(@Param('id') id: string, @Body() updateClientDto: UpdateClientDto) {
     return this.clientService.update(id, updateClientDto)
   }

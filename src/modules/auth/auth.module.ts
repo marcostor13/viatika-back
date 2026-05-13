@@ -8,14 +8,18 @@ import { LocalStrategy } from './strategies/local.strategy'
 import { JwtStrategy } from './strategies/jwt.strategy'
 import { AuthController } from './auth.controller'
 import { GoogleStrategy } from './strategies/google.strategy'
-
+import { ClientModule } from '../client/client.module'
 import { RoleModule } from '../role/role.module'
 import { DatabaseSeederService } from './database-seeder.service'
+import { MongooseModule } from '@nestjs/mongoose'
+import { User, UserSchema } from '../user/schemas/user.schema'
 
 @Module({
   imports: [
     UserModule,
     RoleModule,
+    ClientModule,
+    MongooseModule.forFeature([{ name: User.name, schema: UserSchema }]),
     PassportModule,
     JwtModule.register({
       secret: jwtConstants.secret,

@@ -27,14 +27,14 @@ export class SunatConfigController {
   constructor(private readonly sunatConfigService: SunatConfigService) {}
 
   @Post()
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   async create(@Body() createSunatConfigDto: CreateSunatConfigDto) {
     return this.sunatConfigService.create(createSunatConfigDto)
   }
 
   /** Ruta estática antes de `:clientId` para no interpretar "credentials" como clientId */
   @Get('credentials/:clientId')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   async getCredentials(@Param('clientId') clientId: string) {
     try {
       this.logger.log('Recibida solicitud para obtener credenciales SUNAT')
@@ -79,7 +79,7 @@ export class SunatConfigController {
   }
 
   @Patch(':id')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   async update(
     @Param('id') _id: string,
     @Body() updateSunatConfigDto: UpdateSunatConfigDto
@@ -107,7 +107,7 @@ export class SunatConfigController {
   }
 
   @Delete(':id')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   async remove(@Param('id') _id: string) {
     try {
       this.logger.log('Recibida solicitud para eliminar configuración SUNAT')

@@ -14,6 +14,7 @@ import {
   Query,
   UploadedFile,
   UseInterceptors,
+  ForbiddenException,
 } from '@nestjs/common'
 import { FileInterceptor } from '@nestjs/platform-express'
 import { UserService } from './user.service'
@@ -67,8 +68,18 @@ export class UserController {
     @Query('limit') limit?: string,
     @Query('search') search?: string,
     @Query('status') status?: string,
-    @Query('roleName') roleName?: string
+    @Query('roleName') roleName?: string,
+    @Req() req?: any
   ) {
+    const role: string = req?.user?.roles?.[0] ?? ''
+    // Admin and Contabilidad may only query their own company
+    if (role !== ROLES.SUPER_ADMIN) {
+      const tokenClientId = req?.user?.clientId?.toString()
+      if (!tokenClientId || tokenClientId !== clientId.toString()) {
+        throw new ForbiddenException('No tienes permiso para ver usuarios de esta empresa')
+      }
+    }
+
     if (page || limit || search || status || roleName) {
       return this.userService.findAllPaginated(clientId, {
         page: page ? parseInt(page, 10) : undefined,

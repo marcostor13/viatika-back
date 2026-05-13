@@ -335,6 +335,19 @@ export class ExpenseReportController {
     return result
   }
 
+  /** Colaborador adjunta comprobante de devolución (rendición cerrada, settlement=devolucion). */
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.COLABORADOR, ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Post(':id/return-voucher')
+  async registerReturnVoucher(
+    @Param('id') id: string,
+    @Body() body: { depositDate: string; bankOrigin?: string; operationNumber?: string; fileUrl: string; fileName?: string },
+    @Request() req: any
+  ) {
+    const userId = String(req.user._id || req.user.sub)
+    return this.expenseReportService.registerReturnVoucher(id, body, userId)
+  }
+
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
   @Post(':id/affidavit')

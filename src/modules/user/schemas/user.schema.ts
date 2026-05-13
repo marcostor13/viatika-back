@@ -40,7 +40,7 @@ export interface UserDocument extends Document {
 
 @Schema({ timestamps: true })
 export class User {
-  @Prop({ required: true, unique: true })
+  @Prop({ required: true })
   email: string
 
   @Prop({ required: true })
@@ -113,3 +113,5 @@ export class User {
 }
 
 export const UserSchema = SchemaFactory.createForClass(User)
+// Unique per (email, clientId) — allows same email across different companies
+UserSchema.index({ email: 1, clientId: 1 }, { unique: true })

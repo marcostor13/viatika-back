@@ -1,6 +1,9 @@
 import { Injectable, OnApplicationBootstrap, Logger } from '@nestjs/common'
+import { InjectModel } from '@nestjs/mongoose'
+import { Model } from 'mongoose'
 import { RoleService } from '../role/role.service'
 import { UserService } from '../user/user.service'
+import { User, UserDocument } from '../user/schemas/user.schema'
 import { ROLES } from './enums/roles.enum'
 import * as bcrypt from 'bcryptjs'
 
@@ -10,12 +13,28 @@ export class DatabaseSeederService implements OnApplicationBootstrap {
 
   constructor(
     private readonly roleService: RoleService,
-    private readonly userService: UserService
+    private readonly userService: UserService,
+    @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
   ) {}
 
   async onApplicationBootstrap() {
+    await this.migrateEmailIndex()
     await this.seedRoles()
     await this.seedSuperAdmin()
+  }
+
+  /** Drop the old global email_1 unique index if it still exists, so the new compound index takes over. */
+  private async migrateEmailIndex() {
+    try {
+      const indexes = await this.userModel.collection.indexes()
+      const oldIndex = indexes.find((idx: any) => idx.name === 'email_1')
+      if (oldIndex) {
+        await this.userModel.collection.dropIndex('email_1')
+        this.logger.log('Dropped legacy email_1 unique index from users collection')
+      }
+    } catch (err: any) {
+      this.logger.warn(`Index migration skipped: ${err?.message}`)
+    }
   }
 
   private async seedRoles() {

@@ -320,6 +320,7 @@ describe('ExpenseReportService — Fase 8 (cierre definitivo)', () => {
     sendRendicionFullyApprovedEmail: jest.fn().mockResolvedValue(undefined),
     sendRendicionReembolsoPagado: jest.fn().mockResolvedValue(undefined),
     sendRendicionCerrada: jest.fn().mockResolvedValue(undefined),
+    buildAppUrl: jest.fn().mockReturnValue('http://localhost:4200/app'),
   }
 
   const mockUserServicePhase8 = {
@@ -327,6 +328,7 @@ describe('ExpenseReportService — Fase 8 (cierre definitivo)', () => {
     findOne: jest.fn().mockResolvedValue({ name: 'Colaborador', email: 'c@test.com' }),
     findTransactionalProfile: jest.fn().mockResolvedValue(null),
     findEmailNameClient: jest.fn().mockResolvedValue({ name: 'Colaborador', email: 'c@test.com' }),
+    findAccountingRecipientsWithIds: jest.fn().mockResolvedValue([]),
   }
 
   function makeReportDoc(overrides: Record<string, unknown> = {}) {
@@ -408,6 +410,7 @@ describe('ExpenseReportService — Fase 8 (cierre definitivo)', () => {
           exec: jest.fn().mockResolvedValue(makeReportDoc({
             status: 'reimbursed',
             settlement: { type: 'reembolso' },
+            reimbursementPaymentInfo: { method: 'transferencia_bancaria' },
             expenseIds: [],
           })),
         }),
@@ -433,6 +436,7 @@ describe('ExpenseReportService — Fase 8 (cierre definitivo)', () => {
           exec: jest.fn().mockResolvedValue(makeReportDoc({
             status: 'reimbursed',
             settlement: { type: 'reembolso' },
+            reimbursementPaymentInfo: { method: 'transferencia_bancaria' },
           })),
         }),
       })
@@ -694,20 +698,18 @@ describe('ExpenseReportService — Fase 6 (reembolso: tenant y registro)', () =>
   })
 
   it('registerReimbursementPayment: superadmin omite chequeo de tenant aunque clientId no coincida', async () => {
-    const save = jest.fn().mockResolvedValue(undefined)
-    const doc = reimbursementReportDoc({ clientId: clientA, save })
+    const doc = reimbursementReportDoc({ clientId: clientA })
+    const chain = {
+      populate: jest.fn(),
+      exec: jest.fn().mockResolvedValue(populateChainExecResult()),
+    }
+    chain.populate.mockReturnValue(chain)
     let findByIdCall = 0
     mockExpenseReportModel.findById.mockImplementation(() => {
       findByIdCall++
       if (findByIdCall === 1) {
         return { exec: jest.fn().mockResolvedValue(doc) }
       }
-      const chain: { populate: jest.Mock; exec: jest.Mock } = {
-        populate: jest.fn(),
-        exec: jest.fn(),
-      }
-      chain.populate.mockReturnValue(chain)
-      chain.exec.mockResolvedValue(populateChainExecResult())
       return chain
     })
 
@@ -719,25 +721,23 @@ describe('ExpenseReportService — Fase 6 (reembolso: tenant y registro)', () =>
       { requestClientId: clientB.toHexString(), isSuperAdmin: true }
     )
 
-    expect(save).toHaveBeenCalled()
+    expect(mockExpenseReportModel.findByIdAndUpdate).toHaveBeenCalled()
     expect(mockEmailService.sendRendicionReembolsoPagado).toHaveBeenCalled()
   })
 
   it('registerReimbursementPayment: persiste con tenant coincidente', async () => {
-    const save = jest.fn().mockResolvedValue(undefined)
-    const doc = reimbursementReportDoc({ clientId: clientA, save })
+    const doc = reimbursementReportDoc({ clientId: clientA })
+    const chain = {
+      populate: jest.fn(),
+      exec: jest.fn().mockResolvedValue(populateChainExecResult()),
+    }
+    chain.populate.mockReturnValue(chain)
     let findByIdCall = 0
     mockExpenseReportModel.findById.mockImplementation(() => {
       findByIdCall++
       if (findByIdCall === 1) {
         return { exec: jest.fn().mockResolvedValue(doc) }
       }
-      const chain: { populate: jest.Mock; exec: jest.Mock } = {
-        populate: jest.fn(),
-        exec: jest.fn(),
-      }
-      chain.populate.mockReturnValue(chain)
-      chain.exec.mockResolvedValue(populateChainExecResult())
       return chain
     })
 
@@ -749,7 +749,7 @@ describe('ExpenseReportService — Fase 6 (reembolso: tenant y registro)', () =>
       { requestClientId: clientA.toHexString(), isSuperAdmin: false }
     )
 
-    expect(save).toHaveBeenCalled()
+    expect(mockExpenseReportModel.findByIdAndUpdate).toHaveBeenCalled()
     expect(out.status).toBe('reimbursed')
     expect(mockEmailService.sendRendicionReembolsoPagado).toHaveBeenCalled()
   })

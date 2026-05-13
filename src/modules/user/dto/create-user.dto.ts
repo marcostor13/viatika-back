@@ -7,8 +7,27 @@ import {
   IsBoolean,
   IsArray,
   ValidateNested,
+  IsEnum,
 } from 'class-validator'
 import { Type } from 'class-transformer'
+
+class CreateBankAccountDto {
+  @IsString()
+  @IsOptional()
+  bankName?: string
+
+  @IsString()
+  @IsOptional()
+  accountNumber?: string
+
+  @IsString()
+  @IsOptional()
+  cci?: string
+
+  @IsEnum(['ahorros', 'corriente'])
+  @IsOptional()
+  accountType?: 'ahorros' | 'corriente'
+}
 
 class CreatePermissionsDto {
   @IsArray()
@@ -81,4 +100,9 @@ export class CreateUserDto {
   @ValidateNested()
   @Type(() => CreatePermissionsDto)
   permissions?: CreatePermissionsDto
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CreateBankAccountDto)
+  bankAccount?: CreateBankAccountDto
 }

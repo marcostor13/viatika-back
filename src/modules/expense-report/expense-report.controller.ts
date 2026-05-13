@@ -276,7 +276,7 @@ export class ExpenseReportController {
 
   /** Valida condiciones de cierre sin cerrar. */
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
   @Get(':id/close/validate')
   validateClosure(@Param('id') id: string) {
     return this.expenseReportService.validateClosureConditions(id)
@@ -284,7 +284,7 @@ export class ExpenseReportController {
 
   /** Cierra definitivamente la rendición. */
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
   @Patch(':id/close')
   async close(@Param('id') id: string, @Request() req: any) {
     const closedBy = req.user._id || req.user.sub

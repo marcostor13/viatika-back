@@ -14,10 +14,14 @@ import { UploadModule } from '../upload/upload.module'
 import { ExpenseReportModule } from '../expense-report/expense-report.module'
 import { AuditLogModule } from '../audit-log/audit-log.module'
 import { NotificationsModule } from '../notifications/notifications.module'
+import { Client, ClientSchema } from '../client/entities/client.entity'
 
 @Module({
   imports: [
-    MongooseModule.forFeature([{ name: Expense.name, schema: ExpenseSchema }]),
+    MongooseModule.forFeature([
+      { name: Expense.name, schema: ExpenseSchema },
+      { name: Client.name, schema: ClientSchema },
+    ]),
     EmailModule,
     CategoryModule,
     ProjectModule,

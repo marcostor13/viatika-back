@@ -27,6 +27,7 @@ import { ExpenseReportService } from '../expense-report/expense-report.service'
 import { ROLES } from '../auth/enums/roles.enum'
 import { NotificationsService } from '../notifications/notifications.service'
 import { CategoryService } from '../category/category.service'
+import { Client } from '../client/entities/client.entity'
 
 /** Usuario autenticado para autorización de gastos (PATCH/DELETE/GET). */
 export interface ExpenseActorContext {
@@ -65,6 +66,8 @@ export class ExpenseService {
     private readonly configService: ConfigService,
     @InjectModel(Expense.name)
     private expenseRepository: Model<Expense>,
+    @InjectModel(Client.name)
+    private clientModel: Model<Client>,
     private readonly emailService: EmailService,
     private readonly projectService: ProjectService,
     private readonly userService: UserService,
@@ -801,6 +804,23 @@ export class ExpenseService {
         'Se requiere al menos una fila en la planilla',
         HttpStatus.BAD_REQUEST
       )
+    }
+
+    const client = await this.clientModel.findById(body.clientId).lean().exec()
+    const dailyLimit = client?.limits?.movilidadDiario ?? null
+    if (dailyLimit !== null) {
+      const dailyTotals = new Map<string, number>()
+      for (const row of body.mobilityRows) {
+        const date = row.fecha || ''
+        dailyTotals.set(date, (dailyTotals.get(date) ?? 0) + (row.total || 0))
+      }
+      for (const [date, dayTotal] of dailyTotals) {
+        if (dayTotal > dailyLimit) {
+          throw new BadRequestException(
+            `El total del día ${date} (S/ ${dayTotal.toFixed(2)}) supera el límite diario de S/ ${dailyLimit.toFixed(2)}`
+          )
+        }
+      }
     }
 
     const total = body.mobilityRows.reduce(

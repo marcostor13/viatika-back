@@ -845,6 +845,13 @@ export class ExpenseReportService {
     if (errors.length > 0) {
       throw new BadRequestException(errors.join(' | '))
     }
+    // Compute settlement before closing in case it was skipped at approval time
+    // (liquidateExpenseReport requires status === 'approved', which is still true here)
+    try {
+      await this.advanceService.liquidateExpenseReport(id)
+    } catch (err) {
+      console.error(`[close] Pre-close liquidation error for ${id}:`, err)
+    }
     const closureRecord = {
       closedAt: new Date(),
       closedBy,
@@ -919,19 +926,40 @@ export class ExpenseReportService {
     dto: { depositDate: string; bankOrigin?: string; operationNumber?: string; fileUrl: string; fileName?: string },
     userId: string
   ): Promise<ExpenseReportDocument> {
-    const report = await this.expenseReportModel.findById(id).exec()
+    const report = await this.expenseReportModel
+      .findById(id)
+      .populate('expenseIds', 'total status')
+      .exec()
     if (!report) throw new NotFoundException(`Rendición ${id} no encontrada`)
     if (report.status !== 'closed') {
       throw new BadRequestException('Solo se puede cargar el comprobante de devolución en una rendición cerrada.')
-    }
-    if ((report as any).settlement?.type !== 'devolucion') {
-      throw new BadRequestException('Esta rendición no tiene saldo a devolver.')
     }
     if ((report as any).returnVoucher) {
       throw new BadRequestException('Ya se ha cargado un comprobante de devolución para esta rendición.')
     }
     if (report.userId.toString() !== userId) {
       throw new ForbiddenException('Solo el colaborador dueño puede cargar el comprobante de devolución.')
+    }
+
+    // Compute live balance from linked advances — used for notification amount only, never blocks the upload
+    const rawAdvanceIds = ((report as any).advanceIds ?? []).map((x: any) =>
+      (x && typeof x === 'object' && '_id' in x) ? String((x as any)._id) : String(x)
+    )
+    const linkedAdvances = await this.advanceService.findByExpenseReportId(id, rawAdvanceIds)
+    const activeAdvances = linkedAdvances.filter(a =>
+      ['approved', 'paid', 'settled'].includes(a.status)
+    )
+    const expenses = (report.expenseIds as any[]) || []
+    const expenseTotal = expenses.reduce((s, e) => s + (Number(e.total) || 0), 0)
+    const advanceTotal = activeAdvances.length > 0
+      ? activeAdvances.reduce((s, a) => s + (Number(a.amount) || 0), 0)
+      : Number((report as any).budget ?? 0)
+    const difference = advanceTotal - expenseTotal
+    const notifySettlement = { advanceTotal, expenseTotal, difference, type: 'devolucion' as const, settledAt: new Date() }
+    // Update settlement in DB only if not already set or the stored type conflicts with actual balance
+    const existingSettlement = (report as any).settlement
+    if (!existingSettlement || (difference > 0.01 && existingSettlement.type !== 'devolucion')) {
+      await this.expenseReportModel.findByIdAndUpdate(id, { $set: { settlement: notifySettlement } }).exec()
     }
 
     const voucher = {
@@ -944,8 +972,7 @@ export class ExpenseReportService {
     }
     await this.expenseReportModel.findByIdAndUpdate(id, { $set: { returnVoucher: voucher } }).exec()
 
-    const settlement = (report as any).settlement
-    const amountFormatted = Math.abs(Number(settlement?.difference ?? 0)).toFixed(2)
+    const amountFormatted = Math.abs(Number(notifySettlement.difference ?? 0)).toFixed(2)
     const clientId = report.clientId.toString()
     const platformUrl = this.emailService.buildAppUrl(`/mis-rendiciones/${id}/detalle`)
     const collaborator = await this.userService.findEmailNameClient(userId)

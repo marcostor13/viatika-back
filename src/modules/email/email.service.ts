@@ -679,6 +679,36 @@ export class EmailService {
     }
   }
 
+  async sendRendicionSubmitted(
+    email: string,
+    data: {
+      recipientName: string
+      collaboratorName: string
+      reportTitle: string
+      budgetFormatted: string
+      expenseCount: number
+      platformUrl?: string
+    }
+  ) {
+    try {
+      this.logger.debug(`Enviando correo de rendición enviada a ${email}`)
+      await this.mailerService.sendMail({
+        to: email,
+        subject: `Rendición enviada para revisión — ${data.reportTitle}`,
+        template: './rendicion-submitted',
+        context: {
+          logoUrl: this.getLogoUrl(),
+          year: new Date().getFullYear(),
+          ...data,
+          platformUrl: this.resolvePlatformHref(data.platformUrl),
+        },
+      })
+      this.logger.debug(`Correo de rendición enviada enviado a ${email}`)
+    } catch (error) {
+      this.logger.error(`Error correo rendición enviada a ${email}:`, error)
+    }
+  }
+
   /** Fase 3 — rechazo al colaborador (Funcionalidades.md §3.1) */
   async sendViaticoRechazoColaborador(
     email: string,

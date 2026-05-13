@@ -1093,7 +1093,7 @@ export class AdvanceService {
   async findAllByClient(clientId: string) {
     return this.advanceModel
       .find({ clientId: new Types.ObjectId(clientId) })
-      .populate('userId', 'name email')
+      .populate('userId', 'name email bankAccount')
       .populate('expenseReportId', 'title status')
       .populate('projectId', 'code name isActive clientId')
       .sort({ createdAt: -1 })
@@ -1516,6 +1516,15 @@ export class AdvanceService {
     return advance.save()
   }
 
+  async findByExpenseReportId(reportId: string, advanceIds: string[] = []): Promise<AdvanceDocument[]> {
+    const oid = new Types.ObjectId(reportId)
+    const idList = advanceIds.map(x => new Types.ObjectId(x))
+    const query = idList.length > 0
+      ? { $or: [{ _id: { $in: idList } }, { expenseReportId: oid }] }
+      : { expenseReportId: oid }
+    return this.advanceModel.find(query).exec() as Promise<AdvanceDocument[]>
+  }
+
   /**
    * Fase 6 — Al aprobar la rendición: liquida en bloque los anticipos pagados vinculados,
    * guarda el settlement en la rendición y avisa a contabilidad si corresponde reembolso al colaborador.
@@ -1555,8 +1564,9 @@ export class AdvanceService {
 
     const paidAdvances = advances.filter(a => a.status === 'paid')
     const settledAdvances = advances.filter(a => a.status === 'settled')
+    const approvedAdvances = advances.filter(a => a.status === 'approved')
 
-    if (paidAdvances.length === 0 && settledAdvances.length === 0) {
+    if (paidAdvances.length === 0 && settledAdvances.length === 0 && approvedAdvances.length === 0) {
       return
     }
 
@@ -1566,8 +1576,13 @@ export class AdvanceService {
         (s, a) => s + (Number(a.amount) || 0),
         0
       )
-    } else {
+    } else if (settledAdvances.length > 0) {
       advanceTotal = settledAdvances.reduce(
+        (s, a) => s + (Number(a.amount) || 0),
+        0
+      )
+    } else {
+      advanceTotal = approvedAdvances.reduce(
         (s, a) => s + (Number(a.amount) || 0),
         0
       )

@@ -6,8 +6,27 @@ import {
   IsMongoId,
   IsArray,
   ValidateNested,
+  IsEnum,
 } from 'class-validator'
 import { Type } from 'class-transformer'
+
+class UpdateBankAccountDto {
+  @IsString()
+  @IsOptional()
+  bankName?: string
+
+  @IsString()
+  @IsOptional()
+  accountNumber?: string
+
+  @IsString()
+  @IsOptional()
+  cci?: string
+
+  @IsEnum(['ahorros', 'corriente'])
+  @IsOptional()
+  accountType?: 'ahorros' | 'corriente'
+}
 
 export class UpdatePermissionsDto {
   @IsArray()
@@ -92,4 +111,9 @@ export class UpdateUserDto {
   @IsString()
   @IsOptional()
   profilePic?: string
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => UpdateBankAccountDto)
+  bankAccount?: UpdateBankAccountDto
 }

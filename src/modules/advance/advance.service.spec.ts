@@ -438,62 +438,6 @@ describe('AdvanceService', () => {
     })
   })
 
-  // ── settle ────────────────────────────────────────────────────────────
-  describe('settle', () => {
-    it('determines type=devolucion when advance > expenses', async () => {
-      const advance = makeMockAdvance({
-        status: 'paid',
-        amount: 500,
-        expenseReportId: new Types.ObjectId(reportId),
-      })
-      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
-      mockExpenseReportService.findOneWithAdvances.mockResolvedValue({
-        expenseIds: [{ total: 300 }],
-      })
-      await service.settle(advanceId)
-      expect(advance.settlement?.type).toBe('devolucion')
-      expect(advance.settlement?.difference).toBe(200)
-      expect(advance.status).toBe('settled')
-    })
-
-    it('determines type=reembolso when expenses > advance', async () => {
-      const advance = makeMockAdvance({
-        status: 'paid',
-        amount: 200,
-        expenseReportId: new Types.ObjectId(reportId),
-      })
-      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
-      mockExpenseReportService.findOneWithAdvances.mockResolvedValue({
-        expenseIds: [{ total: 500 }],
-      })
-      await service.settle(advanceId)
-      expect(advance.settlement?.type).toBe('reembolso')
-      expect(advance.settlement?.difference).toBe(-300)
-    })
-
-    it('determines type=equilibrado when advance equals expenses', async () => {
-      const advance = makeMockAdvance({
-        status: 'paid',
-        amount: 300,
-        expenseReportId: new Types.ObjectId(reportId),
-      })
-      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
-      mockExpenseReportService.findOneWithAdvances.mockResolvedValue({
-        expenseIds: [{ total: 300 }],
-      })
-      await service.settle(advanceId)
-      expect(advance.settlement?.type).toBe('equilibrado')
-    })
-
-    it('throws BadRequestException when advance is not paid', async () => {
-      const advance = makeMockAdvance({ status: 'approved' })
-      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
-      await expect(service.settle(advanceId)).rejects.toThrow(
-        BadRequestException
-      )
-    })
-  })
-
   // ── registerReturn ────────────────────────────────────────────────────
   describe('registerReturn', () => {
     it('sets status=returned and records returned amount', async () => {

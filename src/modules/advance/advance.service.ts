@@ -1141,7 +1141,7 @@ export class AdvanceService {
 
     return this.advanceModel
       .find(filter)
-      .populate('userId', 'name email')
+      .populate('userId', 'name email bankAccount')
       .populate('projectId', 'code name')
       .sort({ createdAt: -1 })
       .exec()
@@ -1260,7 +1260,7 @@ export class AdvanceService {
       }).catch(() => { })
       this.notifyL2ApproversViaticoAprobadoL1(saved as AdvanceDocument).catch(() => { })
     }
-    return saved
+    return this.findOne(id)
   }
 
   async approveL2(
@@ -1302,7 +1302,7 @@ export class AdvanceService {
       type: 'success',
       actionUrl: '/mis-rendiciones',
     }).catch(() => { })
-    return saved
+    return this.findOne(id)
   }
 
   async reject(
@@ -1354,7 +1354,7 @@ export class AdvanceService {
       type: 'error',
       actionUrl: '/mis-rendiciones',
     }).catch(() => { })
-    return saved
+    return this.findOne(id)
   }
 
   async registerPayment(
@@ -1844,7 +1844,7 @@ export class AdvanceService {
           $in: ['pending', 'proof_uploaded', 'rejected'],
         },
       })
-      .populate('userId', 'name email')
+      .populate('userId', 'name email bankAccount')
       .exec() as Promise<Advance[]>
   }
 

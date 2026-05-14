@@ -217,7 +217,7 @@ export class ExpenseReportService {
   async findAllByClient(clientId: string) {
     return await this.expenseReportModel
       .find({ clientId: new Types.ObjectId(clientId) })
-      .populate('userId', 'name email signature')
+      .populate('userId', 'name email signature bankAccount')
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 })
       .exec()
@@ -238,7 +238,7 @@ export class ExpenseReportService {
   async findOne(id: string) {
     const report = await this.expenseReportModel
       .findById(id)
-      .populate('userId', 'name email signature')
+      .populate('userId', 'name email signature bankAccount')
       .populate({ path: 'expenseIds', populate: [{ path: 'categoryId', select: 'name' }, { path: 'proyectId', select: 'name' }] })
       .populate('createdBy', 'name email')
       .populate('approvedBy', 'name email')
@@ -614,7 +614,7 @@ export class ExpenseReportService {
           { reimbursementPaymentInfo: null },
         ],
       })
-      .populate('userId', 'name email')
+      .populate('userId', 'name email bankAccount')
       .sort({ updatedAt: -1 })
       .lean()
       .exec()
@@ -865,7 +865,7 @@ export class ExpenseReportService {
   async findOneWithAdvances(id: string) {
     const report = await this.expenseReportModel
       .findById(id)
-      .populate('userId', 'name email signature')
+      .populate('userId', 'name email signature bankAccount')
       .populate({ path: 'expenseIds', populate: [{ path: 'categoryId', select: 'name' }, { path: 'proyectId', select: 'name' }] })
       .populate('advanceIds')
       .populate('createdBy', 'name email')

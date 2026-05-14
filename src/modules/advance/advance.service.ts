@@ -1260,7 +1260,7 @@ export class AdvanceService {
       }).catch(() => { })
       this.notifyL2ApproversViaticoAprobadoL1(saved as AdvanceDocument).catch(() => { })
     }
-    return saved
+    return this.findOne(id)
   }
 
   async approveL2(
@@ -1302,7 +1302,7 @@ export class AdvanceService {
       type: 'success',
       actionUrl: '/mis-rendiciones',
     }).catch(() => { })
-    return saved
+    return this.findOne(id)
   }
 
   async reject(
@@ -1354,7 +1354,7 @@ export class AdvanceService {
       type: 'error',
       actionUrl: '/mis-rendiciones',
     }).catch(() => { })
-    return saved
+    return this.findOne(id)
   }
 
   async registerPayment(

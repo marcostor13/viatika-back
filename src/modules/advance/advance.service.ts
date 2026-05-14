@@ -1141,7 +1141,7 @@ export class AdvanceService {
 
     return this.advanceModel
       .find(filter)
-      .populate('userId', 'name email')
+      .populate('userId', 'name email bankAccount')
       .populate('projectId', 'code name')
       .sort({ createdAt: -1 })
       .exec()
@@ -1844,7 +1844,7 @@ export class AdvanceService {
           $in: ['pending', 'proof_uploaded', 'rejected'],
         },
       })
-      .populate('userId', 'name email')
+      .populate('userId', 'name email bankAccount')
       .exec() as Promise<Advance[]>
   }
 

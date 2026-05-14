@@ -38,7 +38,6 @@ const mockAdvanceService = {
   resubmitRejected: jest.fn().mockResolvedValue({ _id: advanceId, status: 'pending_l1' }),
   resendCoordinatorNotification: jest.fn().mockResolvedValue({ sent: true }),
   registerPayment: jest.fn().mockResolvedValue({ _id: advanceId, status: 'paid' }),
-  settle: jest.fn().mockResolvedValue({ _id: advanceId, status: 'settled' }),
   registerReturn: jest.fn().mockResolvedValue({ _id: advanceId, status: 'returned' }),
   initiateReturnTracking: jest.fn().mockResolvedValue({ _id: advanceId }),
   uploadReturnProof: jest.fn().mockResolvedValue({ _id: advanceId }),
@@ -217,18 +216,6 @@ describe('AdvanceController', () => {
       const result = await controller.registerPayment(advanceId, dto, req as never)
       expect(mockAdvanceService.registerPayment).toHaveBeenCalledWith(
         advanceId, dto, ROLES.ADMIN, expect.any(Object)
-      )
-      expect(result).toBeDefined()
-    })
-  })
-
-  describe('settle', () => {
-    it('liquida el anticipo y registra auditoria', async () => {
-      const req = makeReq()
-      const result = await controller.settle(advanceId, req as never)
-      expect(mockAdvanceService.settle).toHaveBeenCalledWith(advanceId)
-      expect(mockAuditLogService.log).toHaveBeenCalledWith(
-        expect.objectContaining({ action: 'settle_advance' })
       )
       expect(result).toBeDefined()
     })

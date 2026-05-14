@@ -272,22 +272,6 @@ export class AdvanceController {
     return result
   }
 
-  /** Liquidación: compara anticipo vs gastos reales */
-  @Patch(':id/settle')
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
-  async settle(@Param('id') id: string, @Request() req) {
-    const result = await this.advanceService.settle(id)
-    this.auditLogService.log({
-      userId: req.user._id || req.user.sub,
-      userName: req.user.name || req.user.email,
-      action: 'settle_advance',
-      module: 'tesoreria',
-      entityId: id,
-      clientId: req.user.clientId,
-    })
-    return result
-  }
-
   /** Registrar devolución de saldo */
   @Patch(':id/return')
   @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD, ROLES.COORDINADOR)

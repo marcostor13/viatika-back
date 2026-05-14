@@ -1141,7 +1141,7 @@ export class AdvanceService {
 
     return this.advanceModel
       .find(filter)
-      .populate('userId', 'name email')
+      .populate('userId', 'name email bankAccount')
       .populate('projectId', 'code name')
       .sort({ createdAt: -1 })
       .exec()
@@ -1260,7 +1260,7 @@ export class AdvanceService {
       }).catch(() => { })
       this.notifyL2ApproversViaticoAprobadoL1(saved as AdvanceDocument).catch(() => { })
     }
-    return saved
+    return this.findOne(id)
   }
 
   async approveL2(
@@ -1302,7 +1302,7 @@ export class AdvanceService {
       type: 'success',
       actionUrl: '/mis-rendiciones',
     }).catch(() => { })
-    return saved
+    return this.findOne(id)
   }
 
   async reject(
@@ -1354,7 +1354,7 @@ export class AdvanceService {
       type: 'error',
       actionUrl: '/mis-rendiciones',
     }).catch(() => { })
-    return saved
+    return this.findOne(id)
   }
 
   async registerPayment(
@@ -1448,72 +1448,6 @@ export class AdvanceService {
       actionUrl,
     }).catch(() => { })
     return saved
-  }
-
-  async settle(id: string): Promise<Advance> {
-    const advance = await this.advanceModel.findById(id)
-    if (!advance) throw new NotFoundException(`Viático ${id} no encontrado`)
-
-    if (advance.status !== 'paid') {
-      throw new BadRequestException(
-        `Solo se puede liquidar viáticos pagados (estado actual: ${advance.status})`
-      )
-    }
-
-    let expenseTotal = 0
-    if (advance.expenseReportId) {
-      try {
-        const report = await this.expenseReportService.findOneWithAdvances(
-          advance.expenseReportId.toString()
-        )
-        expenseTotal = (report.expenseIds as any[]).reduce(
-          (sum, e) => sum + (e.total || 0),
-          0
-        )
-      } catch (err) {
-        this.logger.warn(
-          'No se pudo obtener la rendición para calcular liquidación'
-        )
-      }
-    }
-
-    const advanceAmount = advance.amount
-    const difference = advanceAmount - expenseTotal
-    let type: 'reembolso' | 'devolucion' | 'equilibrado'
-
-    if (Math.abs(difference) < 0.01) {
-      type = 'equilibrado'
-    } else if (difference > 0) {
-      type = 'devolucion' // employee must return excess
-    } else {
-      type = 'reembolso' // company must reimburse employee
-    }
-
-    const settlement = {
-      expenseTotal,
-      advanceAmount,
-      difference,
-      type,
-      settledAt: new Date(),
-    }
-
-    advance.settlement = settlement
-    advance.status = 'settled'
-
-    if (advance.expenseReportId) {
-      await this.expenseReportService.updateSettlement(
-        advance.expenseReportId.toString(),
-        {
-          advanceTotal: advanceAmount,
-          expenseTotal,
-          difference,
-          type,
-          settledAt: new Date(),
-        }
-      )
-    }
-
-    return advance.save()
   }
 
   async findByExpenseReportId(reportId: string, advanceIds: string[] = []): Promise<AdvanceDocument[]> {
@@ -1844,7 +1778,7 @@ export class AdvanceService {
           $in: ['pending', 'proof_uploaded', 'rejected'],
         },
       })
-      .populate('userId', 'name email')
+      .populate('userId', 'name email bankAccount')
       .exec() as Promise<Advance[]>
   }
 

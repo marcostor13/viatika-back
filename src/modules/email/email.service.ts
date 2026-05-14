@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common'
+﻿import { Injectable, Logger } from '@nestjs/common'
 import { MailerService } from '@nestjs-modules/mailer'
 
 const DEFAULT_PROD_APP_URL = 'https://app.viatika.tecdidata.com'
@@ -1136,56 +1136,6 @@ export class EmailService {
       })
     } catch (error) {
       this.logger.error(`Error correo devolución rechazada a ${email}:`, error)
-    }
-  }
-
-  // ─── Fase 9 — Reembolso Directo ──────────────────────────────────────────
-
-  async sendReembolsoDirectoAbierto(
-    email: string,
-    data: { recipientName: string; code: string; estimatedAmount: number; justification: string }
-  ) {
-    try {
-      await this.mailerService.sendMail({
-        to: email,
-        subject: `Reembolso Directo Abierto — Código ${data.code}`,
-        template: './reembolso-directo-abierto',
-        context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data },
-      })
-    } catch (error) {
-      this.logger.error(`Error correo reembolso directo abierto a ${email}:`, error)
-    }
-  }
-
-  async sendReembolsoDirectoNuevoContabilidad(
-    email: string,
-    data: { recipientName: string; collaboratorName: string; code: string; estimatedAmount: number; justification: string }
-  ) {
-    try {
-      await this.mailerService.sendMail({
-        to: email,
-        subject: `Nueva solicitud de Reembolso Directo — ${data.code}`,
-        template: './reembolso-directo-nuevo-contabilidad',
-        context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data },
-      })
-    } catch (error) {
-      this.logger.error(`Error correo reembolso directo contabilidad a ${email}:`, error)
-    }
-  }
-
-  async sendReembolsoDirectoPagado(
-    email: string,
-    data: { recipientName: string; code: string; amount: number; receiptUrl: string }
-  ) {
-    try {
-      await this.mailerService.sendMail({
-        to: email,
-        subject: `Pago Registrado — Reembolso Directo ${data.code}`,
-        template: './reembolso-directo-pagado',
-        context: { logoUrl: this.getLogoUrl(), year: new Date().getFullYear(), ...data },
-      })
-    } catch (error) {
-      this.logger.error(`Error correo reembolso directo pagado a ${email}:`, error)
     }
   }
 

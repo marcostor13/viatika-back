@@ -72,8 +72,7 @@ export class UserController {
     @Req() req?: any
   ) {
     const role: string = req?.user?.roles?.[0] ?? ''
-    // Admin and Contabilidad may only query their own company
-    if (role !== ROLES.SUPER_ADMIN) {
+    if (role !== ROLES.SUPER_ADMIN && role !== ROLES.CONTABILIDAD) {
       const tokenClientId = req?.user?.clientId?.toString()
       if (!tokenClientId || tokenClientId !== clientId.toString()) {
         throw new ForbiddenException('No tienes permiso para ver usuarios de esta empresa')
@@ -93,7 +92,7 @@ export class UserController {
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   @Get('details/:id')
   async findOne(@Param('id', ParseObjectIdPipe) id: Types.ObjectId) {
     return await this.userService.findOne(id.toString())

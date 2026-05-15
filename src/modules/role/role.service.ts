@@ -21,10 +21,9 @@ export class RoleService {
     return this.roleModel
       .find({
         $or: [
-          { name: 'Administrador' },
+          { name: 'Coordinador' },
           { name: 'Colaborador' },
           { name: 'Contabilidad' },
-          { name: 'Coordinador' },
         ],
       })
       .exec()
@@ -33,7 +32,7 @@ export class RoleService {
   getAdminRoles() {
     return this.roleModel
       .find({
-        $or: [{ name: 'Administrador' }, { name: 'Superadministrador' }],
+        $or: [{ name: 'Coordinador' }, { name: 'Superadministrador' }],
       })
       .exec()
   }

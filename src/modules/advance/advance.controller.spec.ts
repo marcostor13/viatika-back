@@ -105,8 +105,12 @@ describe('AdvanceController', () => {
       expect(mockAdvanceService.findForViaticosPage).toHaveBeenCalled()
     })
 
-    it('permite acceso a COORDINADOR', async () => {
-      const req = makeReq({ roles: [ROLES.COORDINADOR], role: ROLES.COORDINADOR })
+    it('permite acceso a COLABORADOR con módulo viaticos', async () => {
+      const req = makeReq({
+        roles: [ROLES.COLABORADOR],
+        role: ROLES.COLABORADOR,
+        permissions: { modules: ['viaticos'] },
+      })
       await controller.findForViaticosPage(req as never)
       expect(mockAdvanceService.findForViaticosPage).toHaveBeenCalled()
     })

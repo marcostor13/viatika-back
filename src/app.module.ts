@@ -20,6 +20,7 @@ import { AuditLogModule } from './modules/audit-log/audit-log.module'
 import { NotificationsModule } from './modules/notifications/notifications.module'
 import { AiModule } from './modules/ai/ai.module'
 import { PettyCashModule } from './modules/petty-cash/petty-cash.module'
+import { CategoryGroupModule } from './modules/category-group/category-group.module'
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -43,6 +44,7 @@ import { PettyCashModule } from './modules/petty-cash/petty-cash.module'
     NotificationsModule,
     AiModule,
     PettyCashModule,
+    CategoryGroupModule,
   ],
   controllers: [AppController],
   providers: [AppService],

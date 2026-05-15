@@ -20,6 +20,7 @@ export class DatabaseSeederService implements OnApplicationBootstrap {
   async onApplicationBootstrap() {
     await this.migrateEmailIndex()
     await this.seedRoles()
+    await this.migrateAdminRole()
     await this.seedSuperAdmin()
   }
 
@@ -47,7 +48,7 @@ export class DatabaseSeederService implements OnApplicationBootstrap {
         // Determine the old name to look for migration
         let oldName = ''
         if (roleName === ROLES.SUPER_ADMIN) oldName = 'Super'
-        else if (roleName === ROLES.ADMIN) oldName = 'Admin'
+        else if (roleName === ROLES.ADMIN) oldName = 'Administrador'
         else if (roleName === ROLES.COLABORADOR) oldName = 'User'
 
         const roleWithOldName = oldName
@@ -69,6 +70,28 @@ export class DatabaseSeederService implements OnApplicationBootstrap {
       } else {
         this.logger.log(`Role '${roleName}' already exists.`)
       }
+    }
+  }
+
+  /** Reassign users still pointing to the legacy 'Administrador' role to 'Coordinador'. */
+  private async migrateAdminRole() {
+    const legacyRole = await this.roleService.getByName('Administrador')
+    if (!legacyRole) return
+
+    const newRole = await this.roleService.getByName(ROLES.ADMIN)
+    if (!newRole) return
+
+    const legacyId = (legacyRole as any)._id
+    const newId = (newRole as any)._id
+
+    const updated = await this.userModel.updateMany(
+      { roleId: legacyId },
+      { $set: { roleId: newId } },
+    )
+    if (updated.modifiedCount > 0) {
+      this.logger.log(
+        `Migrated ${updated.modifiedCount} user(s) from 'Administrador' to '${ROLES.ADMIN}'`,
+      )
     }
   }
 

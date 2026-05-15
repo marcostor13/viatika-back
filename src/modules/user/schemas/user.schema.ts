@@ -12,6 +12,7 @@ export interface UserPermissions {
   modules: string[]
   canApproveL1: boolean
   canApproveL2: boolean
+  categoryIds: string[]
 }
 
 export interface UserDocument extends Document {
@@ -92,9 +93,10 @@ export class User {
       modules: { type: [String], default: [] },
       canApproveL1: { type: Boolean, default: false },
       canApproveL2: { type: Boolean, default: false },
+      categoryIds: { type: [String], default: [] },
       _id: false,
     },
-    default: () => ({ modules: [], canApproveL1: false, canApproveL2: false }),
+    default: () => ({ modules: [], canApproveL1: false, canApproveL2: false, categoryIds: [] }),
   })
   permissions: UserPermissions
 

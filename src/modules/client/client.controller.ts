@@ -27,13 +27,13 @@ export class ClientController {
   ) {}
 
   @Post()
-  @Roles(ROLES.SUPER_ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
   create(@Body() createClientDto: CreateClientDto) {
     return this.clientService.create(createClientDto)
   }
 
   @Post('register-with-user')
-  @Roles(ROLES.SUPER_ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
   async registerClientWithUser(@Body() payload: CreateClientWithUserDto) {
     return this.clientOnboardingService.registerClientWithUser(payload)
   }

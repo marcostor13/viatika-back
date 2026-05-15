@@ -6,6 +6,7 @@ export interface ClientLimits {
 }
 
 export interface ClientDocument extends Document {
+  codigo: string
   comercialName: string
   businessName: string
   businessId: string //ruc
@@ -22,6 +23,9 @@ export interface GetClientDocument extends ClientDocument {
 
 @Schema({ timestamps: true })
 export class Client {
+  @Prop({ required: true, unique: true, trim: true, uppercase: true })
+  codigo: string
+
   @Prop({ required: true })
   comercialName: string
 
@@ -31,13 +35,13 @@ export class Client {
   @Prop({ required: true })
   businessId: string //ruc
 
-  @Prop({ required: true })
+  @Prop({ default: '' })
   address: string
 
-  @Prop({ required: true })
+  @Prop({ default: '' })
   phone: string
 
-  @Prop({ required: true })
+  @Prop({ default: '' })
   email: string
 
   @Prop()
@@ -53,3 +57,4 @@ export class Client {
 }
 
 export const ClientSchema = SchemaFactory.createForClass(Client)
+ClientSchema.index({ codigo: 1 }, { unique: true })

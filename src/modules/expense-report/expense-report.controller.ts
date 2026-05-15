@@ -88,7 +88,7 @@ export class ExpenseReportController {
 
   /** Fase 6 — Tesorería: rendiciones aprobadas con reembolso pendiente de comprobante */
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD)
   @Get('pending-reimbursements/client/:clientId')
   findPendingReimbursements(
     @Param('clientId') clientId: string,
@@ -201,7 +201,7 @@ export class ExpenseReportController {
 
   /** Fase 6 — Registro de pago de reembolso (contabilidad / tesorería con canApproveL2) */
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD)
   @Patch(':id/register-reimbursement-payment')
   async registerReimbursementPayment(
     @Param('id') id: string,

@@ -9,7 +9,13 @@ import {
   UseGuards,
   Query,
   Request,
+  UseInterceptors,
+  UploadedFile,
+  BadRequestException,
 } from '@nestjs/common'
+import { FileInterceptor } from '@nestjs/platform-express'
+import { memoryStorage } from 'multer'
+import * as XLSX from 'xlsx'
 import { CategoryService } from './category.service'
 import { CreateCategoryDto } from './dto/create-category.dto'
 import { UpdateCategoryDto } from './dto/update-category.dto'
@@ -45,35 +51,87 @@ export class CategoryController {
     return result
   }
 
-  @Get(':clientId/flat')
-  @Roles(
-    ROLES.SUPER_ADMIN,
-    ROLES.ADMIN,
-    ROLES.COLABORADOR,
-    ROLES.CONTABILIDAD
+  @Post('import')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 2 * 1024 * 1024 },
+      fileFilter: (_req, file, cb) => {
+        const allowed = [
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'application/vnd.ms-excel',
+        ]
+        if (allowed.includes(file.mimetype)) {
+          cb(null, true)
+        } else {
+          cb(new BadRequestException('Solo se permiten archivos Excel (.xlsx)'), false)
+        }
+      },
+    })
   )
-  findAllFlat(@Param('clientId') clientId: string) {
+  async importFromExcel(
+    @UploadedFile() file: Express.Multer.File,
+    @Body('clientId') clientId: string,
+    @Request() req: any
+  ) {
+    if (!file) throw new BadRequestException('No se recibió ningún archivo')
+    if (!clientId) throw new BadRequestException('clientId es requerido')
+
+    const workbook = XLSX.read(file.buffer, { type: 'buffer' })
+    const sheetName = workbook.SheetNames[0]
+    const sheet = workbook.Sheets[sheetName]
+    const rows = XLSX.utils.sheet_to_json<Record<string, any>>(sheet, { defval: '' })
+
+    const mapped = rows.map((row) => ({
+      name: String(row['Nombre*'] || row['Nombre'] || '').trim(),
+      cuenta: String(row['Cuenta'] || '').trim() || undefined,
+      description: String(row['Descripción'] || row['Descripcion'] || '').trim() || undefined,
+      observaciones: String(row['Observaciones'] || '').trim() || undefined,
+      limit:
+        row['Límite'] != null && row['Límite'] !== ''
+          ? parseFloat(String(row['Límite']))
+          : null,
+    }))
+
+    const result = await this.categoryService.bulkCreate(mapped, clientId)
+
+    this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email,
+      action: 'import_categories',
+      module: 'categorias',
+      details: `Importadas: ${result.created}, Errores: ${result.errors.length}`,
+      clientId: req.user.clientId,
+    })
+
+    return result
+  }
+
+  @Get(':clientId/flat-all')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
+  findAllFlatAdmin(@Param('clientId') clientId: string) {
     return this.categoryService.findAllFlat(clientId)
+  }
+
+  @Get(':clientId/flat')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD)
+  findAllFlat(@Param('clientId') clientId: string, @Request() req: any) {
+    const categoryIds: string[] | undefined = req.user?.permissions?.categoryIds
+    const filter = categoryIds && categoryIds.length > 0 ? categoryIds : undefined
+    return this.categoryService.findAllFlat(clientId, filter)
   }
 
   @Get('flat/:clientId')
-  @Roles(
-    ROLES.SUPER_ADMIN,
-    ROLES.ADMIN,
-    ROLES.COLABORADOR,
-    ROLES.CONTABILIDAD
-  )
-  findAllFlatLegacy(@Param('clientId') clientId: string) {
-    return this.categoryService.findAllFlat(clientId)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD)
+  findAllFlatLegacy(@Param('clientId') clientId: string, @Request() req: any) {
+    const categoryIds: string[] | undefined = req.user?.permissions?.categoryIds
+    const filter = categoryIds && categoryIds.length > 0 ? categoryIds : undefined
+    return this.categoryService.findAllFlat(clientId, filter)
   }
 
   @Get(':clientId')
-  @Roles(
-    ROLES.SUPER_ADMIN,
-    ROLES.ADMIN,
-    ROLES.COLABORADOR,
-    ROLES.CONTABILIDAD
-  )
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD)
   findAll(
     @Param('clientId') clientId: string,
     @Query('page') page?: string,
@@ -88,24 +146,14 @@ export class CategoryController {
   }
 
   @Get(':id/:clientId')
-  @Roles(
-    ROLES.SUPER_ADMIN,
-    ROLES.ADMIN,
-    ROLES.COLABORADOR,
-    ROLES.CONTABILIDAD
-  )
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD)
   @UseGuards(JwtAuthGuard, RolesGuard)
   findOne(@Param('id') id: string, @Param('clientId') clientId: string) {
     return this.categoryService.findOne(id, clientId)
   }
 
   @Get('key/:key/:clientId')
-  @Roles(
-    ROLES.SUPER_ADMIN,
-    ROLES.ADMIN,
-    ROLES.COLABORADOR,
-    ROLES.CONTABILIDAD
-  )
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD)
   @UseGuards(JwtAuthGuard, RolesGuard)
   findByKey(@Param('key') key: string, @Param('clientId') clientId: string) {
     return this.categoryService.findByKey(key, clientId)
@@ -127,7 +175,10 @@ export class CategoryController {
       action: 'update_category',
       module: 'categorias',
       entityId: id,
-      details: JSON.stringify({ before: { limit: (before as any)?.limit }, after: { limit: updateCategoryDto.limit } }),
+      details: JSON.stringify({
+        before: { limit: (before as any)?.limit },
+        after: { limit: updateCategoryDto.limit },
+      }),
       clientId: req.user.clientId,
     })
     return result

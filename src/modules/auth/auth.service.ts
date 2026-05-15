@@ -60,7 +60,7 @@ export class AuthService {
         userId: (contabilidadUser._id as any).toString(),
         roles: [(contabilidadUser.role as any)?.name],
         clientId: '',
-        permissions: contabilidadUser.permissions || { modules: [], canApproveL1: false, canApproveL2: false },
+        permissions: contabilidadUser.permissions || { modules: [], canApproveL1: false, canApproveL2: false, categoryIds: [] },
         mustChangePassword: !!contabilidadUser.mustChangePassword,
         isHubToken: true,
       }
@@ -157,7 +157,7 @@ export class AuthService {
       userId: (user._id as any).toString(),
       roles: [(user.role as any)?.name],
       clientId,
-      permissions: user.permissions || { modules: [], canApproveL1: false, canApproveL2: false },
+      permissions: user.permissions || { modules: [], canApproveL1: false, canApproveL2: false, categoryIds: [] },
       mustChangePassword,
     }
     const { password: _, ...userData } = user as any

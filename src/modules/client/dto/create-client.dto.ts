@@ -1,4 +1,13 @@
-import { IsString, IsNotEmpty, IsOptional, IsNumber, Min, ValidateNested } from 'class-validator'
+import {
+  IsString,
+  IsNotEmpty,
+  IsOptional,
+  IsNumber,
+  Min,
+  ValidateNested,
+  IsEmail,
+  ValidateIf,
+} from 'class-validator'
 import { Type } from 'class-transformer'
 
 class ClientLimitsDto {
@@ -11,6 +20,10 @@ class ClientLimitsDto {
 export class CreateClientDto {
   @IsNotEmpty()
   @IsString()
+  codigo: string
+
+  @IsNotEmpty()
+  @IsString()
   comercialName: string
 
   @IsString()
@@ -19,17 +32,22 @@ export class CreateClientDto {
   @IsString()
   businessId: string //ruc
 
+  @IsOptional()
   @IsString()
-  address: string
+  address?: string
 
+  @IsOptional()
   @IsString()
-  phone: string
+  phone?: string
 
-  @IsString()
-  email: string
+  @IsOptional()
+  @ValidateIf((o) => typeof o.email === 'string' && o.email.trim() !== '')
+  @IsEmail()
+  email?: string
 
+  @IsOptional()
   @IsString()
-  logo: string
+  logo?: string
 
   @IsOptional()
   @ValidateNested()

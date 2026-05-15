@@ -122,7 +122,7 @@ export class UserController {
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   @Patch(':id/permissions')
   async updatePermissions(
     @Param('id', ParseObjectIdPipe) id: Types.ObjectId,

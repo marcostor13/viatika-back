@@ -1,6 +1,11 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common'
 import { Reflector } from '@nestjs/core'
 
+const ROLE_ALIASES: Record<string, string> = {
+  Administrador: 'Coordinador',
+  Admin: 'Coordinador',
+}
+
 @Injectable()
 export class RolesGuard implements CanActivate {
   constructor(private reflector: Reflector) {}
@@ -15,7 +20,10 @@ export class RolesGuard implements CanActivate {
     }
     const request = context.switchToHttp().getRequest()
     const user = request.user
+    if (!user?.roles?.length) return false
 
-    return requiredRoles.some(role => user.roles[0] === role)
+    const rawRole: string = user.roles[0]
+    const effectiveRole = ROLE_ALIASES[rawRole] ?? rawRole
+    return requiredRoles.some(role => effectiveRole === role)
   }
 }

@@ -13,13 +13,17 @@ import { RoleModule } from '../role/role.module'
 import { DatabaseSeederService } from './database-seeder.service'
 import { MongooseModule } from '@nestjs/mongoose'
 import { User, UserSchema } from '../user/schemas/user.schema'
+import { Category, CategorySchema } from '../category/entities/category.entity'
 
 @Module({
   imports: [
     UserModule,
     RoleModule,
     ClientModule,
-    MongooseModule.forFeature([{ name: User.name, schema: UserSchema }]),
+    MongooseModule.forFeature([
+      { name: User.name, schema: UserSchema },
+      { name: Category.name, schema: CategorySchema },
+    ]),
     PassportModule,
     JwtModule.register({
       secret: jwtConstants.secret,

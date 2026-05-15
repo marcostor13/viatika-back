@@ -6,10 +6,11 @@ export interface CategoryDocument extends Document {
   name: string
   key: string
   description?: string
+  cuenta?: string
+  observaciones?: string
   isActive: boolean
   limit: number | null
   clientId: Types.ObjectId
-  parentId: Types.ObjectId | null
   createdAt: Date
   updatedAt: Date
 }
@@ -30,6 +31,12 @@ export class Category {
   @Prop()
   description?: string
 
+  @Prop()
+  cuenta?: string
+
+  @Prop()
+  observaciones?: string
+
   @Prop({ default: true })
   isActive: boolean
 
@@ -38,9 +45,6 @@ export class Category {
 
   @Prop({ required: true, type: Types.ObjectId, ref: 'Client' })
   clientId: Types.ObjectId
-
-  @Prop({ type: Types.ObjectId, ref: 'Category', default: null })
-  parentId: Types.ObjectId | null
 }
 
 export const CategorySchema = SchemaFactory.createForClass(Category)

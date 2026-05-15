@@ -40,6 +40,10 @@ export class UpdatePermissionsDto {
   @IsBoolean()
   @IsOptional()
   canApproveL2?: boolean
+
+  @IsArray()
+  @IsOptional()
+  categoryIds?: string[]
 }
 
 export class UpdateUserDto {

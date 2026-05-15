@@ -1114,7 +1114,7 @@ export class AdvanceService {
     )
     const isCoordinator =
       !isAdminRole &&
-      (opts.requesterRole === ROLES.COORDINADOR || opts.requesterPermissions?.canApproveL1 === true)
+      (opts.requesterPermissions?.canApproveL1 === true || opts.requesterPermissions?.modules?.includes('viaticos') === true)
 
     const filter: Record<string, unknown> = {
       clientId: new Types.ObjectId(opts.clientId),
@@ -1220,7 +1220,7 @@ export class AdvanceService {
     }
 
     const canApproveL1 =
-      [ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COORDINADOR].includes(userRole as ROLES) ||
+      [ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(userRole as ROLES) ||
       userPermissions?.canApproveL1 === true
     if (!canApproveL1)
       throw new ForbiddenException('No tienes permiso para aprobar en nivel 1')
@@ -1322,7 +1322,7 @@ export class AdvanceService {
     }
 
     const canReject =
-      [ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COORDINADOR].includes(userRole as ROLES) ||
+      [ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(userRole as ROLES) ||
       userPermissions?.canApproveL1 === true ||
       userPermissions?.canApproveL2 === true
     if (!canReject)

@@ -13,6 +13,14 @@ export class CreateCategoryDto {
   @IsOptional()
   description?: string
 
+  @IsString()
+  @IsOptional()
+  cuenta?: string
+
+  @IsString()
+  @IsOptional()
+  observaciones?: string
+
   @IsBoolean()
   @IsOptional()
   isActive?: boolean
@@ -25,8 +33,4 @@ export class CreateCategoryDto {
   @IsString()
   @IsNotEmpty()
   clientId: string
-
-  @IsOptional()
-  @IsString()
-  parentId?: string | null
 }

@@ -22,6 +22,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         modules: [],
         canApproveL1: false,
         canApproveL2: false,
+        categoryIds: [],
       },
     }
   }

@@ -207,11 +207,13 @@ export class ExpenseController {
         },
       }
     } catch (error) {
+      const body = error.response?.data ?? error.response ?? null
       return {
         success: false,
         message: 'Error en credenciales SUNAT',
-        error: error.message,
-        details: error.response?.data || 'Sin detalles adicionales',
+        sunat_error: body?.sunat_error ?? body?.error ?? null,
+        sunat_description: body?.sunat_description ?? body?.error_description ?? null,
+        detail: body?.message ?? error.message ?? 'Sin detalles adicionales',
       }
     }
   }

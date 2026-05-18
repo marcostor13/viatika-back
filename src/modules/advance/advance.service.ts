@@ -1094,7 +1094,7 @@ export class AdvanceService {
   async findAllByClient(clientId: string) {
     return this.advanceModel
       .find({ clientId: new Types.ObjectId(clientId) })
-      .populate('userId', 'name email bankAccount')
+      .populate('userId', 'name email bankAccount dni')
       .populate('expenseReportId', 'title status')
       .populate('projectId', 'code name isActive clientId')
       .sort({ createdAt: -1 })
@@ -1142,7 +1142,7 @@ export class AdvanceService {
 
     return this.advanceModel
       .find(filter)
-      .populate('userId', 'name email bankAccount')
+      .populate('userId', 'name email bankAccount dni')
       .populate('projectId', 'code name')
       .sort({ createdAt: -1 })
       .exec()
@@ -1182,7 +1182,7 @@ export class AdvanceService {
         clientId: new Types.ObjectId(clientId),
         status: { $in: ['pending_l1', 'pending_l2', 'approved'] },
       })
-      .populate('userId', 'name email bankAccount')
+      .populate('userId', 'name email bankAccount dni')
       .populate('expenseReportId', 'title status')
       .populate('projectId', 'code name isActive clientId')
       .sort({ createdAt: -1 })
@@ -1192,7 +1192,7 @@ export class AdvanceService {
   async findOne(id: string) {
     const advance = await this.advanceModel
       .findById(id)
-      .populate('userId', 'name email bankAccount')
+      .populate('userId', 'name email bankAccount dni')
       .populate('expenseReportId', 'title status budget')
       .populate('projectId')
       .populate({
@@ -1779,7 +1779,7 @@ export class AdvanceService {
           $in: ['pending', 'proof_uploaded', 'rejected'],
         },
       })
-      .populate('userId', 'name email bankAccount')
+      .populate('userId', 'name email bankAccount dni')
       .exec() as Promise<Advance[]>
   }
 

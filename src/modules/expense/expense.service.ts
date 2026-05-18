@@ -563,40 +563,65 @@ export class ExpenseService {
   async generateTokenSunat(clientId: string) {
     try {
       const credentials = await this.sunatConfigService.getCredentials(clientId)
-      console.log('credentials', credentials)
 
-      console.log('credentials', credentials)
       const client_id = credentials.clientId
       const client_secret = credentials.clientSecret
 
-      const api = `https://api-seguridad.sunat.gob.pe/v1/clientesextranet/${client_id}/oauth2/token/`
-      const headers = {
-        'Content-Type': 'application/x-www-form-urlencoded',
+      if (!client_id || !client_secret) {
+        throw new HttpException(
+          'Credenciales SUNAT incompletas: falta clientId o clientSecret',
+          HttpStatus.BAD_REQUEST,
+        )
       }
 
-      const grant_type = 'client_credentials'
+      const api = `https://api-seguridad.sunat.gob.pe/v1/clientesextranet/${client_id}/oauth2/token/`
       const scope = 'https://api.sunat.gob.pe/v1/contribuyente/contribuyentes'
 
-      const data = {
-        grant_type: grant_type,
-        scope: scope,
-        client_id: client_id,
-        client_secret: client_secret,
-      }
+      // URLSearchParams garantiza encoding correcto para application/x-www-form-urlencoded
+      const body = new URLSearchParams()
+      body.set('grant_type', 'client_credentials')
+      body.set('scope', scope)
+      body.set('client_id', client_id)
+      body.set('client_secret', client_secret)
+
+      this.logger.log(`[SUNAT Token] clientId interno: ${clientId}`)
+      this.logger.log(`[SUNAT Token] client_id SUNAT: ${client_id}`)
+      this.logger.log(`[SUNAT Token] URL: ${api}`)
+      this.logger.log(`[SUNAT Token] body (sin secret): grant_type=client_credentials&scope=${encodeURIComponent(scope)}&client_id=${client_id}&client_secret=***`)
+
       const response = await firstValueFrom(
-        this.httpService.post(api, data, { headers })
+        this.httpService.post(api, body.toString(), {
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        })
       )
 
-      await this.sunatConfigService.update(credentials._id, {
-        isActive: true,
-      })
+      this.logger.log(`[SUNAT Token] Token obtenido exitosamente para client_id: ${client_id}`)
+
+      await this.sunatConfigService.update(credentials._id, { isActive: true })
 
       return response.data
     } catch (error) {
-      this.logger.error('Error al generar token de SUNAT', error)
+      const sunatError = error?.response?.data
+      const status = error?.response?.status
+
+      this.logger.error(
+        `[SUNAT Token] Error al generar token — HTTP ${status ?? 'N/A'}: ${JSON.stringify(sunatError ?? error?.message)}`
+      )
+
+      if (sunatError?.error) {
+        throw new HttpException(
+          {
+            message: 'Error de autenticación SUNAT',
+            sunat_error: sunatError.error,
+            sunat_description: sunatError.error_description,
+          },
+          HttpStatus.BAD_GATEWAY,
+        )
+      }
+
       throw new HttpException(
-        'Error al generar token de SUNAT',
-        HttpStatus.INTERNAL_SERVER_ERROR
+        error?.message || 'Error al generar token de SUNAT',
+        HttpStatus.INTERNAL_SERVER_ERROR,
       )
     }
   }

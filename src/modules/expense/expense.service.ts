@@ -1273,7 +1273,6 @@ export class ExpenseService {
                   },
                 },
               },
-              format: '%Y-%m-%d',
               timezone: 'UTC',
               onError: null,
               onNull: null,

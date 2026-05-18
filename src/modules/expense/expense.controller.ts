@@ -192,7 +192,7 @@ export class ExpenseController {
 
   /** Rutas estáticas antes de `:clientId` para no capturar `invoice` como clientId */
   @Get('test-sunat-credentials/:clientId')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   @UseGuards(JwtAuthGuard, RolesGuard)
   async testSunatCredentials(@Param('clientId') clientId: string) {
     try {

@@ -128,6 +128,7 @@ export class SunatConfigService {
         _id: config._id,
         clientId: config.clientIdSunat,
         clientSecret: config.clientSecret,
+        ruc: config.ruc,
       }
     } catch (error) {
       throw error

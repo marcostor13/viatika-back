@@ -577,21 +577,23 @@ export class ExpenseService {
       const api = `https://api-seguridad.sunat.gob.pe/v1/clientesextranet/${client_id}/oauth2/token/`
       const scope = 'https://api.sunat.gob.pe/v1/contribuyente/contribuyentes'
 
-      // URLSearchParams garantiza encoding correcto para application/x-www-form-urlencoded
+      // SUNAT requiere credenciales en Authorization: Basic (RFC 6749 §2.3.1)
+      const basicToken = Buffer.from(`${client_id}:${client_secret}`).toString('base64')
+
       const body = new URLSearchParams()
       body.set('grant_type', 'client_credentials')
       body.set('scope', scope)
-      body.set('client_id', client_id)
-      body.set('client_secret', client_secret)
 
       this.logger.log(`[SUNAT Token] clientId interno: ${clientId}`)
       this.logger.log(`[SUNAT Token] client_id SUNAT: ${client_id}`)
       this.logger.log(`[SUNAT Token] URL: ${api}`)
-      this.logger.log(`[SUNAT Token] body (sin secret): grant_type=client_credentials&scope=${encodeURIComponent(scope)}&client_id=${client_id}&client_secret=***`)
 
       const response = await firstValueFrom(
         this.httpService.post(api, body.toString(), {
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': `Basic ${basicToken}`,
+          },
         })
       )
 

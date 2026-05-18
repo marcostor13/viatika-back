@@ -15,12 +15,16 @@ export class CreateAdvanceLineDto {
   @IsMongoId()
   categoryId: string
 
+  @IsString()
+  @IsOptional()
+  detalle?: string
+
   @IsNumber()
   @Min(0)
   importe: number
 
   @IsNumber()
-  @Min(1)
+  @Min(0)
   peopleCount: number
 
   @IsNumber()
@@ -28,7 +32,7 @@ export class CreateAdvanceLineDto {
   glpPerDay: number
 
   @IsNumber()
-  @Min(1)
+  @Min(0)
   days: number
 
   @IsNumber()

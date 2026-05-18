@@ -71,6 +71,7 @@ export interface PaymentInfo {
 /** Detalle por categoría — Fase 2 (Funcionalidades.md §2.1) */
 export interface AdvanceLineItem {
   categoryId: Types.ObjectId
+  detalle?: string
   importe: number
   peopleCount: number
   glpPerDay: number
@@ -159,6 +160,7 @@ export class Advance {
     type: [
       {
         categoryId: { type: Types.ObjectId, ref: 'Category', required: true },
+        detalle: { type: String, required: false },
         importe: { type: Number, required: true },
         peopleCount: { type: Number, required: true },
         glpPerDay: { type: Number, required: true },

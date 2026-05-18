@@ -566,6 +566,7 @@ export class ExpenseService {
 
       const client_id = credentials.clientId
       const client_secret = credentials.clientSecret
+      const ruc = credentials.ruc
 
       if (!client_id || !client_secret) {
         throw new HttpException(
@@ -577,15 +578,18 @@ export class ExpenseService {
       const api = `https://api-seguridad.sunat.gob.pe/v1/clientesextranet/${client_id}/oauth2/token/`
       const scope = 'https://api.sunat.gob.pe/v1/contribuyente/contribuyentes'
 
-      // SUNAT requiere credenciales en Authorization: Basic (RFC 6749 §2.3.1)
+      // SUNAT requiere Basic Auth + client_id también en el body
       const basicToken = Buffer.from(`${client_id}:${client_secret}`).toString('base64')
 
       const body = new URLSearchParams()
       body.set('grant_type', 'client_credentials')
       body.set('scope', scope)
+      body.set('client_id', client_id)
+      body.set('client_secret', client_secret)
 
       this.logger.log(`[SUNAT Token] clientId interno: ${clientId}`)
       this.logger.log(`[SUNAT Token] client_id SUNAT: ${client_id}`)
+      this.logger.log(`[SUNAT Token] RUC: ${ruc}`)
       this.logger.log(`[SUNAT Token] URL: ${api}`)
 
       const response = await firstValueFrom(

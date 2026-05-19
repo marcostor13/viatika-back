@@ -63,9 +63,17 @@ export class AdvanceService {
     return this.createSimpleAdvance(dto)
   }
 
-  /** Total fila = (importe + GLP/día) × días × cantidad de personas (redondeo a 2 decimales). */
+  /**
+   * Total fila (regla cliente):
+   * - Si GLP/día > 0: importe × GLP/día × días
+   * - Si no: importe × personas × días
+   */
   private computeExpectedLineTotal(line: CreateAdvanceLineDto): number {
-    const raw = (line.importe + line.glpPerDay) * line.days * line.peopleCount
+    const imp = Number(line.importe) || 0
+    const glp = Number(line.glpPerDay) || 0
+    const d = Number(line.days) || 0
+    const p = Number(line.peopleCount) || 0
+    const raw = glp > 0 ? imp * glp * d : imp * p * d
     return Math.round(raw * 100) / 100
   }
 

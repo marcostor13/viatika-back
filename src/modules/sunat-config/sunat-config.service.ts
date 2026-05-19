@@ -43,16 +43,8 @@ export class SunatConfigService {
   }
 
   async findOne(clientId: string) {
-    try {
-      const config = await this.sunatConfigModel.findOne({ clientId }).exec()
-      if (!config) {
-        throw new NotFoundException('No se encontró configuración SUNAT')
-      }
-
-      return config
-    } catch (error) {
-      throw error
-    }
+    const config = await this.sunatConfigModel.findOne({ clientId }).exec()
+    return config ?? null
   }
 
   async update(_id: string, updateSunatConfigDto: UpdateSunatConfigDto) {

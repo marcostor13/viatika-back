@@ -578,19 +578,19 @@ export class ExpenseService {
       const api = `https://api-seguridad.sunat.gob.pe/v1/clientesextranet/${client_id}/oauth2/token/`
       const scope = 'https://api.sunat.gob.pe/v1/contribuyente/contribuyentes'
 
-      // SUNAT requiere Basic Auth + client_id también en el body
+      // SUNAT: Basic Auth + grant_type + client_id en body (sin client_secret en body)
       const basicToken = Buffer.from(`${client_id}:${client_secret}`).toString('base64')
 
       const body = new URLSearchParams()
       body.set('grant_type', 'client_credentials')
       body.set('scope', scope)
       body.set('client_id', client_id)
-      body.set('client_secret', client_secret)
 
       this.logger.log(`[SUNAT Token] clientId interno: ${clientId}`)
       this.logger.log(`[SUNAT Token] client_id SUNAT: ${client_id}`)
       this.logger.log(`[SUNAT Token] RUC: ${ruc}`)
       this.logger.log(`[SUNAT Token] URL: ${api}`)
+      this.logger.log(`[SUNAT Token] body: grant_type=client_credentials&scope=${scope}&client_id=${client_id}`)
 
       const response = await firstValueFrom(
         this.httpService.post(api, body.toString(), {

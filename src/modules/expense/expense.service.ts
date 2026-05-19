@@ -343,7 +343,7 @@ export class ExpenseService {
   private async validateWithSunatIfPossible(
     data: ExtractedInvoiceData,
     clientId: string,
-    companyRuc: string
+    companyRuc: string | undefined
   ): Promise<{ validation: SunatValidationMeta; expenseStatus: string }> {
     let validation: SunatValidationMeta = {
       status: 'PENDING',
@@ -352,7 +352,7 @@ export class ExpenseService {
     }
     let expenseStatus = 'pending'
 
-    if (data.rucEmisor && data.serie && data.correlativo) {
+    if (data.rucEmisor && data.serie && data.correlativo && companyRuc) {
       try {
         const sunatApiUrl = `https://api.sunat.gob.pe/v1/contribuyente/contribuyentes/${companyRuc}/validarcomprobante`
         this.logger.log(`Usando RUC empresa para consulta SUNAT: ${companyRuc}`)
@@ -681,7 +681,7 @@ export class ExpenseService {
         await this.validateWithSunatIfPossible(
           extraction,
           body.clientId,
-          configSunat.ruc
+          configSunat?.ruc
         )
 
       const expense = await this.createExpenseDocument(
@@ -778,7 +778,7 @@ export class ExpenseService {
         await this.validateWithSunatIfPossible(
           extraction,
           body.clientId,
-          configSunat.ruc
+          configSunat?.ruc
         )
 
       const expense = await this.createExpenseDocument(
@@ -1938,7 +1938,7 @@ export class ExpenseService {
     try {
       const configSunat = await this.sunatConfigService.findOne(clientId)
       const { validation, expenseStatus } =
-        await this.validateWithSunatIfPossible(data, clientId, configSunat.ruc)
+        await this.validateWithSunatIfPossible(data, clientId, configSunat?.ruc)
 
       const updatedExpense = await this.expenseRepository
         .findByIdAndUpdate(

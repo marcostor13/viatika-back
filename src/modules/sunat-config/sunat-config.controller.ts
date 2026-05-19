@@ -60,11 +60,7 @@ export class SunatConfigController {
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   async findOne(@Param('clientId') clientId: string) {
     try {
-      this.logger.log('Recibida solicitud para obtener configuración SUNAT')
-
       const config = await this.sunatConfigService.findOne(clientId)
-
-      this.logger.log('Configuración SUNAT obtenida exitosamente')
       return config
     } catch (error) {
       this.logger.error(

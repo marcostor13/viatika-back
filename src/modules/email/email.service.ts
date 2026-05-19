@@ -11,6 +11,14 @@ export class EmailService {
 
   constructor(private readonly mailerService: MailerService) {}
 
+  private async send(options: Parameters<MailerService['sendMail']>[0]): Promise<void> {
+    if (process.env.EMAILS_ENABLED === 'false') {
+      this.logger.debug(`[EMAILS DISABLED] Omitiendo envío a ${options.to} — ${options.subject}`)
+      return
+    }
+    await this.mailerService.sendMail(options)
+  }
+
   /**
    * URL pública del front (local vs prod vía env).
    * Preferir `APP_PUBLIC_URL` o `FRONTEND_URL` en `.env`.
@@ -121,7 +129,7 @@ export class EmailService {
   async sendCodeConfirmation(email: string) {
     try {
       this.logger.debug(`Enviando código de confirmación a ${email}`)
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject: 'Confirma tu correo en Nuestra App',
         template: './confirmation', // se añade automáticamente la extensión (.hbs)
@@ -154,7 +162,7 @@ export class EmailService {
   ) {
     try {
       this.logger.debug(`Enviando notificación de factura a ${email}`, data)
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject: 'Nueva Factura Subida',
         template: './invoice-notification',
@@ -184,7 +192,7 @@ export class EmailService {
     invoiceNumber: string,
     paymentDate: string
   ) {
-    await this.mailerService.sendMail({
+    await this.send({
       to: email,
       subject: 'Pago Programado',
       template: './payment-scheduled',
@@ -203,7 +211,7 @@ export class EmailService {
     decision: 'approved' | 'rejected',
     reason?: string
   ) {
-    await this.mailerService.sendMail({
+    await this.send({
       to: email,
       subject: `Factura ${decision === 'approved' ? 'Aprobada' : 'Rechazada'}`,
       template: './accounting-decision',
@@ -227,7 +235,7 @@ export class EmailService {
   ) {
     try {
       this.logger.debug(`Enviando notificación de acta a ${email}`)
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject: 'Acta de Aceptación Subida',
         template: './acta-notification',
@@ -269,7 +277,7 @@ export class EmailService {
   ) {
     try {
       this.logger.debug(`Enviando notificación de factura subida a ${email}`)
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject:
           'Nueva factura subida por ' + (data.createdBy || data.providerName),
@@ -326,7 +334,7 @@ export class EmailService {
   ) {
     try {
       this.logger.debug(`Enviando notificación de acta subida a ${email}`)
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject:
           'Acta de aprobación subida por ' +
@@ -381,7 +389,7 @@ export class EmailService {
   ) {
     try {
       this.logger.debug(`Enviando notificación de factura de gastos a ${email}`)
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject:
           'Nueva factura de gastos subida por ' +
@@ -427,7 +435,7 @@ export class EmailService {
     }
   ) {
     try {
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject: 'Factura Aprobada',
         template: 'invoice-approved',
@@ -459,7 +467,7 @@ export class EmailService {
     }
   ) {
     try {
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject: 'Factura Rechazada',
         template: 'invoice-rejected',
@@ -497,7 +505,7 @@ export class EmailService {
         data
       )
 
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject: `Factura ${data.status === 'APPROVED' ? 'Aprobada para Pago' : 'Rechazada para Pago'}`,
         template: 'invoice-decision',
@@ -536,7 +544,7 @@ export class EmailService {
   ) {
     try {
       this.logger.debug(`Enviando correo de bienvenida a proveedor: ${email}`)
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject: 'Bienvenido a Nuestra Plataforma de Proveedores',
         template: './provider-welcome',
@@ -657,7 +665,7 @@ export class EmailService {
   ) {
     try {
       this.logger.debug(`Enviando correo de rendición aprobada a ${email}`)
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject: '¡Rendición de Gastos Aprobada!',
         template: './rendicion-approved',
@@ -692,7 +700,7 @@ export class EmailService {
   ) {
     try {
       this.logger.debug(`Enviando correo de rendición enviada a ${email}`)
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject: `Rendición enviada para revisión — ${data.reportTitle}`,
         template: './rendicion-submitted',
@@ -725,7 +733,7 @@ export class EmailService {
     try {
       const subject = `Rechazo de solicitud de viáticos - ${data.projectLabel}`
       const { platformUrl, ...rest } = data
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject,
         template: './viatico-rechazo-colaborador',
@@ -760,7 +768,7 @@ export class EmailService {
       const prefix = data.urgent ? '[🔴 URGENTE] ' : ''
       const subject = `${prefix}Solicitud pendiente de aprobación final - ${data.projectLabel}`
       const { platformUrl, ...rest } = data
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject,
         template: './viatico-pendiente-l2',
@@ -796,7 +804,7 @@ export class EmailService {
       const prefix = data.urgent ? '[🔴 URGENTE] ' : ''
       const subject = `${prefix}Solicitud aprobada - ${data.projectLabel}`
       const { platformUrl, ...rest } = data
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject,
         template: './viatico-aprobacion-contabilidad',
@@ -833,7 +841,7 @@ export class EmailService {
       const subject = `Nueva solicitud de viáticos, ${data.projectLabel}`
       this.logger.debug(`Enviando solicitud de viáticos a coordinador ${email}`)
       const { platformUrl, ...rest } = data
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject,
         template: './viatico-solicitud-coordinator',
@@ -878,7 +886,7 @@ export class EmailService {
   ) {
     try {
       const { platformUrl, ...rest } = data
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject: `Solicitud de viáticos cancelada — ${data.projectLabel}`,
         template: './viatico-cancelacion-coordinator',
@@ -911,7 +919,7 @@ export class EmailService {
     try {
       const subject = `Rendición «${data.reportLabel}» requiere reembolso de S/ ${data.amountFormatted} a ${data.collaboratorName}`
       const { detailUrl, ...rest } = data
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject,
         template: './rendicion-reembolso-contabilidad',
@@ -948,7 +956,7 @@ export class EmailService {
     try {
       const subject = `Reembolso de gastos registrado — ${data.reportTitle}`
       const { platformUrl, ...rest } = data
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject,
         template: './rendicion-reembolso-pagado',
@@ -996,7 +1004,7 @@ export class EmailService {
     try {
       const subject = `Viáticos aprobados y pagados — ${data.projectLabel}`
       const { platformUrl, ...rest } = data
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject,
         template: './viatico-pago-realizado',
@@ -1030,7 +1038,7 @@ export class EmailService {
     data: { recipientName: string; reportTitle: string; closedAt: string }
   ) {
     try {
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject: `Rendición Cerrada Definitivamente — ${data.reportTitle}`,
         template: './rendicion-cerrada',
@@ -1046,7 +1054,7 @@ export class EmailService {
     data: { recipientName: string; reportTitle: string; amountFormatted: string; closedAt: string; platformUrl?: string }
   ) {
     try {
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject: `Devolución pendiente — ${data.reportTitle} — S/ ${data.amountFormatted}`,
         template: './rendicion-devolucion-colaborador',
@@ -1062,7 +1070,7 @@ export class EmailService {
     data: { recipientName: string; collaboratorName: string; reportTitle: string; amountFormatted: string; depositDate: string; bankOrigin?: string; operationNumber?: string; platformUrl?: string }
   ) {
     try {
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject: `Comprobante de devolución cargado — ${data.reportTitle} — ${data.collaboratorName}`,
         template: './rendicion-devolucion-cargada',
@@ -1078,7 +1086,7 @@ export class EmailService {
     data: { adminName: string; collaboratorName: string; reportTitle: string; cancelReason?: string }
   ) {
     try {
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject: `Rendición cancelada por el colaborador — ${data.reportTitle}`,
         template: './rendicion-cancelada',
@@ -1096,7 +1104,7 @@ export class EmailService {
     data: { recipientName: string; amountDue: string; dueDate: string; advanceId: string }
   ) {
     try {
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject: `DEVOLUCIÓN PENDIENTE — Viático N° ${data.advanceId} — Monto S/ ${data.amountDue}`,
         template: './devolucion-pendiente',
@@ -1112,7 +1120,7 @@ export class EmailService {
     data: { recipientName: string; amountDue: string; advanceId: string }
   ) {
     try {
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject: `Devolución validada — Viático N° ${data.advanceId}`,
         template: './devolucion-validada',
@@ -1128,7 +1136,7 @@ export class EmailService {
     data: { recipientName: string; amountDue: string; rejectionReason?: string; advanceId: string }
   ) {
     try {
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject: `Comprobante de devolución rechazado — Viático N° ${data.advanceId}`,
         template: './devolucion-rechazada',
@@ -1146,7 +1154,7 @@ export class EmailService {
     data: { recipientName: string; code: string; period: string; fundAmount: number }
   ) {
     try {
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject: `Caja Chica Creada — ${data.code}`,
         template: './caja-chica-creada',
@@ -1162,7 +1170,7 @@ export class EmailService {
     data: { recipientName: string; code: string; fundAmount: number }
   ) {
     try {
-      await this.mailerService.sendMail({
+      await this.send({
         to: email,
         subject: `Caja Chica Fondeada y Activa — ${data.code}`,
         template: './caja-chica-fondeada',

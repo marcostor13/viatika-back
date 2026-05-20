@@ -28,6 +28,13 @@ import { ROLES } from '../auth/enums/roles.enum'
 import { NotificationsService } from '../notifications/notifications.service'
 import { CategoryService } from '../category/category.service'
 import { Client } from '../client/entities/client.entity'
+import {
+  applyFechaEmisionDisplayToExpense,
+  applyFechaEmisionDisplayToExpenses,
+  formatFechaEmisionDdMmYyyy,
+  normalizeFechaEmisionInDataJson,
+  parseFechaEmisionInput,
+} from './utils/fecha-emision.util'
 
 /** Usuario autenticado para autorización de gastos (PATCH/DELETE/GET). */
 export interface ExpenseActorContext {
@@ -209,32 +216,28 @@ export class ExpenseService {
     return dateStr.replace(/-/g, '/')
   }
 
-  private parseExpenseDate(raw?: string | null): Date | null {
-    if (!raw || typeof raw !== 'string') return null
-    const clean = raw.trim()
-    if (!clean) return null
+  private parseExpenseDate(raw?: string | Date | null): Date | null {
+    return parseFechaEmisionInput(raw ?? undefined)
+  }
 
-    const ymdMatch = clean.match(/^(\d{4})[-/](\d{2})[-/](\d{2})$/)
-    if (ymdMatch) {
-      const y = Number(ymdMatch[1])
-      const m = Number(ymdMatch[2]) - 1
-      const d = Number(ymdMatch[3])
-      return new Date(Date.UTC(y, m, d))
+  private normalizeFechaEmisionValue(
+    raw?: string | Date | null
+  ): string | undefined {
+    return formatFechaEmisionDdMmYyyy(raw ?? undefined)
+  }
+
+  private sanitizeFechaEmisionOnWrite(
+    dto: Partial<CreateExpenseDto | UpdateExpenseDto>
+  ): void {
+    if (dto.fechaEmision != null && dto.fechaEmision !== '') {
+      const normalized = this.normalizeFechaEmisionValue(
+        dto.fechaEmision as string | Date
+      )
+      if (normalized) dto.fechaEmision = normalized
     }
-
-    const dmyMatch = clean.match(/^(\d{2})[-/](\d{2})[-/](\d{4})$/)
-    if (dmyMatch) {
-      const d = Number(dmyMatch[1])
-      const m = Number(dmyMatch[2]) - 1
-      const y = Number(dmyMatch[3])
-      return new Date(Date.UTC(y, m, d))
+    if (dto.data != null && typeof dto.data === 'string') {
+      dto.data = normalizeFechaEmisionInDataJson(dto.data) ?? dto.data
     }
-
-    const parsed = new Date(clean)
-    if (Number.isNaN(parsed.getTime())) return null
-    return new Date(
-      Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate())
-    )
   }
 
   private evaluateDeadline(fechaEmisionRaw?: string | null): {
@@ -418,7 +421,16 @@ export class ExpenseService {
     const categoryObject = Types.ObjectId.createFromHexString(body.categoryId)
     const projectObject = Types.ObjectId.createFromHexString(body.proyectId)
 
-    const deadlineMeta = this.evaluateDeadline(data.fechaEmision)
+    const normalizedFechaEmision = this.normalizeFechaEmisionValue(
+      data.fechaEmision
+    )
+    const dataPayload = {
+      ...data,
+      fechaEmision: normalizedFechaEmision ?? data.fechaEmision,
+      sunatValidation: validation,
+    }
+
+    const deadlineMeta = this.evaluateDeadline(dataPayload.fechaEmision)
     const amount = Number(data.montoTotal ?? 0)
     const categoryMeta = await this.evaluateCategoryLimit(body, amount)
 
@@ -430,11 +442,11 @@ export class ExpenseService {
         ? new Types.ObjectId(body.expenseReportId)
         : undefined,
       total: data.montoTotal,
-      data: JSON.stringify({ ...data, sunatValidation: validation }),
+      data: JSON.stringify(dataPayload),
       file: body.imageUrl,
       status: status,
       createdBy: body.userId || 'system',
-      fechaEmision: data.fechaEmision,
+      fechaEmision: dataPayload.fechaEmision,
       observado: deadlineMeta.observado,
       observacionPlazo: deadlineMeta.observacionPlazo,
       diasRetraso: deadlineMeta.diasRetraso,
@@ -931,7 +943,8 @@ export class ExpenseService {
       }
     }
 
-    const deadlineMeta = this.evaluateDeadline(body.fechaEmision)
+    const normalizedFecha = this.normalizeFechaEmisionValue(body.fechaEmision)
+    const deadlineMeta = this.evaluateDeadline(normalizedFecha ?? body.fechaEmision)
     const categoryMeta = await this.evaluateCategoryLimit(body, body.total)
     const expense = await this.expenseRepository.create({
       categoryId: new Types.ObjectId(body.categoryId),
@@ -948,7 +961,7 @@ export class ExpenseService {
       file: body.imageUrl || undefined,
       status: 'pending',
       createdBy: body.userId || 'system',
-      fechaEmision: body.fechaEmision,
+      fechaEmision: normalizedFecha ?? body.fechaEmision,
       observado: deadlineMeta.observado,
       observacionPlazo: deadlineMeta.observacionPlazo,
       diasRetraso: deadlineMeta.diasRetraso,
@@ -1012,7 +1025,8 @@ export class ExpenseService {
       )
     }
 
-    const deadlineMeta = this.evaluateDeadline(body.fechaEmision)
+    const normalizedFecha = this.normalizeFechaEmisionValue(body.fechaEmision)
+    const deadlineMeta = this.evaluateDeadline(normalizedFecha ?? body.fechaEmision)
     const categoryMeta = await this.evaluateCategoryLimit(body, body.total)
     const expense = await this.expenseRepository.create({
       categoryId: new Types.ObjectId(body.categoryId),
@@ -1027,7 +1041,7 @@ export class ExpenseService {
       file: body.imageUrl,
       status: 'pending',
       createdBy: body.userId || 'system',
-      fechaEmision: body.fechaEmision,
+      fechaEmision: normalizedFecha ?? body.fechaEmision,
       observado: deadlineMeta.observado,
       observacionPlazo: deadlineMeta.observacionPlazo,
       diasRetraso: deadlineMeta.diasRetraso,
@@ -1067,7 +1081,8 @@ export class ExpenseService {
       )
     }
 
-    const deadlineMeta = this.evaluateDeadline(body.fechaEmision)
+    const normalizedFecha = this.normalizeFechaEmisionValue(body.fechaEmision)
+    const deadlineMeta = this.evaluateDeadline(normalizedFecha ?? body.fechaEmision)
     const categoryMeta = await this.evaluateCategoryLimit(body, body.total)
     const internalCode = await this.generateInternalCode(
       body.userId,
@@ -1086,7 +1101,7 @@ export class ExpenseService {
       expenseType: 'comprobante_caja',
       status: 'pending',
       createdBy: body.userId || 'system',
-      fechaEmision: body.fechaEmision,
+      fechaEmision: normalizedFecha ?? body.fechaEmision,
       observado: deadlineMeta.observado,
       observacionPlazo: deadlineMeta.observacionPlazo,
       diasRetraso: deadlineMeta.diasRetraso,
@@ -1110,25 +1125,23 @@ export class ExpenseService {
   }
 
   async create(createExpenseDto: CreateExpenseDto): Promise<Expense> {
-    let fechaEmisionDate: Date | undefined = undefined
-    if ('fechaEmision' in createExpenseDto && createExpenseDto.fechaEmision) {
-      fechaEmisionDate = new Date(createExpenseDto.fechaEmision as any)
-    } else if ((createExpenseDto as any).data) {
-      let dataObj: any = (createExpenseDto as any).data
-      if (typeof dataObj === 'string') {
-        try {
-          dataObj = JSON.parse(dataObj)
-        } catch {}
-      }
-      if (dataObj && dataObj.fechaEmision) {
-        fechaEmisionDate = parseFechaEmision(dataObj.fechaEmision)
+    const dto = { ...createExpenseDto }
+    this.sanitizeFechaEmisionOnWrite(dto)
+
+    if (!dto.fechaEmision && dto.data) {
+      try {
+        const dataObj =
+          typeof dto.data === 'string' ? JSON.parse(dto.data) : dto.data
+        const fromData = this.normalizeFechaEmisionValue(dataObj?.fechaEmision)
+        if (fromData) dto.fechaEmision = fromData
+      } catch {
+        /* ignore */
       }
     }
 
     const createdExpense = new this.expenseRepository({
-      ...createExpenseDto,
+      ...dto,
       clientId: new Types.ObjectId(createExpenseDto.clientId),
-      fechaEmision: fechaEmisionDate,
       createdBy: createExpenseDto.userId,
     })
     const expense = await createdExpense.save()
@@ -1362,7 +1375,13 @@ export class ExpenseService {
         { path: 'proyectId' },
         { path: 'categoryId' },
       ]) as unknown as Expense[]
-      return { data: populatedResult, total, page, pages: Math.ceil(total / limit), limit }
+      return {
+        data: applyFechaEmisionDisplayToExpenses(populatedResult),
+        total,
+        page,
+        pages: Math.ceil(total / limit),
+        limit,
+      }
     }
 
     const sortBy = filters.sortBy || 'fechaEmision'
@@ -1378,14 +1397,22 @@ export class ExpenseService {
     let data: Expense[] = result
     if (sortBy === 'fechaEmision') {
       data = result.sort((a, b) => {
-        if (!a.fechaEmision || !b.fechaEmision) return 0
-        const dateA = new Date(a.fechaEmision.split('-').reverse().join('-'))
-        const dateB = new Date(b.fechaEmision.split('-').reverse().join('-'))
-        return sortOrder === 'desc' ? dateB.getTime() - dateA.getTime() : dateA.getTime() - dateB.getTime()
+        const dateA = this.parseExpenseDate(a.fechaEmision as string)
+        const dateB = this.parseExpenseDate(b.fechaEmision as string)
+        if (!dateA || !dateB) return 0
+        return sortOrder === 'desc'
+          ? dateB.getTime() - dateA.getTime()
+          : dateA.getTime() - dateB.getTime()
       })
     }
 
-    return { data, total, page, pages: Math.ceil(total / limit), limit }
+    return {
+      data: applyFechaEmisionDisplayToExpenses(data),
+      total,
+      page,
+      pages: Math.ceil(total / limit),
+      limit,
+    }
   }
 
   async getStatusCounts(clientId: string): Promise<{ pending: number; approved: number; rejected: number; total: number }> {
@@ -1405,11 +1432,13 @@ export class ExpenseService {
 
     const expenseIdObject = Types.ObjectId.createFromHexString(id)
 
-    return this.expenseRepository
+    const expense = await this.expenseRepository
       .findOne({ _id: expenseIdObject })
       .populate('proyectId')
       .populate('categoryId')
       .exec()
+
+    return expense ? applyFechaEmisionDisplayToExpense(expense) : null
   }
 
   async getSunatValidationInfo(id: string): Promise<any> {
@@ -1473,7 +1502,7 @@ export class ExpenseService {
   ): Promise<Expense> {
     const expense = await this.loadExpenseOrThrow(id)
     this.assertCanReadExpense(expense, actor)
-    return expense
+    return applyFechaEmisionDisplayToExpense(expense)
   }
 
   async update(
@@ -1489,13 +1518,18 @@ export class ExpenseService {
     const existing = await this.loadExpenseOrThrow(id)
     await this.assertCanMutateExpense(existing, actor)
 
-    return this.expenseRepository
-      .findOneAndUpdate({ _id: expenseIdObject }, updateExpenseDto, {
+    const dto = { ...updateExpenseDto }
+    this.sanitizeFechaEmisionOnWrite(dto)
+
+    const updated = await this.expenseRepository
+      .findOneAndUpdate({ _id: expenseIdObject }, dto, {
         new: true,
       })
       .populate('clientId')
       .populate('categoryId')
       .exec()
+
+    return updated ? applyFechaEmisionDisplayToExpense(updated) : null
   }
 
   async approveInvoice(id: string, approvalDto: ApprovalDto) {
@@ -1975,10 +2009,3 @@ export class ExpenseService {
   }
 }
 
-function parseFechaEmision(fecha: string): Date | undefined {
-  const parts = fecha.split(/[\/\-]/)
-  if (parts.length === 3) {
-    return new Date(`${parts[2]}-${parts[1]}-${parts[0]}`)
-  }
-  return undefined
-}

@@ -240,6 +240,29 @@ export class ExpenseService {
     }
   }
 
+  /** Mantiene comentario/placa en raíz del gasto alineados con el JSON `data`. */
+  private syncComentarioPlacaFromData(
+    dto: Partial<CreateExpenseDto | UpdateExpenseDto>
+  ): void {
+    if (dto.data == null || typeof dto.data !== 'string') return
+    try {
+      const parsed = JSON.parse(dto.data) as Record<string, unknown>
+      if (dto.comentario === undefined && typeof parsed.comentario === 'string') {
+        const c = parsed.comentario.trim()
+        if (c) dto.comentario = c
+      }
+      if (
+        dto.placaVehiculo === undefined &&
+        typeof parsed.placaVehiculo === 'string'
+      ) {
+        const p = parsed.placaVehiculo.trim()
+        if (p) dto.placaVehiculo = p
+      }
+    } catch {
+      /* mantener dto original */
+    }
+  }
+
   private evaluateDeadline(fechaEmisionRaw?: string | null): {
     observado: boolean
     observacionPlazo?: string
@@ -1127,6 +1150,7 @@ export class ExpenseService {
   async create(createExpenseDto: CreateExpenseDto): Promise<Expense> {
     const dto = { ...createExpenseDto }
     this.sanitizeFechaEmisionOnWrite(dto)
+    this.syncComentarioPlacaFromData(dto)
 
     if (!dto.fechaEmision && dto.data) {
       try {
@@ -1520,6 +1544,7 @@ export class ExpenseService {
 
     const dto = { ...updateExpenseDto }
     this.sanitizeFechaEmisionOnWrite(dto)
+    this.syncComentarioPlacaFromData(dto)
 
     const updated = await this.expenseRepository
       .findOneAndUpdate({ _id: expenseIdObject }, dto, {

@@ -253,12 +253,22 @@ export class ExpenseReportService {
   }
 
   private normalizeReportExpenseDates(report: ExpenseReportDocument) {
-    const raw = report.expenseIds
+    // Convertimos a POJO antes de tocar `expenseIds`: asignar POJOs sobre un
+    // Document hace que Mongoose castee cada elemento de vuelta a ObjectId
+    // (por el `ref: 'Expense'` del schema), descartando los datos populados.
+    const pojo = (
+      typeof (report as { toObject?: () => unknown }).toObject === 'function'
+        ? (report as unknown as { toObject: () => Record<string, unknown> }).toObject()
+        : (report as unknown as Record<string, unknown>)
+    ) as Record<string, unknown>
+
+    const raw = pojo.expenseIds
     if (Array.isArray(raw) && raw.length > 0 && typeof raw[0] === 'object') {
-      ;(report as { expenseIds: unknown }).expenseIds =
-        applyFechaEmisionDisplayToExpenses(raw as { fechaEmision?: unknown; data?: unknown }[])
+      pojo.expenseIds = applyFechaEmisionDisplayToExpenses(
+        raw as { fechaEmision?: unknown; data?: unknown }[]
+      )
     }
-    return report
+    return pojo as unknown as ExpenseReportDocument
   }
 
   async update(id: string, updateExpenseReportDto: UpdateExpenseReportDto) {

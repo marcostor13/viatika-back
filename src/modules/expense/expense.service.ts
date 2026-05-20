@@ -1546,6 +1546,36 @@ export class ExpenseService {
     this.sanitizeFechaEmisionOnWrite(dto)
     this.syncComentarioPlacaFromData(dto)
 
+    if (dto.mobilityRows && dto.mobilityRows.length > 0) {
+      const client = await this.clientModel
+        .findById(existing.clientId)
+        .lean()
+        .exec()
+      const dailyLimit = client?.limits?.movilidadDiario ?? null
+      if (dailyLimit !== null) {
+        const dailyTotals = new Map<string, number>()
+        for (const row of dto.mobilityRows) {
+          const date = row.fecha || ''
+          dailyTotals.set(date, (dailyTotals.get(date) ?? 0) + (row.total || 0))
+        }
+        for (const [date, dayTotal] of dailyTotals) {
+          if (dayTotal > dailyLimit) {
+            throw new BadRequestException(
+              `El total del día ${date} (S/ ${dayTotal.toFixed(2)}) supera el límite diario de S/ ${dailyLimit.toFixed(2)}`
+            )
+          }
+        }
+      }
+      dto.total = dto.mobilityRows.reduce(
+        (sum, row) => sum + (row.total || 0),
+        0
+      )
+      dto.data = JSON.stringify({
+        type: 'planilla_movilidad',
+        rows: dto.mobilityRows,
+      })
+    }
+
     const updated = await this.expenseRepository
       .findOneAndUpdate({ _id: expenseIdObject }, dto, {
         new: true,

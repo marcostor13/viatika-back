@@ -21,6 +21,7 @@ import { CreateAffidavitDto } from './dto/create-affidavit.dto'
 import { RegisterReimbursementPaymentDto } from './dto/register-reimbursement-payment.dto'
 import { AdvanceService } from '../advance/advance.service'
 import { ROLES } from '../auth/enums/roles.enum'
+import { applyFechaEmisionDisplayToExpenses } from '../expense/utils/fecha-emision.util'
 
 @Injectable()
 export class ExpenseReportService {
@@ -247,6 +248,15 @@ export class ExpenseReportService {
 
     if (!report) {
       throw new NotFoundException(`Expense report with ID ${id} not found`)
+    }
+    return this.normalizeReportExpenseDates(report)
+  }
+
+  private normalizeReportExpenseDates(report: ExpenseReportDocument) {
+    const raw = report.expenseIds
+    if (Array.isArray(raw) && raw.length > 0 && typeof raw[0] === 'object') {
+      ;(report as { expenseIds: unknown }).expenseIds =
+        applyFechaEmisionDisplayToExpenses(raw as { fechaEmision?: unknown; data?: unknown }[])
     }
     return report
   }
@@ -874,7 +884,7 @@ export class ExpenseReportService {
       .exec()
     if (!report)
       throw new NotFoundException(`Expense report with ID ${id} not found`)
-    return report
+    return this.normalizeReportExpenseDates(report)
   }
 
   // ─── FASE 8 — Cierre Definitivo ──────────────────────────────────────────

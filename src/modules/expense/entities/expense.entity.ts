@@ -74,6 +74,8 @@ export interface ExpenseDocument extends Document {
   declaracionJuradaFirmante?: string
   reviewHistory?: ExpenseReviewHistory[]
   internalCode?: string
+  comentario?: string
+  placaVehiculo?: string
 }
 
 export interface GetExpenseDocument extends Omit<ExpenseDocument, '_id'> {
@@ -209,6 +211,12 @@ export class Expense {
 
   @Prop({ type: String, required: false })
   declaracionJuradaFirmante?: string
+
+  @Prop({ type: String, required: false })
+  comentario?: string
+
+  @Prop({ type: String, required: false })
+  placaVehiculo?: string
 }
 
 export const ExpenseSchema = SchemaFactory.createForClass(Expense)

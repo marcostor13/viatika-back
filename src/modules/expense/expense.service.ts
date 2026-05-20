@@ -54,6 +54,8 @@ interface ExtractedInvoiceData {
   moneda?: string
   razonSocial?: string
   direccionEmisor?: string
+  comentario?: string
+  placaVehiculo?: string
   [key: string]: unknown
 }
 
@@ -450,6 +452,8 @@ export class ExpenseService {
       diasRetraso: deadlineMeta.diasRetraso,
       categoryLimitPercent: categoryMeta.percent,
       categoryLimitWarning: categoryMeta.warning,
+      comentario: data.comentario || undefined,
+      placaVehiculo: data.placaVehiculo || undefined,
     })
   }
 

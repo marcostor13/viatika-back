@@ -56,4 +56,12 @@ export class UpdateExpenseDto {
 
   @IsOptional()
   statusDate?: Date
+
+  @IsString()
+  @IsOptional()
+  comentario?: string
+
+  @IsString()
+  @IsOptional()
+  placaVehiculo?: string
 }

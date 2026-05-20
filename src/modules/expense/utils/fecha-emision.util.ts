@@ -85,7 +85,13 @@ export function applyFechaEmisionDisplayToExpense<
 >(expense: T): T {
   if (!expense) return expense
 
-  const copy = { ...expense } as T & { fechaEmision?: string; data?: unknown }
+  // Mongoose Documents almacenan los campos del schema en `_doc` y los exponen
+  // vía getters del prototipo. `{ ...doc }` sólo copia `$__` y `_doc`, dejando
+  // afuera `clientId`, `createdBy`, etc. y rompiendo verificaciones posteriores.
+  const maybeDoc = expense as unknown as { toObject?: () => T }
+  const source: T =
+    typeof maybeDoc.toObject === 'function' ? maybeDoc.toObject() : expense
+  const copy = { ...source } as T & { fechaEmision?: string; data?: unknown }
   const fromRoot = formatFechaEmisionDdMmYyyy(
     copy.fechaEmision as string | Date | undefined
   )

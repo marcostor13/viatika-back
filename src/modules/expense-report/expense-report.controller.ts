@@ -68,10 +68,10 @@ export class ExpenseReportController {
   @UseGuards(AuthGuard('jwt'))
   @Get('client/:clientId')
   findAllByClient(@Param('clientId') clientId: string, @Request() req: any) {
-    // If admin/superadmin, get all for client.
-    // If user, get only theirs.
-    const isUser = req.user.roles[0] === ROLES.COLABORADOR
-    if (isUser) {
+    const role = req.user.roles[0]
+    const hasRendicionesPermission = req.user.permissions?.modules?.includes('rendiciones')
+    const isRestrictedUser = role === ROLES.COLABORADOR && !hasRendicionesPermission
+    if (isRestrictedUser) {
       return this.expenseReportService.findAllByUser(req.user._id, clientId)
     }
     return this.expenseReportService.findAllByClient(clientId)

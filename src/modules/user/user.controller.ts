@@ -60,7 +60,7 @@ export class UserController {
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD, ROLES.COLABORADOR)
   @Get('client/:clientId')
   async findAll(
     @Param('clientId', ParseObjectIdPipe) clientId: Types.ObjectId,
@@ -72,6 +72,14 @@ export class UserController {
     @Req() req?: any
   ) {
     const role: string = req?.user?.roles?.[0] ?? ''
+
+    if (role === ROLES.COLABORADOR) {
+      const hasRendicionesPermission = req?.user?.permissions?.modules?.includes('rendiciones')
+      if (!hasRendicionesPermission) {
+        throw new ForbiddenException('No tienes permiso para ver usuarios de esta empresa')
+      }
+    }
+
     if (role !== ROLES.SUPER_ADMIN && role !== ROLES.CONTABILIDAD) {
       const tokenClientId = req?.user?.clientId?.toString()
       if (!tokenClientId || tokenClientId !== clientId.toString()) {
@@ -89,6 +97,13 @@ export class UserController {
       })
     }
     return this.userService.findAll(clientId)
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('me')
+  async getMe(@Request() req: any) {
+    const userId = req.user._id || req.user.sub
+    return await this.userService.findOne(userId.toString())
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)

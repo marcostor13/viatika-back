@@ -191,6 +191,14 @@ export class ExpenseController {
   }
 
   /** Rutas estáticas antes de `:clientId` para no capturar `invoice` como clientId */
+  @Get('ruc-info/:ruc')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  async getRucInfo(@Param('ruc') ruc: string, @Request() req: any) {
+    const clientId = req.user?.clientId
+    return this.expenseService.getRucInfo(ruc, clientId)
+  }
+
   @Get('test-sunat-credentials/:clientId')
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   @UseGuards(JwtAuthGuard, RolesGuard)

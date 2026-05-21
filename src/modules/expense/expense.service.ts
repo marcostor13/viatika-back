@@ -410,6 +410,7 @@ export class ExpenseService {
             const response = await firstValueFrom(
               this.httpService.post(sunatApiUrl, params, { headers })
             )
+            console.log('[SUNAT] Raw response:', JSON.stringify(response.data, null, 2))
             validation = this.interpretSunatResponse(response.data)
             expenseStatus = validation.status
           } catch (error) {
@@ -664,6 +665,70 @@ export class ExpenseService {
         HttpStatus.INTERNAL_SERVER_ERROR,
       )
     }
+  }
+
+  async getRucInfo(ruc: string, clientId: string): Promise<{ razonSocial: string | null; fuente: string }> {
+    // Option A: SUNAT API oficial con el mismo token OAuth2
+    try {
+      const token = await this.generateTokenSunat(clientId)
+      if (token?.access_token) {
+        const url = `https://api.sunat.gob.pe/v1/contribuyente/contribuyentes/${ruc}`
+        const response = await firstValueFrom(
+          this.httpService.get(url, {
+            headers: { Authorization: `Bearer ${token.access_token}` },
+          })
+        )
+        console.log(`[RUC Info] SUNAT respuesta para ${ruc}:`, JSON.stringify(response.data))
+        const data = response.data
+        const razonSocial = data?.ddp_nombre ?? data?.razonSocial ?? data?.nombre ?? null
+        if (razonSocial) {
+          this.logger.log(`[RUC Info] ${ruc} via SUNAT oficial: ${razonSocial}`)
+          return { razonSocial, fuente: 'sunat' }
+        }
+      }
+    } catch (err: any) {
+      console.log(`[RUC Info] SUNAT error para ${ruc}:`, err?.response?.status, JSON.stringify(err?.response?.data ?? err?.message))
+    }
+
+    // Option B-1: api.apis.net.pe v2 (requiere token si lo hay en env)
+    try {
+      const headers: any = { 'Accept': 'application/json' }
+      const apisToken = process.env.APIS_NET_PE_TOKEN
+      if (apisToken) headers['Authorization'] = `Bearer ${apisToken}`
+
+      const url = `https://api.apis.net.pe/v2/sunat/ruc?numero=${ruc}`
+      const response = await firstValueFrom(
+        this.httpService.get(url, { headers, timeout: 6000 } as any)
+      )
+      console.log(`[RUC Info] api.apis.net.pe v2 respuesta para ${ruc}:`, JSON.stringify(response.data))
+      const data = response.data
+      const razonSocial = data?.razonSocial ?? data?.nombre ?? null
+      if (razonSocial) {
+        this.logger.log(`[RUC Info] ${ruc} via api.apis.net.pe v2: ${razonSocial}`)
+        return { razonSocial, fuente: 'tercero' }
+      }
+    } catch (err: any) {
+      console.log(`[RUC Info] api.apis.net.pe v2 error para ${ruc}:`, err?.response?.status, JSON.stringify(err?.response?.data ?? err?.message))
+    }
+
+    // Option B-2: api.apis.net.pe v1 (puede funcionar sin token)
+    try {
+      const url = `https://api.apis.net.pe/v1/ruc?numero=${ruc}`
+      const response = await firstValueFrom(
+        this.httpService.get(url, { timeout: 6000 } as any)
+      )
+      console.log(`[RUC Info] api.apis.net.pe v1 respuesta para ${ruc}:`, JSON.stringify(response.data))
+      const data = response.data
+      const razonSocial = data?.razonSocial ?? data?.nombre ?? null
+      if (razonSocial) {
+        this.logger.log(`[RUC Info] ${ruc} via api.apis.net.pe v1: ${razonSocial}`)
+        return { razonSocial, fuente: 'tercero' }
+      }
+    } catch (err: any) {
+      console.log(`[RUC Info] api.apis.net.pe v1 error para ${ruc}:`, err?.response?.status, JSON.stringify(err?.response?.data ?? err?.message))
+    }
+
+    return { razonSocial: null, fuente: 'not_found' }
   }
 
   private interpretSunatResponse(sunatData: any): {
@@ -2029,19 +2094,31 @@ export class ExpenseService {
     await this.assertCanMutateExpense(expense, actor)
 
     try {
+      // Paso 1: obtener razón social fresca para el RUC emisor
+      let updatedData: string | undefined
+      if (data.rucEmisor) {
+        const { razonSocial } = await this.getRucInfo(data.rucEmisor, clientId)
+        if (razonSocial) {
+          let parsed: any = {}
+          try {
+            parsed = typeof expense.data === 'string' ? JSON.parse(expense.data) : (expense.data ?? {})
+          } catch {}
+          updatedData = JSON.stringify({ ...parsed, razonSocial })
+          this.logger.log(`[validateWithSunatData] razonSocial actualizada para RUC ${data.rucEmisor}: ${razonSocial}`)
+        }
+      }
+
+      // Paso 2: validar comprobante con SUNAT
       const configSunat = await this.sunatConfigService.findOne(clientId)
       const { validation, expenseStatus } =
         await this.validateWithSunatIfPossible(data, clientId, configSunat?.ruc)
 
+      // Paso 3: guardar razón social + resultado de validación en un solo update
+      const updateDoc: any = { sunatValidation: validation, status: expenseStatus }
+      if (updatedData !== undefined) updateDoc.data = updatedData
+
       const updatedExpense = await this.expenseRepository
-        .findByIdAndUpdate(
-          id,
-          {
-            sunatValidation: validation,
-            status: expenseStatus,
-          },
-          { new: true }
-        )
+        .findByIdAndUpdate(id, updateDoc, { new: true })
         .exec()
 
       return {

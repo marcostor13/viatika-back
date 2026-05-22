@@ -322,11 +322,26 @@ export class ExpenseService {
   }
 
   private buildUserInitials(name?: string | null): string {
-    const words = String(name || '')
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean)
-    if (words.length === 0) return 'USR'
+    const raw = String(name || '').trim()
+    if (!raw) return 'USR'
+
+    // Formato esperado en BD: "APELLIDO1 APELLIDO2, NOMBRE [NOMBRE2 ...]"
+    // Resultado deseado: inicial(NOMBRE) + inicial(APELLIDO1) + inicial(APELLIDO2)
+    // Ej: "SALAZAR PEREZ, CHRISTIAN" -> "CSP"
+    //     "CARRASCO PERALTA, CHRISTIAN WILMER" -> "CCP"
+    if (raw.includes(',')) {
+      const [apellidosPart = '', nombresPart = ''] = raw.split(',', 2)
+      const apellidos = apellidosPart.trim().split(/\s+/).filter(Boolean)
+      const nombres = nombresPart.trim().split(/\s+/).filter(Boolean)
+      const nombreInicial = nombres[0]?.charAt(0).toUpperCase() ?? ''
+      const apellido1Inicial = apellidos[0]?.charAt(0).toUpperCase() ?? ''
+      const apellido2Inicial = apellidos[1]?.charAt(0).toUpperCase() ?? ''
+      const initials = `${nombreInicial}${apellido1Inicial}${apellido2Inicial}`
+      if (initials) return initials.padEnd(3, 'X').slice(0, 3)
+    }
+
+    // Fallback (sin coma): asumir orden "NOMBRE APELLIDO1 APELLIDO2".
+    const words = raw.split(/\s+/).filter(Boolean)
     const initials = words
       .slice(0, 3)
       .map(w => w.charAt(0).toUpperCase())

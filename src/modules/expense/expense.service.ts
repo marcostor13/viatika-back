@@ -322,11 +322,26 @@ export class ExpenseService {
   }
 
   private buildUserInitials(name?: string | null): string {
-    const words = String(name || '')
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean)
-    if (words.length === 0) return 'USR'
+    const raw = String(name || '').trim()
+    if (!raw) return 'USR'
+
+    // Formato esperado en BD: "APELLIDO1 APELLIDO2, NOMBRE [NOMBRE2 ...]"
+    // Resultado deseado: inicial(NOMBRE) + inicial(APELLIDO1) + inicial(APELLIDO2)
+    // Ej: "SALAZAR PEREZ, CHRISTIAN" -> "CSP"
+    //     "CARRASCO PERALTA, CHRISTIAN WILMER" -> "CCP"
+    if (raw.includes(',')) {
+      const [apellidosPart = '', nombresPart = ''] = raw.split(',', 2)
+      const apellidos = apellidosPart.trim().split(/\s+/).filter(Boolean)
+      const nombres = nombresPart.trim().split(/\s+/).filter(Boolean)
+      const nombreInicial = nombres[0]?.charAt(0).toUpperCase() ?? ''
+      const apellido1Inicial = apellidos[0]?.charAt(0).toUpperCase() ?? ''
+      const apellido2Inicial = apellidos[1]?.charAt(0).toUpperCase() ?? ''
+      const initials = `${nombreInicial}${apellido1Inicial}${apellido2Inicial}`
+      if (initials) return initials.padEnd(3, 'X').slice(0, 3)
+    }
+
+    // Fallback (sin coma): asumir orden "NOMBRE APELLIDO1 APELLIDO2".
+    const words = raw.split(/\s+/).filter(Boolean)
     const initials = words
       .slice(0, 3)
       .map(w => w.charAt(0).toUpperCase())
@@ -334,15 +349,38 @@ export class ExpenseService {
     return initials.padEnd(3, 'X').slice(0, 3)
   }
 
+  private async resolveOwnerUserId(
+    fallbackUserId: string | undefined,
+    expenseReportId: string | undefined
+  ): Promise<string | undefined> {
+    if (expenseReportId) {
+      try {
+        const report = await this.expenseReportService.findOne(expenseReportId)
+        const reportUserId = (report as any)?.userId
+        if (reportUserId) {
+          if (typeof reportUserId === 'object' && '_id' in reportUserId) {
+            return String((reportUserId as { _id: unknown })._id)
+          }
+          return String(reportUserId)
+        }
+      } catch {
+        // Si la rendición no se puede resolver, caemos al userId del creador.
+      }
+    }
+    return fallbackUserId
+  }
+
   private async generateInternalCode(
     userId: string | undefined,
-    expenseType: 'planilla_movilidad' | 'comprobante_caja'
+    expenseType: 'planilla_movilidad' | 'comprobante_caja',
+    expenseReportId?: string
   ): Promise<string> {
-    if (!userId) return `USR001`
-    const user = await this.userService.findOne(userId)
+    const ownerUserId = await this.resolveOwnerUserId(userId, expenseReportId)
+    if (!ownerUserId) return `USR001`
+    const user = await this.userService.findOne(ownerUserId)
     const initials = this.buildUserInitials(user?.name)
     const count = await this.expenseRepository.countDocuments({
-      createdBy: userId,
+      createdBy: ownerUserId,
       expenseType,
     })
     const correlativo = String(count + 1).padStart(3, '0')
@@ -968,7 +1006,8 @@ export class ExpenseService {
     const categoryMeta = await this.evaluateCategoryLimit(body, total)
     const internalCode = await this.generateInternalCode(
       body.userId,
-      'planilla_movilidad'
+      'planilla_movilidad',
+      body.expenseReportId
     )
     const expense = await this.expenseRepository.create({
       categoryId: new Types.ObjectId(body.categoryId),
@@ -1174,7 +1213,8 @@ export class ExpenseService {
     const categoryMeta = await this.evaluateCategoryLimit(body, body.total)
     const internalCode = await this.generateInternalCode(
       body.userId,
-      'comprobante_caja'
+      'comprobante_caja',
+      body.expenseReportId
     )
 
     const expense = await this.expenseRepository.create({

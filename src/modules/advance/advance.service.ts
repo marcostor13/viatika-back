@@ -219,6 +219,7 @@ export class AdvanceService {
   ): Promise<{
     lineDocs: {
       categoryId: Types.ObjectId
+      detalle?: string
       importe: number
       peopleCount: number
       glpPerDay: number
@@ -251,6 +252,7 @@ export class AdvanceService {
 
     const lineDocs: {
       categoryId: Types.ObjectId
+      detalle?: string
       importe: number
       peopleCount: number
       glpPerDay: number
@@ -273,8 +275,10 @@ export class AdvanceService {
         )
       }
       sum += line.lineTotal
+      const detalleTrim = line.detalle?.trim()
       lineDocs.push({
         categoryId: new Types.ObjectId(line.categoryId),
+        detalle: detalleTrim && detalleTrim.length > 0 ? detalleTrim : undefined,
         importe: line.importe,
         peopleCount: line.peopleCount,
         glpPerDay: line.glpPerDay,

@@ -239,7 +239,7 @@ export class ExpenseReportService {
   async findOne(id: string) {
     const report = await this.expenseReportModel
       .findById(id)
-      .populate('userId', 'name email signature bankAccount')
+      .populate('userId', 'name email signature bankAccount dni')
       .populate({ path: 'expenseIds', populate: [{ path: 'categoryId', select: 'name' }, { path: 'proyectId', select: 'name' }] })
       .populate('createdBy', 'name email')
       .populate('approvedBy', 'name email')
@@ -885,7 +885,7 @@ export class ExpenseReportService {
   async findOneWithAdvances(id: string) {
     const report = await this.expenseReportModel
       .findById(id)
-      .populate('userId', 'name email signature bankAccount')
+      .populate('userId', 'name email signature bankAccount dni')
       .populate({ path: 'expenseIds', populate: [{ path: 'categoryId', select: 'name' }, { path: 'proyectId', select: 'name' }] })
       .populate('advanceIds')
       .populate('createdBy', 'name email')

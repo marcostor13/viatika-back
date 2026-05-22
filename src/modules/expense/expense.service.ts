@@ -334,15 +334,38 @@ export class ExpenseService {
     return initials.padEnd(3, 'X').slice(0, 3)
   }
 
+  private async resolveOwnerUserId(
+    fallbackUserId: string | undefined,
+    expenseReportId: string | undefined
+  ): Promise<string | undefined> {
+    if (expenseReportId) {
+      try {
+        const report = await this.expenseReportService.findOne(expenseReportId)
+        const reportUserId = (report as any)?.userId
+        if (reportUserId) {
+          if (typeof reportUserId === 'object' && '_id' in reportUserId) {
+            return String((reportUserId as { _id: unknown })._id)
+          }
+          return String(reportUserId)
+        }
+      } catch {
+        // Si la rendición no se puede resolver, caemos al userId del creador.
+      }
+    }
+    return fallbackUserId
+  }
+
   private async generateInternalCode(
     userId: string | undefined,
-    expenseType: 'planilla_movilidad' | 'comprobante_caja'
+    expenseType: 'planilla_movilidad' | 'comprobante_caja',
+    expenseReportId?: string
   ): Promise<string> {
-    if (!userId) return `USR001`
-    const user = await this.userService.findOne(userId)
+    const ownerUserId = await this.resolveOwnerUserId(userId, expenseReportId)
+    if (!ownerUserId) return `USR001`
+    const user = await this.userService.findOne(ownerUserId)
     const initials = this.buildUserInitials(user?.name)
     const count = await this.expenseRepository.countDocuments({
-      createdBy: userId,
+      createdBy: ownerUserId,
       expenseType,
     })
     const correlativo = String(count + 1).padStart(3, '0')
@@ -968,7 +991,8 @@ export class ExpenseService {
     const categoryMeta = await this.evaluateCategoryLimit(body, total)
     const internalCode = await this.generateInternalCode(
       body.userId,
-      'planilla_movilidad'
+      'planilla_movilidad',
+      body.expenseReportId
     )
     const expense = await this.expenseRepository.create({
       categoryId: new Types.ObjectId(body.categoryId),
@@ -1174,7 +1198,8 @@ export class ExpenseService {
     const categoryMeta = await this.evaluateCategoryLimit(body, body.total)
     const internalCode = await this.generateInternalCode(
       body.userId,
-      'comprobante_caja'
+      'comprobante_caja',
+      body.expenseReportId
     )
 
     const expense = await this.expenseRepository.create({

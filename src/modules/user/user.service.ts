@@ -54,6 +54,7 @@ export interface IUserResponse {
     cci: string
     accountType: string
   }
+  profilePic?: string
 }
 
 @Injectable()
@@ -183,6 +184,9 @@ export class UserService {
       phone: (user as any).phone,
       coordinatorId: (user as any).coordinatorId,
       bankAccount: (user as any).bankAccount,
+      signature: (user as any).signature,
+      mustChangePassword: !!(user as any).mustChangePassword,
+      profilePic: (user as any).profilePic,
     }
   }
 
@@ -267,6 +271,7 @@ export class UserService {
       role: user.roleId,
       client: user.clientId,
       isActive: user.isActive,
+      isCompanyAdmin: (user as any).isCompanyAdmin ?? false,
     }))
   }
 
@@ -632,6 +637,12 @@ export class UserService {
         roleId: { $in: roleIds },
         isActive: true,
       })
+      .exec()
+  }
+
+  async deleteByClientId(clientId: string): Promise<void> {
+    await this.userModel
+      .deleteMany({ clientId: new Types.ObjectId(clientId) })
       .exec()
   }
 }

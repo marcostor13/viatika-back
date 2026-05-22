@@ -4,8 +4,6 @@ import { UserService } from '../user/user.service'
 import { EmailService } from '../email/email.service'
 import { RoleService } from '../role/role.service'
 import { CreateClientWithUserDto } from './dto/create-client-with-user-sunat.dto'
-import { InjectConnection } from '@nestjs/mongoose'
-import { ClientSession, Connection } from 'mongoose'
 import { ROLES } from '../auth/enums/roles.enum'
 
 @Injectable()
@@ -16,20 +14,8 @@ export class ClientOnboardingService {
     private readonly clientService: ClientService,
     private readonly userService: UserService,
     private readonly emailService: EmailService,
-    private readonly roleService: RoleService,
-    @InjectConnection() private readonly connection: Connection
+    private readonly roleService: RoleService
   ) {}
-
-  private generateTemporaryPassword(length: number = 10): string {
-    const chars =
-      'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
-    let password = ''
-    for (let i = 0; i < length; i++) {
-      const index = Math.floor(Math.random() * chars.length)
-      password += chars.charAt(index)
-    }
-    return password
-  }
 
   private splitName(fullName: string): { firstName: string; lastName: string } {
     const parts = fullName.trim().split(' ')
@@ -46,11 +32,12 @@ export class ClientOnboardingService {
     this.logger.debug(
       `Iniciando registro de nuevo cliente con usuario: ${client.comercialName}`
     )
+    this.logger.debug(
+      `[DIAG] client payload recibido: email="${(client as any).email}" phone="${(client as any).phone}" address="${(client as any).address}"`
+    )
 
-    let session: ClientSession | null = null
     let createdClient: any
     let user: any
-    const temporaryPassword = this.generateTemporaryPassword()
 
     // Buscar el rol ADMIN automáticamente
     const adminRole = await this.roleService.getByName(ROLES.ADMIN)
@@ -60,38 +47,49 @@ export class ClientOnboardingService {
       )
     }
 
+    // 1. Crear cliente
+    createdClient = await this.clientService.create(client)
+    this.logger.debug(
+      `[DIAG] cliente creado: email="${createdClient?.email}" phone="${createdClient?.phone}" address="${createdClient?.address}"`
+    )
+
+    // 2. Crear usuario administrador — userService.create() genera y hashea su propio password
     try {
-      session = await this.connection.startSession()
-      session.startTransaction()
-
-      // 1. Crear cliente
-      createdClient = await this.clientService.create(client, session)
-
-      // 2. Crear usuario administrador con password temporal y rol ADMIN
       user = await this.userService.create({
         name: adminUser.name,
         email: adminUser.email,
-        password: temporaryPassword,
         roleId: adminRole._id.toString(),
         clientId: createdClient._id.toString(),
-        isActive: false,
+        isActive: true,
+        isCompanyAdmin: true,
+        permissions: {
+          modules: [
+            'colaboradores',
+            'rendiciones',
+            'mis-rendiciones',
+            'nueva-rendicion',
+            'viaticos',
+            'consolidated-invoices',
+            'tesoreria',
+            'configuracion',
+            'audit-log',
+          ],
+          canApproveL1: true,
+          canApproveL2: true,
+        },
       })
-
-      await session.commitTransaction()
     } catch (error) {
-      if (session) {
-        await session.abortTransaction()
-      }
+      // Rollback manual: eliminar el cliente recién creado
+      await this.clientService.remove(createdClient._id.toString()).catch(() => {})
       this.logger.error(
-        'Error durante la transacción de registro de cliente con usuario:',
+        'Error creando usuario admin, cliente revertido:',
         error
       )
       throw error
-    } finally {
-      if (session) {
-        session.endSession()
-      }
     }
+
+    // user.temporaryPassword es el password real que quedó hasheado en la BD
+    const temporaryPassword: string = user.temporaryPassword
 
     // 3. Enviar correo de bienvenida con credenciales temporales (fuera de la transacción)
     try {
@@ -112,13 +110,14 @@ export class ClientOnboardingService {
 
     return {
       message: 'Cliente registrado correctamente con usuario',
-      client: createdClient,
+      client: createdClient.toObject(),
       adminUser: {
         _id: user._id,
         email: user.email,
         name: user.name,
         role: user.role,
         isActive: user.isActive,
+        temporaryPassword,
       },
     }
   }

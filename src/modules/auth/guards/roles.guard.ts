@@ -2,8 +2,7 @@ import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common'
 import { Reflector } from '@nestjs/core'
 
 const ROLE_ALIASES: Record<string, string> = {
-  Administrador: 'Coordinador',
-  Admin: 'Coordinador',
+  Coordinador: 'Administrador', // backward compat for existing JWTs issued before role rename
 }
 
 @Injectable()

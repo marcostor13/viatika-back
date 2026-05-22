@@ -17,29 +17,31 @@ import { Roles } from '../auth/decorators/roles.decorador'
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard'
 import { ClientOnboardingService } from './client-onboarding.service'
 import { CreateClientWithUserDto } from './dto/create-client-with-user-sunat.dto'
+import { UserService } from '../user/user.service'
 
 @Controller('client')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class ClientController {
   constructor(
     private readonly clientService: ClientService,
-    private readonly clientOnboardingService: ClientOnboardingService
+    private readonly clientOnboardingService: ClientOnboardingService,
+    private readonly userService: UserService
   ) {}
 
   @Post()
-  @Roles(ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   create(@Body() createClientDto: CreateClientDto) {
     return this.clientService.create(createClientDto)
   }
 
   @Post('register-with-user')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   async registerClientWithUser(@Body() payload: CreateClientWithUserDto) {
     return this.clientOnboardingService.registerClientWithUser(payload)
   }
 
   @Get()
-  @Roles(ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   findAll() {
     return this.clientService.findAll()
   }
@@ -58,7 +60,8 @@ export class ClientController {
 
   @Delete(':id')
   @Roles(ROLES.SUPER_ADMIN)
-  remove(@Param('id') id: string) {
+  async remove(@Param('id') id: string) {
+    await this.userService.deleteByClientId(id)
     return this.clientService.remove(id)
   }
 }

@@ -63,6 +63,7 @@ export class ClientService {
     await this.ensureUniqueCodigo(codigo)
 
     const payload = { ...this.normalizeClientPayload(createClientDto), codigo }
+    console.log('[ClientService.create] payload:', JSON.stringify({ email: payload.email, phone: payload.phone, address: payload.address }))
 
     try {
       if (session) {
@@ -85,6 +86,7 @@ export class ClientService {
 
   async update(id: string, updateClientDto: UpdateClientDto) {
     const payload = this.normalizeClientPayload({ ...updateClientDto })
+    console.log('[ClientService.update] payload:', JSON.stringify({ email: payload.email, phone: payload.phone, address: payload.address }))
 
     if (payload.codigo !== undefined) {
       const codigo = this.normalizeCodigo(payload.codigo)

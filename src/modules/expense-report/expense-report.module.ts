@@ -6,6 +6,7 @@ import {
   ExpenseReport,
   ExpenseReportSchema,
 } from './entities/expense-report.entity'
+import { Expense, ExpenseSchema } from '../expense/entities/expense.entity'
 import { AuditLogModule } from '../audit-log/audit-log.module'
 import { EmailModule } from '../email/email.module'
 import { NotificationsModule } from '../notifications/notifications.module'
@@ -16,6 +17,7 @@ import { AdvanceModule } from '../advance/advance.module'
   imports: [
     MongooseModule.forFeature([
       { name: ExpenseReport.name, schema: ExpenseReportSchema },
+      { name: Expense.name, schema: ExpenseSchema },
     ]),
     AuditLogModule,
     EmailModule,

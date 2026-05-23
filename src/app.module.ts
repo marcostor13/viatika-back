@@ -21,6 +21,8 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { AiModule } from './modules/ai/ai.module'
 import { PettyCashModule } from './modules/petty-cash/petty-cash.module'
 import { CategoryGroupModule } from './modules/category-group/category-group.module'
+import { ScheduleModule } from '@nestjs/schedule'
+import { SchedulerModule } from './modules/scheduler/scheduler.module'
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -45,6 +47,8 @@ import { CategoryGroupModule } from './modules/category-group/category-group.mod
     AiModule,
     PettyCashModule,
     CategoryGroupModule,
+    ScheduleModule.forRoot(),
+    SchedulerModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -5,6 +5,7 @@ export type ExpenseReportStatus =
   | 'solicited'
   | 'open'
   | 'submitted'
+  | 'pending_accounting'
   | 'approved'
   | 'rejected'
   | 'reimbursed'

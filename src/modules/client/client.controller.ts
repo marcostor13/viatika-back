@@ -11,6 +11,7 @@ import {
 import { ClientService } from './client.service'
 import { CreateClientDto } from './dto/create-client.dto'
 import { UpdateClientDto } from './dto/update-client.dto'
+import { UpdateNotificationSettingsDto } from './dto/update-notification-settings.dto'
 import { RolesGuard } from '../auth/guards/roles.guard'
 import { ROLES } from '../auth/enums/roles.enum'
 import { Roles } from '../auth/decorators/roles.decorador'
@@ -56,6 +57,15 @@ export class ClientController {
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   update(@Param('id') id: string, @Body() updateClientDto: UpdateClientDto) {
     return this.clientService.update(id, updateClientDto)
+  }
+
+  @Patch(':id/notification-settings')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
+  updateNotificationSettings(
+    @Param('id') id: string,
+    @Body() dto: UpdateNotificationSettingsDto
+  ) {
+    return this.clientService.updateNotificationSettings(id, dto)
   }
 
   @Delete(':id')

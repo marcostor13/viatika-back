@@ -14,6 +14,11 @@ import {
   ExpenseReport,
   ExpenseReportDocument,
 } from './entities/expense-report.entity'
+import { Expense, ExpenseDocument } from '../expense/entities/expense.entity'
+import {
+  parseFechaEmisionInput,
+  applyFechaEmisionDisplayToExpense,
+} from '../expense/utils/fecha-emision.util'
 import { EmailService } from '../email/email.service'
 import { NotificationsService } from '../notifications/notifications.service'
 import { UserService } from '../user/user.service'
@@ -28,6 +33,8 @@ export class ExpenseReportService {
   constructor(
     @InjectModel(ExpenseReport.name)
     private readonly expenseReportModel: Model<ExpenseReportDocument>,
+    @InjectModel(Expense.name)
+    private readonly expenseModel: Model<ExpenseDocument>,
     private readonly emailService: EmailService,
     private readonly notificationsService: NotificationsService,
     private readonly userService: UserService,
@@ -236,6 +243,50 @@ export class ExpenseReportService {
       .exec()
   }
 
+  async findExpensesPaginated(
+    reportId: string,
+    opts: { page: number; limit: number; type?: string; status?: string; search?: string }
+  ) {
+    const report = await this.expenseReportModel
+      .findById(reportId)
+      .select('expenseIds')
+      .exec()
+    if (!report) throw new NotFoundException(`Report ${reportId} not found`)
+
+    const ids = report.expenseIds.map(id => new Types.ObjectId(id.toString()))
+    if (ids.length === 0) {
+      return { data: [], total: 0, page: opts.page, limit: opts.limit, pages: 0 }
+    }
+
+    const filter: Record<string, unknown> = { _id: { $in: ids } }
+    if (opts.type && opts.type !== 'all') filter['expenseType'] = opts.type
+    if (opts.status && opts.status !== 'all') filter['status'] = opts.status
+    if (opts.search?.trim()) {
+      filter['description'] = { $regex: opts.search.trim(), $options: 'i' }
+    }
+
+    const all = await this.expenseModel
+      .find(filter)
+      .populate('categoryId', 'name')
+      .exec()
+
+    const sorted = (all as unknown as Record<string, unknown>[]).sort((a, b) => {
+      const dA = parseFechaEmisionInput(a['fechaEmision'] as string | undefined) ??
+        new Date((a['createdAt'] as string | undefined) ?? 0)
+      const dB = parseFechaEmisionInput(b['fechaEmision'] as string | undefined) ??
+        new Date((b['createdAt'] as string | undefined) ?? 0)
+      return dB.getTime() - dA.getTime()
+    })
+
+    const total = sorted.length
+    const skip = (opts.page - 1) * opts.limit
+    const data = sorted
+      .slice(skip, skip + opts.limit)
+      .map(e => applyFechaEmisionDisplayToExpense(e as { fechaEmision?: unknown; data?: unknown }))
+
+    return { data, total, page: opts.page, limit: opts.limit, pages: Math.ceil(total / opts.limit) }
+  }
+
   async findOne(id: string) {
     const report = await this.expenseReportModel
       .findById(id)
@@ -313,19 +364,25 @@ export class ExpenseReportService {
     if (
       dto.status === 'rejected' &&
       existing.status !== 'submitted' &&
-      existing.status !== 'solicited'
+      existing.status !== 'solicited' &&
+      existing.status !== 'pending_accounting'
     ) {
       throw new BadRequestException(
-        'Solo se pueden rechazar rendiciones enviadas o solicitadas.'
+        'Solo se pueden rechazar rendiciones enviadas, solicitadas o pendientes de contabilidad.'
       )
     }
-    if (dto.status === 'approved' && existing.status !== 'submitted') {
+    if (dto.status === 'pending_accounting' && existing.status !== 'submitted') {
       throw new BadRequestException(
-        'Solo se pueden aprobar rendiciones enviadas.'
+        'Solo se puede enviar a contabilidad una rendicion en estado enviada.'
       )
     }
-    if (dto.status === 'approved') {
+    if (dto.status === 'pending_accounting') {
       await this.validateBeforeFinalApproval(id)
+    }
+    if (dto.status === 'approved' && existing.status !== 'pending_accounting') {
+      throw new BadRequestException(
+        'Solo se puede aprobar una rendicion pendiente de contabilidad.'
+      )
     }
 
     const $set: Record<string, unknown> = {}
@@ -408,10 +465,32 @@ export class ExpenseReportService {
       }
     }
 
+    // Si el coordinador aprueba (→ pending_accounting), notificar a contabilidad
+    if (dto.status === 'pending_accounting') {
+      try {
+        const clientId = String(fullyUpdatedReport.clientId)
+        const accountingUsers = await this.userService.findAccountingRecipientsWithIds(clientId)
+        for (const u of accountingUsers) {
+          await this.notificationsService.create({
+            userId: u._id,
+            title: 'Rendicion lista para aprobacion contable',
+            message: `La rendicion "${fullyUpdatedReport.title}" fue revisada por el coordinador y esta lista para tu aprobacion final.`,
+            type: 'info',
+            actionUrl: `/mis-rendiciones/${id}/detalle`,
+          })
+        }
+      } catch (error) {
+        console.error('Error enviando notificaciones a contabilidad (pending_accounting)', error)
+      }
+    }
+
     // Si la rendición fue aprobada, enviar email y notificación
     if (dto.status === 'approved') {
       const owner = fullyUpdatedReport.userId as any
-      if (owner && owner.email) {
+      const ownerEmailEnabled = owner?._id
+        ? await this.userService.isEmailEnabled(String(owner._id))
+        : false
+      if (owner && owner.email && ownerEmailEnabled) {
         try {
           await this.emailService.sendRendicionFullyApprovedEmail(owner.email, {
             userName: owner.name || 'Colaborador',
@@ -822,6 +901,7 @@ export class ExpenseReportService {
     const owner = report.userId as any
     if (!owner?.email) return
 
+    const ownerEmailEnabled = await this.userService.isEmailEnabled(String(owner._id || owner.id))
     const profile = await this.userService.findTransactionalProfile(
       String(owner._id || owner.id)
     )
@@ -855,10 +935,12 @@ export class ExpenseReportService {
     }
 
     try {
-      await this.emailService.sendRendicionReembolsoPagado(owner.email, {
-        recipientName: owner.name || 'Colaborador',
-        ...baseData,
-      })
+      if (ownerEmailEnabled) {
+        await this.emailService.sendRendicionReembolsoPagado(owner.email, {
+          recipientName: owner.name || 'Colaborador',
+          ...baseData,
+        })
+      }
 
       if (coordinator?.email) {
         await this.emailService.sendRendicionReembolsoPagado(coordinator.email, {
@@ -978,10 +1060,13 @@ export class ExpenseReportService {
       .exec()
     if (!updated) throw new NotFoundException(`Rendición ${id} no encontrada`)
     const collaborator = await this.userService.findEmailNameClient(updated.userId.toString())
+    const collaboratorEmailEnabled = collaborator?.email
+      ? await this.userService.isEmailEnabled(updated.userId.toString())
+      : false
     const closedAtStr = closureRecord.closedAt.toLocaleDateString('es-PE')
-    if (collaborator?.email) {
-      this.emailService.sendRendicionCerrada(collaborator.email, {
-        recipientName: collaborator.name,
+    if (collaboratorEmailEnabled) {
+      this.emailService.sendRendicionCerrada(collaborator!.email, {
+        recipientName: collaborator!.name,
         reportTitle: updated.title,
         closedAt: closedAtStr,
       }).catch(() => {})
@@ -993,9 +1078,9 @@ export class ExpenseReportService {
 
     if (settlement?.type === 'devolucion') {
       const amountFormatted = Math.abs(Number(settlement.difference)).toFixed(2)
-      if (collaborator?.email) {
-        this.emailService.sendRendicionDevolucionColaborador(collaborator.email, {
-          recipientName: collaborator.name,
+      if (collaboratorEmailEnabled) {
+        this.emailService.sendRendicionDevolucionColaborador(collaborator!.email, {
+          recipientName: collaborator!.name,
           reportTitle: updated.title,
           amountFormatted,
           closedAt: closedAtStr,
@@ -1092,9 +1177,12 @@ export class ExpenseReportService {
     const platformUrl = this.emailService.buildAppUrl(`/mis-rendiciones/${id}/detalle`)
     const collaborator = await this.userService.findEmailNameClient(userId)
     const collaboratorName = collaborator?.name || 'Colaborador'
+    const collaboratorEmailEnabled = collaborator?.email
+      ? await this.userService.isEmailEnabled(userId)
+      : false
 
-    if (collaborator?.email) {
-      this.emailService.sendRendicionCerrada(collaborator.email, {
+    if (collaboratorEmailEnabled) {
+      this.emailService.sendRendicionCerrada(collaborator!.email, {
         recipientName: collaboratorName,
         reportTitle: report.title,
         closedAt: voucher.uploadedAt.toLocaleDateString('es-PE'),

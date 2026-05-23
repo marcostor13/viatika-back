@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common'
 import { CreateClientDto } from './dto/create-client.dto'
 import { UpdateClientDto } from './dto/update-client.dto'
-import { Client, ClientDocument } from './entities/client.entity'
+import { Client, ClientDocument, ClientNotificationSettings } from './entities/client.entity'
 import { ClientSession, Model } from 'mongoose'
 import { InjectModel } from '@nestjs/mongoose'
 
@@ -108,5 +108,11 @@ export class ClientService {
 
   remove(id: string) {
     return this.clientModel.findByIdAndDelete(id).exec()
+  }
+
+  updateNotificationSettings(id: string, settings: ClientNotificationSettings) {
+    return this.clientModel
+      .findByIdAndUpdate(id, { notificationSettings: settings }, { new: true })
+      .exec()
   }
 }

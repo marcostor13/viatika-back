@@ -120,4 +120,8 @@ export class UpdateUserDto {
   @ValidateNested()
   @Type(() => UpdateBankAccountDto)
   bankAccount?: UpdateBankAccountDto
+
+  @IsBoolean()
+  @IsOptional()
+  emailNotificationsEnabled?: boolean
 }

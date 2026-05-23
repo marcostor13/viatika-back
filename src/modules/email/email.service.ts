@@ -833,7 +833,6 @@ export class EmailService {
       endDate: string
       totalFormatted: string
       projectLabel: string
-      plainSummary: string
       platformUrl?: string
     }
   ) {
@@ -845,13 +844,6 @@ export class EmailService {
         to: email,
         subject,
         template: './viatico-solicitud-coordinator',
-        attachments: [
-          {
-            filename: 'resumen-solicitud-viaticos.txt',
-            content: data.plainSummary,
-            contentType: 'text/plain; charset=utf-8',
-          },
-        ],
         context: {
           logoUrl: this.getLogoUrl(),
           year: new Date().getFullYear(),
@@ -1178,6 +1170,103 @@ export class EmailService {
       })
     } catch (error) {
       this.logger.error(`Error correo caja chica fondeada a ${email}:`, error)
+    }
+  }
+
+  async sendViaticoRecordatorioColaborador(
+    email: string,
+    data: {
+      collaboratorName: string
+      place: string
+      startDate: string
+      endDate: string
+      frequency: 'semanal' | 'mensual'
+      platformUrl?: string
+    }
+  ) {
+    try {
+      const periodoLabel = data.frequency === 'semanal' ? 'esta semana' : 'este mes'
+      await this.send({
+        to: email,
+        subject: `Recordatorio: Rinde tus viáticos — ${periodoLabel}`,
+        template: './viatico-recordatorio-colaborador',
+        context: {
+          logoUrl: this.getLogoUrl(),
+          year: new Date().getFullYear(),
+          collaboratorName: data.collaboratorName,
+          place: data.place,
+          startDate: data.startDate,
+          endDate: data.endDate,
+          isSemanal: data.frequency === 'semanal',
+          platformUrl: this.resolvePlatformHref(data.platformUrl),
+        },
+      })
+    } catch (error) {
+      this.logger.error(`Error recordatorio rendición colaborador a ${email}:`, error)
+    }
+  }
+
+  async sendViaticoRecordatorioUltimoDia(
+    email: string,
+    data: {
+      collaboratorName: string
+      place: string
+      endDate: string
+      platformUrl?: string
+    }
+  ) {
+    try {
+      await this.send({
+        to: email,
+        subject: `Hoy vence tu periodo de viáticos — ${data.endDate}`,
+        template: './viatico-recordatorio-ultimo-dia',
+        context: {
+          logoUrl: this.getLogoUrl(),
+          year: new Date().getFullYear(),
+          collaboratorName: data.collaboratorName,
+          place: data.place,
+          endDate: data.endDate,
+          platformUrl: this.resolvePlatformHref(data.platformUrl),
+        },
+      })
+    } catch (error) {
+      this.logger.error(`Error recordatorio último día colaborador a ${email}:`, error)
+    }
+  }
+
+  async sendViaticoResumenCoordinador(
+    email: string,
+    data: {
+      coordinatorName: string
+      collaboratorName: string
+      place: string
+      startDate: string
+      endDate: string
+      pendingCount: number
+      frequency: 'semanal' | 'mensual'
+      platformUrl?: string
+    }
+  ) {
+    try {
+      const periodoLabel = data.frequency === 'semanal' ? 'semanal' : 'mensual'
+      await this.send({
+        to: email,
+        subject: `Resumen ${periodoLabel}: gastos de viáticos pendientes de revisión`,
+        template: './viatico-resumen-coordinador',
+        context: {
+          logoUrl: this.getLogoUrl(),
+          year: new Date().getFullYear(),
+          coordinatorName: data.coordinatorName,
+          collaboratorName: data.collaboratorName,
+          place: data.place,
+          startDate: data.startDate,
+          endDate: data.endDate,
+          pendingCount: data.pendingCount,
+          platformUrl: this.resolvePlatformHref(data.platformUrl),
+        },
+      })
+    } catch (error) {
+      this.logger.error(`Error resumen viáticos coordinador a ${email}:`, error)
     }
   }
 }

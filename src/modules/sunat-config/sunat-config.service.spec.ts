@@ -79,9 +79,10 @@ describe('SunatConfigService', () => {
       expect(result).toEqual(config)
     })
 
-    it('lanza NotFoundException si no existe', async () => {
+    it('retorna null si no existe', async () => {
       mockModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(null) })
-      await expect(service.findOne(clientId)).rejects.toThrow(NotFoundException)
+      const result = await service.findOne(clientId)
+      expect(result).toBeNull()
     })
   })
 

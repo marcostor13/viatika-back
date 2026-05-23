@@ -54,15 +54,17 @@ describe('CategoryController', () => {
 
   describe('findAllFlat', () => {
     it('delega al servicio con clientId', async () => {
-      await controller.findAllFlat(clientId)
-      expect(mockCategoryService.findAllFlat).toHaveBeenCalledWith(clientId)
+      const req = makeReq()
+      await controller.findAllFlat(clientId, req as never)
+      expect(mockCategoryService.findAllFlat).toHaveBeenCalledWith(clientId, undefined)
     })
   })
 
   describe('findAllFlatLegacy', () => {
     it('usa la misma logica que findAllFlat', async () => {
-      await controller.findAllFlatLegacy(clientId)
-      expect(mockCategoryService.findAllFlat).toHaveBeenCalledWith(clientId)
+      const req = makeReq()
+      await controller.findAllFlatLegacy(clientId, req as never)
+      expect(mockCategoryService.findAllFlat).toHaveBeenCalledWith(clientId, undefined)
     })
   })
 

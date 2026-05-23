@@ -62,7 +62,7 @@ export class PettyCashService {
       expenses: [],
     })
     const responsible = await this.userService.findEmailNameClient(dto.responsibleId)
-    if (responsible?.email) {
+    if (responsible?.email && await this.userService.isEmailEnabled(dto.responsibleId)) {
       this.emailService.sendCajaChicaCreada(responsible.email, {
         recipientName: responsible.name,
         code,
@@ -113,7 +113,7 @@ export class PettyCashService {
       )
       .exec()
     const responsible = await this.userService.findEmailNameClient(doc.responsibleId.toString())
-    if (responsible?.email) {
+    if (responsible?.email && await this.userService.isEmailEnabled(doc.responsibleId.toString())) {
       this.emailService.sendCajaChicaFondeada(responsible.email, {
         recipientName: responsible.name,
         code: doc.code,

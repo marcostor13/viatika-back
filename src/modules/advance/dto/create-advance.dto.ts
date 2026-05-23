@@ -80,6 +80,21 @@ export class CreateAdvanceDto {
   @IsOptional()
   observations?: string
 
+  /** Saldo trasladado desde una rendición anterior (nueva solicitud con saldo pendiente). */
+  @IsMongoId()
+  @IsOptional()
+  pendingBalanceFromReportId?: string
+
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  pendingBalanceAmount?: number
+
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  additionalAmount?: number
+
   /** Seteados desde el JWT en el controlador */
   userId?: string
   clientId?: string

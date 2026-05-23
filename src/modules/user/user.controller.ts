@@ -161,6 +161,27 @@ export class UserController {
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Patch(':id/notifications')
+  async updateEmailNotifications(
+    @Param('id', ParseObjectIdPipe) id: Types.ObjectId,
+    @Body() body: { emailNotificationsEnabled: boolean },
+    @Request() req: any
+  ) {
+    await this.userService.setEmailNotifications(id.toString(), !!body.emailNotificationsEnabled)
+    this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email,
+      action: 'update_email_notifications',
+      module: 'usuarios',
+      entityId: id.toString(),
+      details: body.emailNotificationsEnabled ? 'activadas' : 'desactivadas',
+      clientId: req.user.clientId,
+    })
+    return { emailNotificationsEnabled: !!body.emailNotificationsEnabled }
+  }
+
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
   @Delete(':id')
   async delete(@Param('id', ParseObjectIdPipe) id: Types.ObjectId) {
     return await this.userService.delete(id.toString())

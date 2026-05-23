@@ -10,6 +10,7 @@ import {
   Delete,
   UseGuards,
   Request,
+  Query,
 } from '@nestjs/common'
 import { Types } from 'mongoose'
 import { ExpenseReportService } from './expense-report.service'
@@ -130,13 +131,32 @@ export class ExpenseReportController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Get(':id/expenses')
+  findExpensesPaginated(
+    @Param('id') id: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('type') type?: string,
+    @Query('status') status?: string,
+    @Query('search') search?: string
+  ) {
+    return this.expenseReportService.findExpensesPaginated(id, {
+      page: page ? Math.max(1, parseInt(page, 10)) : 1,
+      limit: limit ? Math.min(50, Math.max(1, parseInt(limit, 10))) : 10,
+      type,
+      status,
+      search,
+    })
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.expenseReportService.findOne(id)
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.COORDINADOR, ROLES.CONTABILIDAD)
   @Patch(':id')
   async update(
     @Param('id') id: string,
@@ -146,12 +166,15 @@ export class ExpenseReportController {
     const status = updateExpenseReportDto.status
     const role = req.user?.roles?.[0]
     const isCollaborator = role === ROLES.COLABORADOR
+    const isContabilidad = role === ROLES.CONTABILIDAD
     const isAdminOrSuperAdmin =
-      role === ROLES.ADMIN || role === ROLES.SUPER_ADMIN
+      role === ROLES.ADMIN || role === ROLES.SUPER_ADMIN ||
+      (role === ROLES.COORDINADOR && req.user?.permissions?.modules?.includes('rendiciones'))
 
     if (
       isCollaborator &&
       (status === 'open' ||
+        status === 'pending_accounting' ||
         status === 'approved' ||
         status === 'rejected' ||
         status === 'closed' ||
@@ -164,7 +187,6 @@ export class ExpenseReportController {
 
     if (
       (status === 'open' ||
-        status === 'approved' ||
         status === 'closed' ||
         status === 'reimbursed') &&
       !isAdminOrSuperAdmin
@@ -174,9 +196,24 @@ export class ExpenseReportController {
       )
     }
 
-    // Si se aprueba la solicitud o la rendición, guardar quién aprobó
+    // Solo coordinador/admin puede enviar a contabilidad (paso 1)
+    if (status === 'pending_accounting' && !isAdminOrSuperAdmin) {
+      throw new ForbiddenException(
+        'Solo el coordinador o administrador puede aprobar esta etapa de la rendicion.'
+      )
+    }
+
+    // Solo contabilidad/admin/superadmin puede hacer la aprobacion final (paso 2)
+    if (status === 'approved' && !isAdminOrSuperAdmin && !isContabilidad) {
+      throw new ForbiddenException(
+        'Solo contabilidad puede realizar la aprobacion final de la rendicion.'
+      )
+    }
+
+    // Registrar quién aprobó en cada paso
     if (
       updateExpenseReportDto.status === 'open' ||
+      updateExpenseReportDto.status === 'pending_accounting' ||
       updateExpenseReportDto.status === 'approved'
     ) {
       await this.expenseReportService.setApprovedBy(id, req.user._id)

@@ -37,6 +37,8 @@ export interface UserDocument extends Document {
   coordinatorId?: Types.ObjectId
   mustChangePassword?: boolean
   profilePic?: string
+  isCompanyAdmin?: boolean
+  emailNotificationsEnabled?: boolean
 }
 
 @Schema({ timestamps: true })
@@ -112,6 +114,12 @@ export class User {
 
   @Prop({ type: String, required: false })
   profilePic?: string
+
+  @Prop({ type: Boolean, default: false })
+  isCompanyAdmin?: boolean
+
+  @Prop({ type: Boolean, default: false })
+  emailNotificationsEnabled?: boolean
 }
 
 export const UserSchema = SchemaFactory.createForClass(User)

@@ -178,7 +178,14 @@ export class AdvanceService {
   }
 
   private async createSimpleAdvance(dto: CreateAdvanceDto): Promise<Advance> {
-    const requiredLevels = dto.amount > ADVANCE_THRESHOLDS.L1_MAX ? 2 : 1
+    const hasPendingBalance =
+      dto.pendingBalanceAmount !== undefined && dto.additionalAmount !== undefined
+
+    const amount = hasPendingBalance
+      ? Number(dto.pendingBalanceAmount) + Number(dto.additionalAmount)
+      : dto.amount
+
+    const requiredLevels = amount > ADVANCE_THRESHOLDS.L1_MAX ? 2 : 1
 
     const advance = await this.advanceModel.create({
       userId: new Types.ObjectId(dto.userId),
@@ -186,12 +193,19 @@ export class AdvanceService {
       expenseReportId: dto.expenseReportId
         ? new Types.ObjectId(dto.expenseReportId)
         : undefined,
-      amount: dto.amount,
+      amount,
       description: dto.description,
       status: 'pending_l1',
       approvalLevel: 0,
       requiredLevels,
       approvalHistory: [],
+      ...(hasPendingBalance && {
+        pendingBalanceFromReportId: dto.pendingBalanceFromReportId
+          ? new Types.ObjectId(dto.pendingBalanceFromReportId)
+          : undefined,
+        pendingBalanceAmount: Number(dto.pendingBalanceAmount),
+        additionalAmount: Number(dto.additionalAmount),
+      }),
     })
 
     if (dto.expenseReportId) {
@@ -314,6 +328,9 @@ export class AdvanceService {
       )
     }
 
+    const pendingAmt = Number(dto.pendingBalanceAmount ?? 0)
+    const linesOnlyAmount = Math.round((dto.amount - pendingAmt) * 100) / 100
+
     const { lineDocs, roundedSum, description, requiredLevels } =
       await this.validateViaticoBusinessRulesAndLines(
         {
@@ -323,10 +340,13 @@ export class AdvanceService {
           projectId: dto.projectId!,
           lines: dto.lines!,
           observations: dto.observations,
-          amount: dto.amount,
+          amount: linesOnlyAmount,
         },
         dto.clientId!
       )
+
+    const totalAmount = Math.round((roundedSum + pendingAmt) * 100) / 100
+    const totalRequiredLevels = totalAmount > ADVANCE_THRESHOLDS.L1_MAX ? 2 : 1
 
     const advance = await this.advanceModel.create({
       userId: new Types.ObjectId(dto.userId),
@@ -341,14 +361,19 @@ export class AdvanceService {
       endDate: new Date(dto.endDate!),
       lines: lineDocs,
       observations: dto.observations?.trim(),
-      amount: roundedSum,
+      amount: totalAmount,
       description,
       status: 'pending_l1',
       approvalLevel: 0,
-      requiredLevels,
+      requiredLevels: totalRequiredLevels,
       approvalHistory: [],
       solicitudVersion: 1,
       budgetCommitmentRecorded: false,
+      ...(pendingAmt > 0 && dto.pendingBalanceFromReportId && {
+        pendingBalanceFromReportId: new Types.ObjectId(dto.pendingBalanceFromReportId),
+        pendingBalanceAmount: pendingAmt,
+        additionalAmount: roundedSum,
+      }),
     })
 
     if (dto.expenseReportId) {
@@ -412,14 +437,6 @@ export class AdvanceService {
       advance.endDate instanceof Date
         ? advance.endDate.toISOString().slice(0, 10)
         : String(advance.endDate).slice(0, 10)
-
-    const plainSummary = [
-      `Colaborador: ${collaborator?.name ?? ''}`,
-      `Lugar: ${advance.place}`,
-      `Fechas: ${startStr} al ${endStr}`,
-      `Centro de costo: ${projectLabel}${clientLabel ? ` (${clientLabel})` : ''}`,
-      `Monto total: S/ ${totalFormatted}`,
-    ].join('\n')
 
     const platformUrl = this.emailService.buildAppUrl('/tesoreria')
     const manualResendUrl = `/advance/${advanceId}/resend-coordinator-email`
@@ -515,7 +532,6 @@ export class AdvanceService {
           endDate: endStr,
           totalFormatted,
           projectLabel,
-          plainSummary,
           platformUrl,
         }
       )
@@ -558,6 +574,7 @@ export class AdvanceService {
     const uid = advance.userId.toString()
     const collab = await this.userService.findEmailNameClient(uid)
     if (!collab?.email) return
+    if (!(await this.userService.isEmailEnabled(uid))) return
     const profile =
       await this.userService.findCollaboratorViaticoNotifyProfile(uid)
     let projectLabel = 'Centro de costo'
@@ -1050,6 +1067,7 @@ export class AdvanceService {
     const collab = await this.userService.findEmailNameClient(collabId)
     if (!collab?.email) return
 
+    const collabEmailEnabled = await this.userService.isEmailEnabled(collabId)
     const profile = await this.userService.findTransactionalProfile(collabId)
     const coordinatorId = profile?.coordinatorId?.toString?.()
     const coordinator = coordinatorId
@@ -1090,10 +1108,12 @@ export class AdvanceService {
       platformUrl,
     }
 
-    await this.emailService.sendViaticoPagoRealizado(collab.email, {
-      recipientName: collab.name,
-      ...baseData,
-    })
+    if (collabEmailEnabled) {
+      await this.emailService.sendViaticoPagoRealizado(collab.email, {
+        recipientName: collab.name,
+        ...baseData,
+      })
+    }
 
     if (coordinator?.email) {
       await this.emailService.sendViaticoPagoRealizado(coordinator.email, {
@@ -1122,7 +1142,7 @@ export class AdvanceService {
     dateFrom?: string
     dateTo?: string
   }) {
-    const isAdminRole = [ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(
+    const isAdminRole = [ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD].includes(
       opts.requesterRole as ROLES
     )
     const isCoordinator =
@@ -1156,7 +1176,7 @@ export class AdvanceService {
       .find(filter)
       .populate('userId', 'name email bankAccount dni')
       .populate('projectId', 'code name')
-      .sort({ createdAt: -1 })
+      .sort({ startDate: -1, createdAt: -1 })
       .exec()
   }
 
@@ -1486,9 +1506,13 @@ export class AdvanceService {
     const rawAdvanceIds = Array.isArray(report.advanceIds)
       ? report.advanceIds
       : []
-    const idList = rawAdvanceIds.map(
-      (x: unknown) => new Types.ObjectId(String(x))
-    )
+    const idList = rawAdvanceIds
+      .map((x: unknown) => {
+        const raw = (x as any)?._id ?? x
+        const str = String(raw)
+        return Types.ObjectId.isValid(str) ? new Types.ObjectId(str) : null
+      })
+      .filter((id): id is Types.ObjectId => id !== null)
 
     const linkedAdvances = await this.advanceModel
       .find({
@@ -1766,7 +1790,8 @@ export class AdvanceService {
     const collaborator = await this.userService.findEmailNameClient(
       advance.userId.toString()
     )
-    if (collaborator?.email) {
+    const collabReturnEmailEnabled = await this.userService.isEmailEnabled(advance.userId.toString())
+    if (collaborator?.email && collabReturnEmailEnabled) {
       const sendFn = approved
         ? this.emailService.sendDevolucionValidada.bind(this.emailService)
         : this.emailService.sendDevolucionRechazada.bind(this.emailService)

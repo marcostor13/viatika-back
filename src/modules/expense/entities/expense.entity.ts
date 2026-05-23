@@ -24,7 +24,6 @@ export interface MobilityRowCoords {
 
 export interface MobilityRow {
   fecha: string
-  concepto: string
   total: number
   clienteProveedor: string
   origen: string
@@ -178,7 +177,6 @@ export class Expense {
     type: [
       {
         fecha: { type: String },
-        concepto: { type: String },
         total: { type: Number },
         clienteProveedor: { type: String },
         origen: { type: String },

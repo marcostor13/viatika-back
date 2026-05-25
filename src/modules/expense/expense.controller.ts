@@ -300,7 +300,7 @@ export class ExpenseController {
   }
 
   @Patch('invoice/:id')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   @UseGuards(JwtAuthGuard, RolesGuard)
   update(
     @Param('id') id: string,
@@ -359,7 +359,7 @@ export class ExpenseController {
   }
 
   @Delete('invoice/:id')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   @UseGuards(JwtAuthGuard, RolesGuard)
   async remove(@Param('id') id: string, @Request() req) {
     const result = await this.expenseService.remove(
@@ -378,7 +378,7 @@ export class ExpenseController {
   }
 
   @Post('invoice/:id/validate-sunat')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   @UseGuards(JwtAuthGuard, RolesGuard)
   async validateWithSunat(
     @Param('id') id: string,

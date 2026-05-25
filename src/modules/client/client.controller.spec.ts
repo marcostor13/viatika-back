@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing'
 import { ClientController } from './client.controller'
 import { ClientService } from './client.service'
 import { ClientOnboardingService } from './client-onboarding.service'
+import { UserService } from '../user/user.service'
 
 describe('ClientController', () => {
   let controller: ClientController
@@ -12,6 +13,7 @@ describe('ClientController', () => {
       providers: [
         { provide: ClientService, useValue: {} },
         { provide: ClientOnboardingService, useValue: {} },
+        { provide: UserService, useValue: {} },
       ],
     }).compile()
 

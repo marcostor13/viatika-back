@@ -141,6 +141,9 @@ export class SchedulerService {
       })
       .catch(err => this.logger.error('Error notif in-app colaborador recordatorio', err))
 
+    const collabEmailEnabled = await this.userService.isEmailEnabled(advance.userId.toString())
+    if (!collabEmailEnabled) return
+
     this.emailService
       .sendViaticoRecordatorioColaborador(collaborator.email, {
         collaboratorName: collaborator.name,
@@ -178,6 +181,11 @@ export class SchedulerService {
       })
       .catch(err => this.logger.error('Error notif in-app coordinador resumen', err))
 
+    const coordinatorEmailEnabled = await this.userService.isEmailEnabled(
+      (advance.coordinatorId as Types.ObjectId).toString(),
+    )
+    if (!coordinatorEmailEnabled) return
+
     this.emailService
       .sendViaticoResumenCoordinador(coordinator.email, {
         coordinatorName: coordinator.name,
@@ -208,6 +216,9 @@ export class SchedulerService {
         metadata: { advanceId: advance._id, event: 'recordatorio_ultimo_dia' },
       })
       .catch(err => this.logger.error('Error notif in-app último día', err))
+
+    const emailEnabled = await this.userService.isEmailEnabled(advance.userId.toString())
+    if (!emailEnabled) return
 
     this.emailService
       .sendViaticoRecordatorioUltimoDia(collaborator.email, {

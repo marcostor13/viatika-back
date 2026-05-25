@@ -587,7 +587,8 @@ export class ExpenseService {
     if (body.userId) {
       try {
         const creator = await this.userService.findOne(body.userId)
-        if (creator?.email) {
+        const creatorEmailEnabled = await this.userService.isEmailEnabled(body.userId)
+        if (creator?.email && creatorEmailEnabled) {
           await this.emailService.sendInvoiceUploadedExpenseNotification(
             creator.email,
             notificationPayload
@@ -616,6 +617,8 @@ export class ExpenseService {
       for (const colaborador of colaboradores) {
         if (!colaborador.email) continue
         try {
+          const emailEnabled = await this.userService.isEmailEnabled(colaborador._id.toString())
+          if (!emailEnabled) continue
           await this.emailService.sendInvoiceUploadedExpenseNotification(
             colaborador.email,
             notificationPayload
@@ -1833,6 +1836,8 @@ export class ExpenseService {
           for (const colaborador of colaboradores) {
             if (colaborador.email && colaborador._id.toString() !== creadorId) {
               try {
+                const emailEnabled = await this.userService.isEmailEnabled(colaborador._id.toString())
+                if (!emailEnabled) continue
                 await this.emailService.sendInvoiceApprovedToColaborador(
                   colaborador.email,
                   {

@@ -16,6 +16,149 @@ import { CategoryService } from '../category/category.service'
 import { CreateExpenseDto } from './dto/create-expense.dto'
 import { Client } from '../client/entities/client.entity'
 
+describe('ExpenseService — email gating (isEmailEnabled)', () => {
+  let service: ExpenseService
+
+  const mockEmailServiceGating = {
+    buildAppUrl: jest.fn().mockReturnValue('http://app'),
+    sendInvoiceUploadedExpenseNotification: jest.fn().mockResolvedValue(undefined),
+    sendInvoiceApprovedToColaborador: jest.fn().mockResolvedValue(undefined),
+  }
+
+  const mockUserServiceGating = {
+    findOne: jest.fn(),
+    findAll: jest.fn(),
+    isEmailEnabled: jest.fn(),
+  }
+
+  const mockCategoryServiceGating = {
+    findOne: jest.fn().mockResolvedValue(null),
+  }
+
+  beforeEach(async () => {
+    jest.clearAllMocks()
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ExpenseService,
+        { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue('sk-test') } },
+        { provide: getModelToken(Expense.name), useValue: { aggregate: jest.fn() } },
+        { provide: getModelToken(Client.name), useValue: {} },
+        { provide: EmailService, useValue: mockEmailServiceGating },
+        { provide: ProjectService, useValue: {} },
+        { provide: UserService, useValue: mockUserServiceGating },
+        { provide: SunatConfigService, useValue: {} },
+        { provide: HttpService, useValue: {} },
+        { provide: UploadService, useValue: {} },
+        { provide: ExpenseReportService, useValue: {} },
+        { provide: NotificationsService, useValue: { create: jest.fn().mockResolvedValue(undefined) } },
+        { provide: CategoryService, useValue: mockCategoryServiceGating },
+      ],
+    }).compile()
+
+    service = module.get<ExpenseService>(ExpenseService)
+  })
+
+  const userId = new Types.ObjectId().toHexString()
+  const clientId = new Types.ObjectId().toHexString()
+  const body = { userId, clientId } as unknown as CreateExpenseDto
+  const data = {} as any
+
+  describe('notifyStakeholders — creator email gating', () => {
+    it('does not send creator email when isEmailEnabled returns false', async () => {
+      mockUserServiceGating.findOne.mockResolvedValue({ email: 'creator@test.com', name: 'Creator' })
+      mockUserServiceGating.isEmailEnabled.mockResolvedValue(false)
+      mockUserServiceGating.findAll.mockResolvedValue([])
+
+      await (service as any).notifyStakeholders(body, data, 'Project')
+
+      expect(mockEmailServiceGating.sendInvoiceUploadedExpenseNotification).not.toHaveBeenCalled()
+    })
+
+    it('sends creator email when isEmailEnabled returns true', async () => {
+      mockUserServiceGating.findOne.mockResolvedValue({ email: 'creator@test.com', name: 'Creator' })
+      mockUserServiceGating.isEmailEnabled.mockResolvedValue(true)
+      mockUserServiceGating.findAll.mockResolvedValue([])
+
+      await (service as any).notifyStakeholders(body, data, 'Project')
+
+      expect(mockEmailServiceGating.sendInvoiceUploadedExpenseNotification).toHaveBeenCalledWith(
+        'creator@test.com',
+        expect.any(Object),
+      )
+    })
+  })
+
+  describe('notifyStakeholders — collaborator email gating', () => {
+    it('skips collaborator email when isEmailEnabled returns false', async () => {
+      const collabId = new Types.ObjectId()
+      // findOne returns null so creator block skips email; isEmailEnabled still called for creator
+      mockUserServiceGating.findOne.mockResolvedValue(null)
+      mockUserServiceGating.findAll.mockResolvedValue([
+        { _id: collabId, email: 'collab@test.com', name: 'Collab' },
+      ])
+      mockUserServiceGating.isEmailEnabled.mockResolvedValue(false)
+
+      await (service as any).notifyStakeholders(body, data, 'Project')
+
+      expect(mockEmailServiceGating.sendInvoiceUploadedExpenseNotification).not.toHaveBeenCalled()
+    })
+
+    it('sends collaborator email when isEmailEnabled returns true for collaborator', async () => {
+      const collabId = new Types.ObjectId()
+      mockUserServiceGating.findOne.mockResolvedValue(null) // no creator email
+      mockUserServiceGating.findAll.mockResolvedValue([
+        { _id: collabId, email: 'collab@test.com', name: 'Collab' },
+      ])
+      // first call = creator check (null email so no send), second call = collab check
+      mockUserServiceGating.isEmailEnabled
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(true)
+
+      await (service as any).notifyStakeholders(body, data, 'Project')
+
+      expect(mockEmailServiceGating.sendInvoiceUploadedExpenseNotification).toHaveBeenCalledWith(
+        'collab@test.com',
+        expect.any(Object),
+      )
+    })
+  })
+
+  describe('sendApprovalEmails — collaborator email gating', () => {
+    const createdBy = new Types.ObjectId().toHexString()
+    const collab1Id = new Types.ObjectId()
+
+    const expense = { data: null, createdBy, clientId }
+
+    it('skips collaborator approval email when isEmailEnabled returns false', async () => {
+      mockUserServiceGating.findOne.mockResolvedValue({ email: 'creator@test.com', name: 'Creator' })
+      mockUserServiceGating.findAll.mockResolvedValue([
+        { _id: collab1Id, email: 'collab@test.com', name: 'Collab' },
+      ])
+      mockUserServiceGating.isEmailEnabled.mockResolvedValue(false)
+
+      await (service as any).sendApprovalEmails(expense, null, 'Admin', 'User')
+
+      expect(mockEmailServiceGating.sendInvoiceApprovedToColaborador).not.toHaveBeenCalled()
+    })
+
+    it('sends collaborator approval email when isEmailEnabled returns true', async () => {
+      mockUserServiceGating.findOne.mockResolvedValue({ email: 'creator@test.com', name: 'Creator' })
+      mockUserServiceGating.findAll.mockResolvedValue([
+        { _id: collab1Id, email: 'collab@test.com', name: 'Collab' },
+      ])
+      mockUserServiceGating.isEmailEnabled.mockResolvedValue(true)
+
+      await (service as any).sendApprovalEmails(expense, null, 'Admin', 'User')
+
+      expect(mockEmailServiceGating.sendInvoiceApprovedToColaborador).toHaveBeenCalledWith(
+        'collab@test.com',
+        expect.any(Object),
+      )
+    })
+  })
+})
+
 describe('ExpenseService — Fase 5 (plazos y límites de categoría)', () => {
   let service: ExpenseService
 

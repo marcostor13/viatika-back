@@ -127,12 +127,12 @@ export class ExpenseReportService {
       )
     }
 
-    const hasNonApproved = expenses.some(
-      (e: any) => String(e?.status || '').toLowerCase() !== 'approved'
+    const hasRejected = expenses.some(
+      (e: any) => String(e?.status || '').toLowerCase() === 'rejected'
     )
-    if (hasNonApproved) {
+    if (hasRejected) {
       throw new BadRequestException(
-        'Apruebe todos los gastos individuales para habilitar la aprobación final.'
+        'Existen comprobantes rechazados. Corrígelos antes de aprobar la rendición.'
       )
     }
   }
@@ -465,7 +465,7 @@ export class ExpenseReportService {
       }
     }
 
-    // Si el coordinador aprueba (→ pending_accounting), notificar a contabilidad
+    // Coordinador aprueba la rendición (→ pending_accounting): notificar a contabilidad + colaborador
     if (dto.status === 'pending_accounting') {
       try {
         const clientId = String(fullyUpdatedReport.clientId)
@@ -473,57 +473,71 @@ export class ExpenseReportService {
         for (const u of accountingUsers) {
           await this.notificationsService.create({
             userId: u._id,
-            title: 'Rendicion lista para aprobacion contable',
-            message: `La rendicion "${fullyUpdatedReport.title}" fue revisada por el coordinador y esta lista para tu aprobacion final.`,
+            title: 'Rendición aprobada por Coordinador',
+            message: `La rendición "${fullyUpdatedReport.title}" fue aprobada por el coordinador y está lista para tu aprobación final.`,
             type: 'info',
             actionUrl: `/mis-rendiciones/${id}/detalle`,
           })
         }
+        // Notificar al colaborador
+        const ownerRef = fullyUpdatedReport.userId as any
+        const ownerId = ownerRef?._id ? String(ownerRef._id) : String(ownerRef)
+        await this.notificationsService.create({
+          userId: ownerId,
+          title: 'Tu rendición fue aprobada por el Coordinador',
+          message: `Tu rendición "${fullyUpdatedReport.title}" fue aprobada por el coordinador. Contabilidad realizará la revisión final.`,
+          type: 'success',
+          actionUrl: `/mis-rendiciones/${id}/detalle`,
+        })
       } catch (error) {
         console.error('Error enviando notificaciones a contabilidad (pending_accounting)', error)
       }
     }
 
-    // Si la rendición fue aprobada, enviar email y notificación
+    // Contabilidad aprueba la rendición (→ approved): notificar colaborador + coordinador
     if (dto.status === 'approved') {
       const owner = fullyUpdatedReport.userId as any
-      const ownerEmailEnabled = owner?._id
-        ? await this.userService.isEmailEnabled(String(owner._id))
-        : false
-      if (owner && owner.email && ownerEmailEnabled) {
-        try {
+      const ownerId = owner?._id ? String(owner._id) : String(owner)
+      try {
+        const ownerEmailEnabled = owner?._id
+          ? await this.userService.isEmailEnabled(ownerId)
+          : false
+        if (owner && owner.email && ownerEmailEnabled) {
           await this.emailService.sendRendicionFullyApprovedEmail(owner.email, {
             userName: owner.name || 'Colaborador',
             title: fullyUpdatedReport.title,
             budget: fullyUpdatedReport.budget,
-            platformUrl: this.emailService.buildAppUrl(
-              `/mis-rendiciones/${id}/detalle`
-            ),
+            platformUrl: this.emailService.buildAppUrl(`/mis-rendiciones/${id}/detalle`),
           })
+        }
+        await this.notificationsService.create({
+          userId: ownerId,
+          title: 'Rendición aprobada por Contabilidad',
+          message: `Tu rendición "${fullyUpdatedReport.title}" ha sido aprobada por contabilidad. Revisa el detalle para los próximos pasos.`,
+          type: 'success',
+          actionUrl: `/mis-rendiciones/${id}/detalle`,
+        })
 
+        // Notificar al coordinador
+        const profile = await this.userService.findTransactionalProfile(ownerId)
+        const coordinatorId = profile?.coordinatorId?.toString?.()
+        if (coordinatorId) {
           await this.notificationsService.create({
-            userId: String(owner._id),
-            title: 'Rendición Aprobada',
-            message: `Tu rendición "${fullyUpdatedReport.title}" ha sido aprobada exitosamente y pasará a contabilidad.`,
-            type: 'success',
+            userId: coordinatorId,
+            title: 'Rendición aprobada por Contabilidad',
+            message: `La rendición "${fullyUpdatedReport.title}" fue aprobada por contabilidad.`,
+            type: 'info',
             actionUrl: `/mis-rendiciones/${id}/detalle`,
           })
-        } catch (error) {
-          // Log pero no fallar el request de actualización
-          console.error(
-            'Error enviando notificaciones de rendición aprobada',
-            error
-          )
         }
+      } catch (error) {
+        console.error('Error enviando notificaciones de rendición aprobada por contabilidad', error)
       }
 
       try {
         await this.advanceService.liquidateExpenseReport(id)
       } catch (err) {
-        console.error(
-          `[ExpenseReportService] Liquidación post-aprobación ${id}:`,
-          err
-        )
+        console.error(`[ExpenseReportService] Liquidación post-aprobación ${id}:`, err)
       }
     }
 
@@ -571,10 +585,13 @@ export class ExpenseReportService {
           const coordinator = await this.userService.findEmailNameClient(coordinatorId)
           if (coordinator?.email) {
             sentEmails.add(coordinator.email.trim().toLowerCase())
-            await this.emailService.sendRendicionSubmitted(coordinator.email, {
-              recipientName: coordinator.name,
-              ...emailData,
-            })
+            const coordEmailEnabled = await this.userService.isEmailEnabled(coordinatorId)
+            if (coordEmailEnabled) {
+              await this.emailService.sendRendicionSubmitted(coordinator.email, {
+                recipientName: coordinator.name,
+                ...emailData,
+              })
+            }
           }
         }
 
@@ -649,6 +666,22 @@ export class ExpenseReportService {
     await this.expenseReportModel
       .findByIdAndUpdate(reportId, {
         $set: { approvedBy: new Types.ObjectId(userId) },
+      })
+      .exec()
+  }
+
+  async setCoordinatorApproval(reportId: string, userId: string) {
+    await this.expenseReportModel
+      .findByIdAndUpdate(reportId, {
+        $set: { coordinatorApprovedBy: new Types.ObjectId(userId), coordinatorApprovedAt: new Date() },
+      })
+      .exec()
+  }
+
+  async setContabilidadApproval(reportId: string, userId: string) {
+    await this.expenseReportModel
+      .findByIdAndUpdate(reportId, {
+        $set: { contabilidadApprovedBy: new Types.ObjectId(userId), contabilidadApprovedAt: new Date() },
       })
       .exec()
   }
@@ -909,6 +942,9 @@ export class ExpenseReportService {
     const coordinator = coordinatorId
       ? await this.userService.findEmailNameClient(coordinatorId)
       : null
+    const coordEmailEnabled = coordinatorId
+      ? await this.userService.isEmailEnabled(coordinatorId)
+      : false
 
     const diff = report.settlement?.difference ?? 0
     const amountFormatted = Math.abs(Number(diff)).toFixed(2)
@@ -942,7 +978,7 @@ export class ExpenseReportService {
         })
       }
 
-      if (coordinator?.email) {
+      if (coordinator?.email && coordEmailEnabled) {
         await this.emailService.sendRendicionReembolsoPagado(coordinator.email, {
           recipientName: coordinator.name || 'Coordinador/a',
           ...baseData,
@@ -1336,6 +1372,65 @@ export class ExpenseReportService {
     } catch (error) {
       console.error('Error enviando notificaciones de rendición cancelada', error)
     }
+
+    return updated
+  }
+
+  /** Contabilidad reabre una rendición directamente (sin ciclo request/approve). Vuelve a estado 'open'. */
+  async reopen(
+    id: string,
+    reopenedBy: string,
+    reason: string
+  ): Promise<ExpenseReportDocument> {
+    const trimmedReason = reason?.trim() ?? ''
+    if (!trimmedReason) {
+      throw new BadRequestException('El motivo de reapertura es obligatorio.')
+    }
+    const report = await this.expenseReportModel.findById(id).exec()
+    if (!report) throw new NotFoundException(`Rendición ${id} no encontrada`)
+
+    const nonReopenable: string[] = ['open', 'solicited', 'cancelled']
+    if (nonReopenable.includes(report.status)) {
+      throw new BadRequestException(
+        `La rendición ya está en estado "${report.status}". No se puede reabrir.`
+      )
+    }
+
+    const reopenEntry = { reason: trimmedReason, reopenedBy, reopenedAt: new Date(), fromStatus: report.status }
+    const updated = await this.expenseReportModel
+      .findByIdAndUpdate(
+        id,
+        { $set: { status: 'open' }, $push: { reopenHistory: reopenEntry } },
+        { new: true }
+      )
+      .exec()
+    if (!updated) throw new NotFoundException(`Rendición ${id} no encontrada`)
+
+    const collaborator = await this.userService.findEmailNameClient(report.userId.toString())
+    const platformUrl = this.emailService.buildAppUrl(`/mis-rendiciones/${id}/detalle`)
+
+    this.notificationsService.create({
+      userId: report.userId.toString(),
+      title: 'Rendición reabierta',
+      message: `Tu rendición fue reabierta por contabilidad. Motivo: ${trimmedReason.slice(0, 100)}. Ya puedes editar tus comprobantes.`,
+      type: 'warning',
+      actionUrl: `/mis-rendiciones/${id}/detalle`,
+    }).catch(() => {})
+
+    // Notificar al coordinador
+    try {
+      const profile = await this.userService.findTransactionalProfile(report.userId.toString())
+      const coordinatorId = profile?.coordinatorId?.toString?.()
+      if (coordinatorId) {
+        this.notificationsService.create({
+          userId: coordinatorId,
+          title: 'Rendición reabierta por Contabilidad',
+          message: `La rendición "${updated.title}" fue reabierta. Motivo: ${trimmedReason.slice(0, 100)}.`,
+          type: 'info',
+          actionUrl: `/mis-rendiciones/${id}/detalle`,
+        }).catch(() => {})
+      }
+    } catch {}
 
     return updated
   }

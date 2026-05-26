@@ -430,6 +430,7 @@ export class UserService {
       .find({
         clientId: new Types.ObjectId(clientId),
         isActive: true,
+        emailNotificationsEnabled: true,
         $or: [
           { roleId: { $in: adminRoles.map(r => (r as any)._id) } },
           { 'permissions.modules': 'tesoreria' },
@@ -446,6 +447,7 @@ export class UserService {
             clientId: null,
             roleId: (contabilidadRole as any)._id,
             isActive: true,
+            emailNotificationsEnabled: true,
           })
           .select('email name')
           .exec()
@@ -475,6 +477,7 @@ export class UserService {
       .find({
         clientId: new Types.ObjectId(clientId),
         isActive: true,
+        emailNotificationsEnabled: true,
         $or: [
           ...(contabilidadRole
             ? [{ roleId: (contabilidadRole as any)._id }]
@@ -492,6 +495,7 @@ export class UserService {
             clientId: null,
             roleId: (contabilidadRole as any)._id,
             isActive: true,
+            emailNotificationsEnabled: true,
           })
           .select('email name')
           .exec()
@@ -518,6 +522,7 @@ export class UserService {
       .find({
         clientId: new Types.ObjectId(clientId),
         isActive: true,
+        emailNotificationsEnabled: true,
         $or: [
           { roleId: { $in: adminRoles.map(r => (r as any)._id) } },
           { 'permissions.modules': 'tesoreria' },
@@ -533,6 +538,7 @@ export class UserService {
             clientId: null,
             roleId: (contabilidadRole as any)._id,
             isActive: true,
+            emailNotificationsEnabled: true,
           })
           .select('_id email name')
           .exec()

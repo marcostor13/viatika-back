@@ -14,6 +14,7 @@ export type AuditAction =
   | 'create_rendicion'
   | 'delete_rendicion'
   | 'update_rendicion_status'
+  | 'reopen_rendicion'
   | 'register_reimbursement_payment'
   | 'approve_advance_l1'
   | 'approve_advance_l2'

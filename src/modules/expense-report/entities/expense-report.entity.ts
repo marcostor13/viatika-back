@@ -14,6 +14,13 @@ export type ExpenseReportStatus =
 
 export type ReopeningStatus = 'none' | 'requested' | 'approved'
 
+export interface ReopenRecord {
+  reason: string
+  reopenedBy: string
+  reopenedAt: Date
+  fromStatus: string
+}
+
 export interface ClosureRecord {
   closedAt: Date
   closedBy: string
@@ -93,6 +100,11 @@ export interface ExpenseReportDocument extends Document {
   reimbursedAt?: Date
   reimbursementAccountingNotifiedAt?: Date
   closureRecord?: ClosureRecord
+  coordinatorApprovedAt?: Date
+  coordinatorApprovedBy?: Types.ObjectId
+  contabilidadApprovedAt?: Date
+  contabilidadApprovedBy?: Types.ObjectId
+  reopenHistory?: ReopenRecord[]
 }
 
 @Schema({ timestamps: true })
@@ -248,6 +260,32 @@ export class ExpenseReport {
 
   @Prop({ type: Object, required: false })
   closureRecord?: ClosureRecord
+
+  @Prop({ type: Date, required: false })
+  coordinatorApprovedAt?: Date
+
+  @Prop({ type: Types.ObjectId, ref: 'User', required: false })
+  coordinatorApprovedBy?: Types.ObjectId
+
+  @Prop({ type: Date, required: false })
+  contabilidadApprovedAt?: Date
+
+  @Prop({ type: Types.ObjectId, ref: 'User', required: false })
+  contabilidadApprovedBy?: Types.ObjectId
+
+  @Prop({
+    type: [
+      {
+        reason: { type: String, required: true },
+        reopenedBy: { type: String, required: true },
+        reopenedAt: { type: Date, required: true },
+        fromStatus: { type: String, required: true },
+        _id: false,
+      },
+    ],
+    default: [],
+  })
+  reopenHistory?: ReopenRecord[]
 }
 
 export const ExpenseReportSchema = SchemaFactory.createForClass(ExpenseReport)

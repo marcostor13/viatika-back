@@ -377,6 +377,70 @@ export class ExpenseController {
     return result
   }
 
+  // ─── Aprobación dual: Coordinador / Contabilidad ─────────────────────────────
+
+  @Patch('invoice/:id/approve-coord')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COORDINADOR)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  approveByCoord(
+    @Param('id') id: string,
+    @Request() req: { user: { _id?: string; roles?: string[]; clientId?: string } }
+  ) {
+    return this.expenseService.approveByCoord(id, this.toActorContext(req.user))
+  }
+
+  @Patch('invoice/:id/reject-coord')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COORDINADOR)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  rejectByCoord(
+    @Param('id') id: string,
+    @Body() body: { reason: string },
+    @Request() req: { user: { _id?: string; roles?: string[]; clientId?: string } }
+  ) {
+    return this.expenseService.rejectByCoord(id, this.toActorContext(req.user), body.reason)
+  }
+
+  @Patch('invoice/:id/approve-cont')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  approveByContabilidad(
+    @Param('id') id: string,
+    @Request() req: { user: { _id?: string; roles?: string[]; clientId?: string } }
+  ) {
+    return this.expenseService.approveByContabilidad(id, this.toActorContext(req.user))
+  }
+
+  @Patch('invoice/:id/reject-cont')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  rejectByContabilidad(
+    @Param('id') id: string,
+    @Body() body: { reason: string },
+    @Request() req: { user: { _id?: string; roles?: string[]; clientId?: string } }
+  ) {
+    return this.expenseService.rejectByContabilidad(id, this.toActorContext(req.user), body.reason)
+  }
+
+  @Patch('report/:reportId/batch-approve-collab')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  batchApproveByCollaborator(
+    @Param('reportId') reportId: string,
+    @Request() req: { user: { _id?: string; roles?: string[]; clientId?: string } }
+  ) {
+    return this.expenseService.batchApproveByCollaborator(reportId, this.toActorContext(req.user))
+  }
+
+  @Patch('report/:reportId/batch-approve-coord')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COORDINADOR)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  batchApproveByCoord(
+    @Param('reportId') reportId: string,
+    @Request() req: { user: { _id?: string; roles?: string[]; clientId?: string } }
+  ) {
+    return this.expenseService.batchApproveByCoord(reportId, this.toActorContext(req.user))
+  }
+
   @Post('invoice/:id/validate-sunat')
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   @UseGuards(JwtAuthGuard, RolesGuard)

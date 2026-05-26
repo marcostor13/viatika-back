@@ -2184,5 +2184,235 @@ export class ExpenseService {
       throw error
     }
   }
-}
 
+  // ─── Aprobación dual: Coordinador / Contabilidad ─────────────────────────────
+
+  private computeCombinedStatus(
+    coordStatus: string | undefined,
+    contStatus: string | undefined
+  ): 'pending' | 'approved' | 'rejected' {
+    if (coordStatus === 'rejected' || contStatus === 'rejected') return 'rejected'
+    if (coordStatus === 'approved' && contStatus === 'approved') return 'approved'
+    return 'pending'
+  }
+
+  async approveByCoord(
+    id: string,
+    actor: ExpenseActorContext
+  ): Promise<Expense> {
+    const expense = await this.loadExpenseOrThrow(id)
+    this.assertCompanyAccess(expense, actor)
+    const existing = expense as any
+    const contStatus = existing.approvalCont?.status ?? 'pending'
+    const newCombined = this.computeCombinedStatus('approved', contStatus)
+    const updated = await this.expenseRepository
+      .findByIdAndUpdate(
+        id,
+        {
+          $set: {
+            approvalCoord: { status: 'approved', userId: actor.userId, userName: actor.roleName, date: new Date() },
+            status: newCombined,
+          },
+        },
+        { new: true }
+      )
+      .exec()
+    if (!updated) throw new NotFoundException(`Expense ${id} no encontrado`)
+    this.notificationsService
+      .create({
+        userId: String(expense.createdBy),
+        title: 'Comprobante revisado por Coordinador',
+        message: `Tu comprobante fue aprobado por el coordinador.`,
+        type: 'info',
+        actionUrl: `/mis-rendiciones/${this.expenseReportIdString(expense)}/detalle`,
+      })
+      .catch(() => {})
+    return updated
+  }
+
+  async rejectByCoord(
+    id: string,
+    actor: ExpenseActorContext,
+    reason: string
+  ): Promise<Expense> {
+    if (!reason?.trim()) throw new BadRequestException('El motivo de rechazo es obligatorio.')
+    const expense = await this.loadExpenseOrThrow(id)
+    this.assertCompanyAccess(expense, actor)
+    const updated = await this.expenseRepository
+      .findByIdAndUpdate(
+        id,
+        {
+          $set: {
+            approvalCoord: { status: 'rejected', userId: actor.userId, userName: actor.roleName, date: new Date(), reason },
+            status: 'rejected',
+            rejectionReason: reason,
+          },
+        },
+        { new: true }
+      )
+      .exec()
+    if (!updated) throw new NotFoundException(`Expense ${id} no encontrado`)
+    this.notificationsService
+      .create({
+        userId: String(expense.createdBy),
+        title: 'Comprobante observado por Coordinador',
+        message: `Tu comprobante fue rechazado por el coordinador: ${reason.slice(0, 80)}`,
+        type: 'error',
+        actionUrl: `/mis-rendiciones/${this.expenseReportIdString(expense)}/detalle`,
+      })
+      .catch(() => {})
+    return updated
+  }
+
+  async approveByContabilidad(
+    id: string,
+    actor: ExpenseActorContext
+  ): Promise<Expense> {
+    const expense = await this.loadExpenseOrThrow(id)
+    this.assertCompanyAccess(expense, actor)
+    const existing = expense as any
+    const coordStatus = existing.approvalCoord?.status ?? 'pending'
+    const newCombined = this.computeCombinedStatus(coordStatus, 'approved')
+    const updated = await this.expenseRepository
+      .findByIdAndUpdate(
+        id,
+        {
+          $set: {
+            approvalCont: { status: 'approved', userId: actor.userId, userName: actor.roleName, date: new Date() },
+            status: newCombined,
+          },
+        },
+        { new: true }
+      )
+      .exec()
+    if (!updated) throw new NotFoundException(`Expense ${id} no encontrado`)
+    this.notificationsService
+      .create({
+        userId: String(expense.createdBy),
+        title: 'Comprobante revisado por Contabilidad',
+        message: `Tu comprobante fue aprobado por contabilidad.`,
+        type: 'info',
+        actionUrl: `/mis-rendiciones/${this.expenseReportIdString(expense)}/detalle`,
+      })
+      .catch(() => {})
+    return updated
+  }
+
+  async rejectByContabilidad(
+    id: string,
+    actor: ExpenseActorContext,
+    reason: string
+  ): Promise<Expense> {
+    if (!reason?.trim()) throw new BadRequestException('El motivo de rechazo es obligatorio.')
+    const expense = await this.loadExpenseOrThrow(id)
+    this.assertCompanyAccess(expense, actor)
+    const updated = await this.expenseRepository
+      .findByIdAndUpdate(
+        id,
+        {
+          $set: {
+            approvalCont: { status: 'rejected', userId: actor.userId, userName: actor.roleName, date: new Date(), reason },
+            status: 'rejected',
+            rejectionReason: reason,
+          },
+        },
+        { new: true }
+      )
+      .exec()
+    if (!updated) throw new NotFoundException(`Expense ${id} no encontrado`)
+    this.notificationsService
+      .create({
+        userId: String(expense.createdBy),
+        title: 'Comprobante observado por Contabilidad',
+        message: `Tu comprobante fue rechazado por contabilidad: ${reason.slice(0, 80)}`,
+        type: 'error',
+        actionUrl: `/mis-rendiciones/${this.expenseReportIdString(expense)}/detalle`,
+      })
+      .catch(() => {})
+    return updated
+  }
+
+  async batchApproveByCollaborator(
+    reportId: string,
+    actor: ExpenseActorContext
+  ): Promise<{ approved: number }> {
+    const report = await (this.expenseReportService as any).expenseReportModel
+      ?.findById(reportId)
+      .select('expenseIds clientId userId')
+      .lean()
+      .exec()
+    if (!report) throw new NotFoundException(`Rendición ${reportId} no encontrada`)
+
+    const clientId = this.normalizeClientId(report.clientId)
+    if (actor.roleName !== ROLES.SUPER_ADMIN && actor.clientId && clientId !== actor.clientId) {
+      throw new ForbiddenException('No autorizado')
+    }
+
+    const ids = (report.expenseIds ?? []).map((id: any) => new Types.ObjectId(String(id)))
+    if (ids.length === 0) return { approved: 0 }
+
+    const expenses = await this.expenseRepository
+      .find({ _id: { $in: ids } })
+      .select('approvalCont status')
+      .lean()
+      .exec()
+
+    let count = 0
+    for (const expense of expenses) {
+      const e = expense as any
+      const contStatus = e.approvalCont?.status ?? 'pending'
+      if (contStatus === 'approved' && e.status !== 'approved') {
+        await this.expenseRepository.findByIdAndUpdate(String(e._id), {
+          $set: { status: 'approved' },
+        }).exec()
+        count++
+      }
+    }
+    return { approved: count }
+  }
+
+  async batchApproveByCoord(
+    reportId: string,
+    actor: ExpenseActorContext
+  ): Promise<{ approved: number }> {
+    const { Model: ExpenseModel } = { Model: this.expenseRepository }
+    const report = await (this.expenseReportService as any).expenseReportModel
+      ?.findById(reportId)
+      .select('expenseIds clientId')
+      .lean()
+      .exec()
+    if (!report) throw new NotFoundException(`Rendición ${reportId} no encontrada`)
+
+    const clientId = this.normalizeClientId(report.clientId)
+    if (actor.roleName !== ROLES.SUPER_ADMIN && actor.clientId && clientId !== actor.clientId) {
+      throw new ForbiddenException('No autorizado')
+    }
+
+    const ids = (report.expenseIds ?? []).map((id: any) => new Types.ObjectId(String(id)))
+    if (ids.length === 0) return { approved: 0 }
+
+    const expenses = await this.expenseRepository
+      .find({ _id: { $in: ids } })
+      .select('approvalCoord approvalCont status createdBy expenseReportId')
+      .lean()
+      .exec()
+
+    let count = 0
+    for (const expense of expenses) {
+      const e = expense as any
+      const contStatus = e.approvalCont?.status ?? 'pending'
+      const coordStatus = e.approvalCoord?.status ?? 'pending'
+      if (contStatus === 'approved' && coordStatus !== 'approved') {
+        const newCombined = this.computeCombinedStatus('approved', 'approved')
+        await this.expenseRepository.findByIdAndUpdate(String(e._id), {
+          $set: {
+            approvalCoord: { status: 'approved', userId: actor.userId, userName: actor.roleName, date: new Date() },
+            status: newCombined,
+          },
+        }).exec()
+        count++
+      }
+    }
+    return { approved: count }
+  }
+}

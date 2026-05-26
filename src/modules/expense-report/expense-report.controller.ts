@@ -218,6 +218,13 @@ export class ExpenseReportController {
     ) {
       await this.expenseReportService.setApprovedBy(id, req.user._id)
     }
+    // Guardar timestamps de aprobación por rol
+    if (updateExpenseReportDto.status === 'pending_accounting') {
+      await this.expenseReportService.setCoordinatorApproval(id, req.user._id)
+    }
+    if (updateExpenseReportDto.status === 'approved') {
+      await this.expenseReportService.setContabilidadApproval(id, req.user._id)
+    }
     const result = await this.expenseReportService.update(
       id,
       updateExpenseReportDto
@@ -332,6 +339,29 @@ export class ExpenseReportController {
       action: 'close_rendicion',
       module: 'rendiciones',
       entityId: id,
+      clientId: req.user.clientId,
+    })
+    return result
+  }
+
+  /** Contabilidad reabre directamente con motivo. */
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
+  @Patch(':id/reopen')
+  async reopen(
+    @Param('id') id: string,
+    @Body() body: { reason: string },
+    @Request() req: any
+  ) {
+    const reopenedBy = String(req.user._id || req.user.sub)
+    const result = await this.expenseReportService.reopen(id, reopenedBy, body.reason)
+    await this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email || 'Usuario',
+      action: 'reopen_rendicion',
+      module: 'rendiciones',
+      entityId: id,
+      details: body.reason?.slice(0, 200),
       clientId: req.user.clientId,
     })
     return result

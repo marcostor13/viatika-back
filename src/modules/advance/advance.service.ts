@@ -521,6 +521,12 @@ export class AdvanceService {
       )
     }
 
+    const coordEmailEnabled = await this.userService.isEmailEnabled(coordId.toString())
+    if (!coordEmailEnabled) {
+      await setNotif({ recipientUserId: coordId, status: 'skipped', errorMessage: 'Notificaciones por correo deshabilitadas para el coordinador' })
+      return
+    }
+
     try {
       await this.emailService.sendViaticoSolicitudToCoordinator(
         coordinator.email,
@@ -1073,6 +1079,9 @@ export class AdvanceService {
     const coordinator = coordinatorId
       ? await this.userService.findEmailNameClient(coordinatorId)
       : null
+    const coordEmailEnabled = coordinatorId
+      ? await this.userService.isEmailEnabled(coordinatorId)
+      : false
 
     let projectLabel = 'Centro de costo'
     if (advance.projectId) {
@@ -1115,7 +1124,7 @@ export class AdvanceService {
       })
     }
 
-    if (coordinator?.email) {
+    if (coordinator?.email && coordEmailEnabled) {
       await this.emailService.sendViaticoPagoRealizado(coordinator.email, {
         recipientName: coordinator.name,
         ...baseData,
@@ -1996,6 +2005,7 @@ export class AdvanceService {
       coordinator.clientId.toString() !== collaborator.clientId.toString()
     )
       return
+    const coordEmailEnabled = await this.userService.isEmailEnabled(coordId.toString())
 
     let projectLabel = 'Centro de costo'
     try {
@@ -2038,17 +2048,19 @@ export class AdvanceService {
       this.logger.error(`In-app notif cancelación viático: ${err instanceof Error ? err.message : String(err)}`)
     })
 
-    await this.emailService.sendViaticoCancelacion(coordinator.email, {
-      coordinatorName: coordinator.name,
-      collaboratorName: collaborator.name,
-      place: advance.place ?? '—',
-      startDate: startStr,
-      endDate: endStr,
-      totalFormatted,
-      projectLabel,
-      plainSummary,
-      platformUrl,
-    })
+    if (coordEmailEnabled) {
+      await this.emailService.sendViaticoCancelacion(coordinator.email, {
+        coordinatorName: coordinator.name,
+        collaboratorName: collaborator.name,
+        place: advance.place ?? '—',
+        startDate: startStr,
+        endDate: endStr,
+        totalFormatted,
+        projectLabel,
+        plainSummary,
+        platformUrl,
+      })
+    }
   }
 
   async getStats(clientId: string) {

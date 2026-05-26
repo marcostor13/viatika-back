@@ -119,7 +119,7 @@ export class ExpenseService {
     expense: Expense,
     actor: ExpenseActorContext
   ): void {
-    if (actor.roleName === ROLES.SUPER_ADMIN) return
+    if (actor.roleName === ROLES.SUPER_ADMIN || actor.roleName === ROLES.CONTABILIDAD) return
     const expClient = this.normalizeClientId(
       (expense as unknown as { clientId: unknown }).clientId
     )

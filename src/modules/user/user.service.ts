@@ -512,6 +512,103 @@ export class UserService {
     return out
   }
 
+  /**
+   * Todos los usuarios de contabilidad (rol Contabilidad o módulos contabilidad/tesoreria),
+   * sin filtrar por emailNotificationsEnabled — necesario para in-app + email por separado.
+   */
+  async findContabilidadUsersForNotif(
+    clientId: string
+  ): Promise<{ _id: string; email: string; name: string; emailNotificationsEnabled: boolean }[]> {
+    const contabilidadRole = await this.roleService.getByName('Contabilidad')
+
+    const scopedUsers = await this.userModel
+      .find({
+        clientId: new Types.ObjectId(clientId),
+        isActive: true,
+        $or: [
+          ...(contabilidadRole ? [{ roleId: (contabilidadRole as any)._id }] : []),
+          { 'permissions.modules': 'tesoreria' },
+          { 'permissions.modules': 'contabilidad' },
+        ],
+      })
+      .select('_id email name emailNotificationsEnabled')
+      .exec()
+
+    const globalContabilidad = contabilidadRole
+      ? await this.userModel
+          .find({
+            clientId: null,
+            roleId: (contabilidadRole as any)._id,
+            isActive: true,
+          })
+          .select('_id email name emailNotificationsEnabled')
+          .exec()
+      : []
+
+    const seen = new Set<string>()
+    const out: { _id: string; email: string; name: string; emailNotificationsEnabled: boolean }[] = []
+    for (const u of [...scopedUsers, ...globalContabilidad]) {
+      const em = u.email?.trim().toLowerCase()
+      if (!em || seen.has(em)) continue
+      seen.add(em)
+      out.push({
+        _id: String((u as any)._id),
+        email: u.email,
+        name: u.name,
+        emailNotificationsEnabled: !!(u as any).emailNotificationsEnabled,
+      })
+    }
+    return out
+  }
+
+  /**
+   * Destinatarios para la notificación "Aprobación final requerida" (pending_l2).
+   * Incluye: rol Contabilidad, módulos contabilidad/tesoreria, o canApproveL2=true.
+   * Excluye Admins/SuperAdmins que no cumplan ninguna de esas condiciones.
+   */
+  async findL2ApprovalNotifyRecipients(
+    clientId: string
+  ): Promise<{ email: string; name: string }[]> {
+    const contabilidadRole = await this.roleService.getByName('Contabilidad')
+
+    const scopedUsers = await this.userModel
+      .find({
+        clientId: new Types.ObjectId(clientId),
+        isActive: true,
+        emailNotificationsEnabled: true,
+        $or: [
+          ...(contabilidadRole ? [{ roleId: (contabilidadRole as any)._id }] : []),
+          { 'permissions.modules': 'tesoreria' },
+          { 'permissions.modules': 'contabilidad' },
+          { 'permissions.canApproveL2': true },
+        ],
+      })
+      .select('email name')
+      .exec()
+
+    const globalContabilidad = contabilidadRole
+      ? await this.userModel
+          .find({
+            clientId: null,
+            roleId: (contabilidadRole as any)._id,
+            isActive: true,
+            emailNotificationsEnabled: true,
+          })
+          .select('email name')
+          .exec()
+      : []
+
+    const seen = new Set<string>()
+    const out: { email: string; name: string }[] = []
+    for (const u of [...scopedUsers, ...globalContabilidad]) {
+      const em = u.email?.trim().toLowerCase()
+      if (!em || seen.has(em)) continue
+      seen.add(em)
+      out.push({ email: u.email, name: u.name })
+    }
+    return out
+  }
+
   async findAccountingRecipientsWithIds(
     clientId: string
   ): Promise<{ _id: string; email: string; name: string }[]> {

@@ -383,7 +383,13 @@ export class AdvanceService {
       )
     }
 
-    await this.notifyCoordinatorViatico(
+    void this.notifyCoordinatorViatico(
+      advance as AdvanceDocument,
+      dto.userId!,
+      dto.clientId!
+    )
+
+    void this.notifyContabilidadViaticoSubmitted(
       advance as AdvanceDocument,
       dto.userId!,
       dto.clientId!
@@ -551,6 +557,80 @@ export class AdvanceService {
         errorMessage: msg,
         manualResendUrl,
       })
+    }
+  }
+
+  private async notifyContabilidadViaticoSubmitted(
+    advance: AdvanceDocument,
+    collaboratorUserId: string,
+    clientId: string
+  ): Promise<void> {
+    const advanceId = (advance as any)._id?.toString?.() ?? String(advance._id)
+
+    const [allRecipients, collaborator, profile] = await Promise.all([
+      this.userService.findContabilidadUsersForNotif(clientId),
+      this.userService.findEmailNameClient(collaboratorUserId),
+      this.userService.findTransactionalProfile(collaboratorUserId),
+    ])
+
+    if (!collaborator) return
+
+    const coordinatorId = profile?.coordinatorId?.toString()
+    const recipients = allRecipients.filter(r => r._id !== coordinatorId)
+    if (!recipients.length) return
+
+    const project = await this.projectService.findOne(
+      advance.projectId!.toString(),
+      clientId
+    )
+    const projectLabel = `[${project.code} - ${project.name}]`
+
+    const totalFormatted = Number(advance.amount).toFixed(2)
+    const startStr =
+      advance.startDate instanceof Date
+        ? advance.startDate.toISOString().slice(0, 10)
+        : String(advance.startDate).slice(0, 10)
+    const endStr =
+      advance.endDate instanceof Date
+        ? advance.endDate.toISOString().slice(0, 10)
+        : String(advance.endDate).slice(0, 10)
+
+    const platformUrl = this.emailService.buildAppUrl('/tesoreria')
+
+    for (const r of recipients) {
+      try {
+        await this.notificationsService.create({
+          userId: r._id,
+          title: 'Nueva solicitud de viáticos',
+          message: `${collaborator.name} solicitó viáticos para ${projectLabel} — S/ ${totalFormatted}.`,
+          type: 'info',
+          actionUrl: '/tesoreria',
+          metadata: { advanceId, collaboratorUserId, event: 'viatico_submitted' },
+        })
+      } catch (err: unknown) {
+        this.logger.error(
+          `In-app notif contabilidad viático ${advanceId} a ${r._id}: ${err instanceof Error ? err.message : String(err)}`
+        )
+      }
+
+      if (!r.emailNotificationsEnabled) continue
+
+      try {
+        await this.emailService.sendViaticoSolicitudToContabilidad(r.email, {
+          recipientName: r.name,
+          collaboratorName: collaborator.name,
+          place: advance.place ?? '',
+          startDate: startStr,
+          endDate: endStr,
+          totalFormatted,
+          projectLabel,
+          platformUrl,
+        })
+      } catch (err: unknown) {
+        this.logger.error(
+          `Correo solicitud viático contabilidad ${advanceId} a ${r.email}: ${err instanceof Error ? err.message : String(err)}`
+        )
+      }
     }
   }
 
@@ -753,7 +833,7 @@ export class AdvanceService {
     advance: AdvanceDocument
   ): Promise<void> {
     const recipients =
-      await this.userService.findViaticoAccountingNotifyRecipients(
+      await this.userService.findL2ApprovalNotifyRecipients(
         advance.clientId.toString()
       )
     if (!recipients.length) {

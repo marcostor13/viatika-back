@@ -861,6 +861,40 @@ export class EmailService {
     }
   }
 
+  async sendViaticoSolicitudToContabilidad(
+    email: string,
+    data: {
+      recipientName: string
+      collaboratorName: string
+      place: string
+      startDate: string
+      endDate: string
+      totalFormatted: string
+      projectLabel: string
+      platformUrl?: string
+    }
+  ) {
+    try {
+      const subject = `Nueva solicitud de viáticos — ${data.projectLabel}`
+      const { platformUrl, ...rest } = data
+      await this.send({
+        to: email,
+        subject,
+        template: './viatico-solicitud-contabilidad',
+        context: {
+          logoUrl: this.getLogoUrl(),
+          year: new Date().getFullYear(),
+          ...rest,
+          platformUrl: this.resolvePlatformHref(platformUrl),
+        },
+      })
+      this.logger.debug(`Correo solicitud viáticos (contabilidad) enviado a ${email}`)
+    } catch (error) {
+      this.logger.error(`Error solicitud viáticos (contabilidad) a ${email}:`, error)
+      throw error
+    }
+  }
+
   async sendViaticoCancelacion(
     email: string,
     data: {

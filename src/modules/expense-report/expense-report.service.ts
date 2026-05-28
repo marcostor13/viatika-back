@@ -142,38 +142,41 @@ export class ExpenseReportService {
     createdBy: string,
     isCollaborator = false
   ) {
+    const isDirecta = createExpenseReportDto.isDirecta === true
+    const title =
+      createExpenseReportDto.title?.trim() ||
+      createExpenseReportDto.motivo?.trim() ||
+      'Rendición'
+
     const report = new this.expenseReportModel({
       ...createExpenseReportDto,
+      title,
       userId: new Types.ObjectId(createExpenseReportDto.userId),
       clientId: new Types.ObjectId(createExpenseReportDto.clientId),
       createdBy: new Types.ObjectId(createdBy),
       projectId: createExpenseReportDto.projectId
         ? new Types.ObjectId(createExpenseReportDto.projectId)
         : undefined,
-      status: isCollaborator ? 'solicited' : 'open',
+      // Rendición directa: siempre open desde el inicio, sin paso de solicitud
+      status: isDirecta ? 'open' : isCollaborator ? 'solicited' : 'open',
       expenseIds: [],
     })
     const savedReport = await report.save()
 
     console.log(
-      `[ExpenseReportService] Created report: ${savedReport._id}. isCollaborator: ${isCollaborator}`
+      `[ExpenseReportService] Created report: ${savedReport._id}. isCollaborator: ${isCollaborator}, isDirecta: ${isDirecta}`
     )
 
-    // Notificar a administradores si un colaborador crea una rendición
-    if (isCollaborator) {
+    // Solo notificar admins si es una rendición normal solicitada (no directa)
+    if (isCollaborator && !isDirecta) {
       try {
         const admins = await this.userService.findAdminsByClient(
           String(savedReport.clientId)
         )
-        console.log(
-          `[ExpenseReportService] Admins found: ${admins.length} for client ${savedReport.clientId}`
-        )
-
         const user = await this.userService.findOne(createdBy)
         const creatorName = user.name || 'Un colaborador'
 
         for (const admin of admins) {
-          console.log(`[ExpenseReportService] Notifying admin: ${admin.email}`)
           await this.notificationsService.create({
             userId: String(admin._id),
             title: 'Nueva Rendición Solicitada',
@@ -326,12 +329,13 @@ export class ExpenseReportService {
     const dto = updateExpenseReportDto
     const existing = await this.expenseReportModel
       .findById(id)
-      .select('status')
+      .select('status isDirecta')
       .lean()
       .exec()
     if (!existing) {
       throw new NotFoundException(`Expense report with ID ${id} not found`)
     }
+    const isDirecta = (existing as any).isDirecta === true
 
     if (dto.status === 'reimbursed') {
       throw new BadRequestException(
@@ -392,7 +396,15 @@ export class ExpenseReportService {
     if (dto.title !== undefined) $set.title = dto.title
     if (dto.description !== undefined) $set.description = dto.description
     if (dto.budget !== undefined) $set.budget = dto.budget
-    if (dto.status !== undefined) $set.status = dto.status
+
+    // Rendición directa: al enviar (submitted), auto-transicionar a pending_accounting
+    if (dto.status !== undefined) {
+      if (dto.status === 'submitted' && isDirecta) {
+        $set.status = 'pending_accounting'
+      } else {
+        $set.status = dto.status
+      }
+    }
     if (dto.userId !== undefined) $set.userId = new Types.ObjectId(dto.userId)
     if (dto.clientId !== undefined)
       $set.clientId = new Types.ObjectId(dto.clientId)
@@ -465,8 +477,9 @@ export class ExpenseReportService {
       }
     }
 
-    // Coordinador aprueba la rendición (→ pending_accounting): notificar a contabilidad + colaborador
-    if (dto.status === 'pending_accounting') {
+    // Coordinador aprueba la rendición normal (→ pending_accounting): notificar a contabilidad + colaborador
+    // No aplica a rendiciones directas (ellas llegan aquí desde submitted automáticamente)
+    if (dto.status === 'pending_accounting' && !isDirecta) {
       try {
         const clientId = String(fullyUpdatedReport.clientId)
         const accountingUsers = await this.userService.findAccountingRecipientsWithIds(clientId)
@@ -479,7 +492,6 @@ export class ExpenseReportService {
             actionUrl: `/mis-rendiciones/${id}/detalle`,
           })
         }
-        // Notificar al colaborador
         const ownerRef = fullyUpdatedReport.userId as any
         const ownerId = ownerRef?._id ? String(ownerRef._id) : String(ownerRef)
         await this.notificationsService.create({
@@ -494,7 +506,8 @@ export class ExpenseReportService {
       }
     }
 
-    // Contabilidad aprueba la rendición (→ approved): notificar colaborador + coordinador
+    // Contabilidad aprueba la rendición (→ approved): notificar colaborador
+    // En rendición directa: solo colaborador. En flujo normal: colaborador + coordinador.
     if (dto.status === 'approved') {
       const owner = fullyUpdatedReport.userId as any
       const ownerId = owner?._id ? String(owner._id) : String(owner)
@@ -518,17 +531,19 @@ export class ExpenseReportService {
           actionUrl: `/mis-rendiciones/${id}/detalle`,
         })
 
-        // Notificar al coordinador
-        const profile = await this.userService.findTransactionalProfile(ownerId)
-        const coordinatorId = profile?.coordinatorId?.toString?.()
-        if (coordinatorId) {
-          await this.notificationsService.create({
-            userId: coordinatorId,
-            title: 'Rendición aprobada por Contabilidad',
-            message: `La rendición "${fullyUpdatedReport.title}" fue aprobada por contabilidad.`,
-            type: 'info',
-            actionUrl: `/mis-rendiciones/${id}/detalle`,
-          })
+        // Notificar al coordinador solo en el flujo normal (no en rendición directa)
+        if (!isDirecta) {
+          const profile = await this.userService.findTransactionalProfile(ownerId)
+          const coordinatorId = profile?.coordinatorId?.toString?.()
+          if (coordinatorId) {
+            await this.notificationsService.create({
+              userId: coordinatorId,
+              title: 'Rendición aprobada por Contabilidad',
+              message: `La rendición "${fullyUpdatedReport.title}" fue aprobada por contabilidad.`,
+              type: 'info',
+              actionUrl: `/mis-rendiciones/${id}/detalle`,
+            })
+          }
         }
       } catch (error) {
         console.error('Error enviando notificaciones de rendición aprobada por contabilidad', error)
@@ -541,7 +556,7 @@ export class ExpenseReportService {
       }
     }
 
-    // Si la rendición fue enviada a aprobación (submitted), notificar a coordinador + contabilidad
+    // Rendición enviada (submitted)
     if (dto.status === 'submitted') {
       try {
         const ownerRef2 = fullyUpdatedReport.userId as any
@@ -551,21 +566,7 @@ export class ExpenseReportService {
         const clientId = String(fullyUpdatedReport.clientId)
         const budgetFormatted = Number(fullyUpdatedReport.budget).toFixed(2)
         const expenseCount = fullyUpdatedReport.expenseIds?.length ?? 0
-        const platformUrl = this.emailService.buildAppUrl(
-          `/mis-rendiciones/${id}/detalle`
-        )
-
-        // Notificaciones in-app a admins
-        const admins = await this.userService.findAdminsByClient(clientId)
-        for (const admin of admins) {
-          await this.notificationsService.create({
-            userId: String(admin._id),
-            title: 'Rendición Enviada',
-            message: `${creatorName} ha enviado la rendición "${fullyUpdatedReport.title}" para tu revisión.`,
-            type: 'warning',
-            actionUrl: `/mis-rendiciones/${id}/detalle`,
-          })
-        }
+        const platformUrl = this.emailService.buildAppUrl(`/mis-rendiciones/${id}/detalle`)
 
         const emailData = {
           collaboratorName: creatorName,
@@ -575,42 +576,97 @@ export class ExpenseReportService {
           platformUrl,
         }
 
-        // Control de duplicados por email
-        const sentEmails = new Set<string>()
+        if (isDirecta) {
+          // Rendición directa: notificar solo a colaborador y contabilidad, sin coordinador
+          await this.notificationsService.create({
+            userId: ownerId2,
+            title: 'Rendición enviada a Contabilidad',
+            message: `Tu rendición "${fullyUpdatedReport.title}" fue enviada directamente a contabilidad para su revisión.`,
+            type: 'info',
+            actionUrl: `/mis-rendiciones/${id}/detalle`,
+          })
 
-        // Correo al coordinador del colaborador
-        const profile = await this.userService.findTransactionalProfile(ownerId2)
-        const coordinatorId = profile?.coordinatorId?.toString?.()
-        if (coordinatorId) {
-          const coordinator = await this.userService.findEmailNameClient(coordinatorId)
-          if (coordinator?.email) {
-            sentEmails.add(coordinator.email.trim().toLowerCase())
-            const coordEmailEnabled = await this.userService.isEmailEnabled(coordinatorId)
-            if (coordEmailEnabled) {
-              await this.emailService.sendRendicionSubmitted(coordinator.email, {
-                recipientName: coordinator.name,
-                ...emailData,
-              })
+          const sentEmailsDirecta = new Set<string>()
+          const accountingRecipientsDirecta = await this.userService.findContabilidadRecipients(clientId)
+          for (const r of accountingRecipientsDirecta) {
+            if (sentEmailsDirecta.has(r.email.trim().toLowerCase())) continue
+            sentEmailsDirecta.add(r.email.trim().toLowerCase())
+            await this.emailService.sendRendicionSubmitted(r.email, {
+              recipientName: r.name,
+              ...emailData,
+            })
+          }
+
+          const accountingUsersDirecta = await this.userService.findAccountingRecipientsWithIds(clientId)
+          for (const u of accountingUsersDirecta) {
+            await this.notificationsService.create({
+              userId: u._id,
+              title: 'Nueva Rendición para Revisar',
+              message: `${creatorName} ha enviado la rendición directa "${fullyUpdatedReport.title}" para tu revisión.`,
+              type: 'warning',
+              actionUrl: `/mis-rendiciones/${id}/detalle`,
+            })
+          }
+        } else {
+          // Flujo normal: notificar a admins in-app, coordinador y contabilidad por email
+          const admins = await this.userService.findAdminsByClient(clientId)
+          for (const admin of admins) {
+            await this.notificationsService.create({
+              userId: String(admin._id),
+              title: 'Rendición Enviada',
+              message: `${creatorName} ha enviado la rendición "${fullyUpdatedReport.title}" para tu revisión.`,
+              type: 'warning',
+              actionUrl: `/mis-rendiciones/${id}/detalle`,
+            })
+          }
+
+          const sentEmails = new Set<string>()
+
+          const profile = await this.userService.findTransactionalProfile(ownerId2)
+          const coordinatorId = profile?.coordinatorId?.toString?.()
+          if (coordinatorId) {
+            const coordinator = await this.userService.findEmailNameClient(coordinatorId)
+            if (coordinator?.email) {
+              sentEmails.add(coordinator.email.trim().toLowerCase())
+              const coordEmailEnabled = await this.userService.isEmailEnabled(coordinatorId)
+              if (coordEmailEnabled) {
+                await this.emailService.sendRendicionSubmitted(coordinator.email, {
+                  recipientName: coordinator.name,
+                  ...emailData,
+                })
+              }
             }
           }
-        }
 
-        // Correo a usuarios de contabilidad/tesorería (sin incluir admins que no tengan esos módulos)
-        const accountingRecipients =
-          await this.userService.findContabilidadRecipients(clientId)
-        for (const r of accountingRecipients) {
-          if (sentEmails.has(r.email.trim().toLowerCase())) continue
-          sentEmails.add(r.email.trim().toLowerCase())
-          await this.emailService.sendRendicionSubmitted(r.email, {
-            recipientName: r.name,
-            ...emailData,
-          })
+          const accountingRecipients = await this.userService.findContabilidadRecipients(clientId)
+          for (const r of accountingRecipients) {
+            if (sentEmails.has(r.email.trim().toLowerCase())) continue
+            sentEmails.add(r.email.trim().toLowerCase())
+            await this.emailService.sendRendicionSubmitted(r.email, {
+              recipientName: r.name,
+              ...emailData,
+            })
+          }
         }
       } catch (error) {
-        console.error(
-          'Error enviando notificaciones a administradores (update/submitted)',
-          error
-        )
+        console.error('Error enviando notificaciones (update/submitted)', error)
+      }
+    }
+
+    // Rendición rechazada: notificar al colaborador
+    if (dto.status === 'rejected') {
+      try {
+        const ownerRef = fullyUpdatedReport.userId as any
+        const ownerId = ownerRef?._id ? String(ownerRef._id) : String(ownerRef)
+        await this.notificationsService.create({
+          userId: ownerId,
+          title: 'Rendición rechazada',
+          message: `Tu rendición "${fullyUpdatedReport.title}" fue rechazada. Motivo: ${(fullyUpdatedReport as any).rejectionReason || 'Ver detalle'}`,
+          type: 'error',
+          actionUrl: `/mis-rendiciones/${id}/detalle`,
+        })
+      } catch (error) {
+        console.error('Error enviando notificación de rechazo de rendición', error)
       }
     }
 

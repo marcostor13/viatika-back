@@ -2,8 +2,10 @@ import { Module, Logger } from '@nestjs/common'
 import { EmailService } from './email.service'
 import { EmailController } from './email.controller'
 import { MailerModule } from '@nestjs-modules/mailer'
+import { MongooseModule } from '@nestjs/mongoose'
 import { join } from 'path'
 import { HandlebarsAdapter } from '@nestjs-modules/mailer/adapters/handlebars.adapter'
+import { Client, ClientSchema } from '../client/entities/client.entity'
 
 @Module({
   imports: [
@@ -33,6 +35,7 @@ import { HandlebarsAdapter } from '@nestjs-modules/mailer/adapters/handlebars.ad
         return config
       },
     }),
+    MongooseModule.forFeature([{ name: Client.name, schema: ClientSchema }]),
   ],
   controllers: [EmailController],
   providers: [EmailService],

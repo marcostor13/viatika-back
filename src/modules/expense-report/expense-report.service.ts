@@ -798,6 +798,133 @@ export class ExpenseReportService {
     return deleted
   }
 
+  /**
+   * Devuelve los gastos de todas las rendiciones directas de un cliente,
+   * con filtros opcionales de fecha, proyecto, categoría y número de documento.
+   */
+  async findDirectRendicionExpenses(
+    clientId: string,
+    filters: {
+      page?: number
+      limit?: number
+      dateFrom?: string
+      dateTo?: string
+      projectId?: string
+      categoryId?: string
+      docNumber?: string
+    } = {}
+  ) {
+    const page = Math.max(1, filters.page ?? 1)
+    const limit = Math.min(200, filters.limit ?? 50)
+    const skip = (page - 1) * limit
+
+    // 1. Obtener IDs de todas las rendiciones directas del cliente
+    const directReports = await this.expenseReportModel
+      .find({ clientId: new Types.ObjectId(clientId), isDirecta: true })
+      .select('_id userId title motivo')
+      .populate('userId', 'name email')
+      .lean()
+      .exec()
+
+    if (directReports.length === 0) {
+      return { data: [], total: 0, page, limit, pages: 0 }
+    }
+
+    const reportIds = directReports.map(r => r._id)
+    const reportMap = new Map(directReports.map(r => [String(r._id), r]))
+
+    // 2. Construir el pipeline de agregación sobre Expense
+    const pipeline: any[] = []
+
+    // Match base: gastos que pertenecen a estas rendiciones directas
+    const matchStage: any = {
+      expenseReportId: { $in: reportIds },
+    }
+
+    // Filtro número de documento: busca en serie+correlativo y receiptNumeroDocumento
+    if (filters.docNumber?.trim()) {
+      const dn = filters.docNumber.trim()
+      matchStage.$or = [
+        { serie: { $regex: dn, $options: 'i' } },
+        { correlativo: { $regex: dn, $options: 'i' } },
+        { receiptNumeroDocumento: { $regex: dn, $options: 'i' } },
+      ]
+    }
+
+    // Filtro proyecto
+    if (filters.projectId && /^[0-9a-fA-F]{24}$/.test(filters.projectId)) {
+      matchStage.proyectId = new Types.ObjectId(filters.projectId)
+    }
+
+    // Filtro categoría
+    if (filters.categoryId && /^[0-9a-fA-F]{24}$/.test(filters.categoryId)) {
+      matchStage.categoryId = new Types.ObjectId(filters.categoryId)
+    }
+
+    pipeline.push({ $match: matchStage })
+
+    // Filtros de fecha sobre fechaEmision (string con formato dd/mm/yyyy o yyyy-mm-dd)
+    if (filters.dateFrom || filters.dateTo) {
+      pipeline.push({
+        $addFields: {
+          _parsedDate: {
+            $cond: {
+              if: { $regexMatch: { input: { $ifNull: ['$fechaEmision', ''] }, regex: /^\d{2}\/\d{2}\/\d{4}$/ } },
+              then: {
+                $dateFromString: {
+                  dateString: {
+                    $concat: [
+                      { $substr: ['$fechaEmision', 6, 4] }, '-',
+                      { $substr: ['$fechaEmision', 3, 2] }, '-',
+                      { $substr: ['$fechaEmision', 0, 2] },
+                    ],
+                  },
+                },
+              },
+              else: { $dateFromString: { dateString: { $ifNull: ['$fechaEmision', '1970-01-01'] }, onError: new Date('1970-01-01') } },
+            },
+          },
+        },
+      })
+
+      const dateMatch: any = {}
+      if (filters.dateFrom) dateMatch.$gte = new Date(filters.dateFrom)
+      if (filters.dateTo) {
+        const to = new Date(filters.dateTo)
+        to.setHours(23, 59, 59, 999)
+        dateMatch.$lte = to
+      }
+      pipeline.push({ $match: { _parsedDate: dateMatch } })
+    }
+
+    // Count total
+    const countPipeline = [...pipeline, { $count: 'total' }]
+    const countResult = await this.expenseModel.aggregate(countPipeline).exec()
+    const total = countResult[0]?.total ?? 0
+
+    // Lookup proyecto y categoría
+    pipeline.push(
+      { $lookup: { from: 'projects', localField: 'proyectId', foreignField: '_id', as: '_project' } },
+      { $lookup: { from: 'categories', localField: 'categoryId', foreignField: '_id', as: '_category' } },
+      { $addFields: { _projectDoc: { $arrayElemAt: ['$project', 0] }, _categoryDoc: { $arrayElemAt: ['$_category', 0] } } },
+      { $sort: { createdAt: -1 } },
+      { $skip: skip },
+      { $limit: limit }
+    )
+
+    const expenses = await this.expenseModel.aggregate(pipeline).exec()
+
+    // Adjuntar info del reporte a cada gasto
+    const data = expenses.map(e => ({
+      ...e,
+      _report: reportMap.get(String(e.expenseReportId)) ?? null,
+      _projectDoc: e._projectDoc ?? (e._project?.[0] ?? null),
+      _categoryDoc: e._categoryDoc ?? (e._category?.[0] ?? null),
+    }))
+
+    return { data, total, page, limit, pages: Math.ceil(total / limit) }
+  }
+
   async addExpenseToReport(reportId: string, expenseId: string) {
     return await this.expenseReportModel
       .findByIdAndUpdate(

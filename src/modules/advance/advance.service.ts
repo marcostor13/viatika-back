@@ -1856,11 +1856,7 @@ export class AdvanceService {
           clientId: advance.clientId?.toString(),
           recipientName: collaborator.name,
           amountDue: advance.settlement.difference.toFixed(2),
-          dueDate: dueDate.toLocaleDateString('es-PE', {
-            day: '2-digit',
-            month: '2-digit',
-            year: 'numeric',
-          }),
+          dueDate: this.emailService.formatDateDDMMYYYY(dueDate),
           advanceId: id,
         })
         .catch(err =>

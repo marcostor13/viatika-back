@@ -262,6 +262,7 @@ export class ExpenseReportService {
     }
 
     const filter: Record<string, unknown> = { _id: { $in: ids } }
+    const and: Record<string, unknown>[] = []
     if (opts.type && opts.type !== 'all') {
       filter['expenseType'] =
         opts.type === 'comprobante_caja'
@@ -278,10 +279,12 @@ export class ExpenseReportService {
         filter['approvalCont.status'] = 'approved'
         filter['approvalCoord.status'] = 'approved'
       } else if (opts.status === 'rejected') {
-        filter['$or'] = [
-          { 'approvalCont.status': 'rejected' },
-          { 'approvalCoord.status': 'rejected' },
-        ]
+        and.push({
+          $or: [
+            { 'approvalCont.status': 'rejected' },
+            { 'approvalCoord.status': 'rejected' },
+          ],
+        })
       } else if (opts.status === 'pending') {
         filter['$nor'] = [
           {
@@ -296,8 +299,25 @@ export class ExpenseReportService {
       }
     }
     if (opts.search?.trim()) {
-      filter['description'] = { $regex: opts.search.trim(), $options: 'i' }
+      // El "concepto" se guarda en distintos campos según el tipo de
+      // comprobante (description plano, JSON dentro de description/data, o
+      // mobilityRows[].gestion/origen/destino), por lo que el search debe
+      // cubrir todos esos lugares.
+      const term = opts.search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const rx = { $regex: term, $options: 'i' }
+      and.push({
+        $or: [
+          { description: rx },
+          { data: rx },
+          { 'mobilityRows.gestion': rx },
+          { 'mobilityRows.concepto': rx },
+          { 'mobilityRows.origen': rx },
+          { 'mobilityRows.destino': rx },
+          { 'mobilityRows.clienteProveedor': rx },
+        ],
+      })
     }
+    if (and.length) filter['$and'] = and
 
     const all = await this.expenseModel
       .find(filter)

@@ -91,4 +91,8 @@ export class CreateExpenseDto {
   @IsString()
   @IsOptional()
   placaVehiculo?: string
+
+  @IsString()
+  @IsOptional()
+  subTipo?: string
 }

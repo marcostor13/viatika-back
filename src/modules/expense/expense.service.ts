@@ -1076,25 +1076,32 @@ export class ExpenseService {
     if (!body.clientId) {
       throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
     }
-    if (!body.declaracionJurada) {
-      throw new HttpException(
-        'Se requiere firmar la declaración jurada',
-        HttpStatus.BAD_REQUEST
-      )
-    }
     if (!body.total || body.total <= 0) {
       throw new HttpException(
         'Se requiere un monto válido',
         HttpStatus.BAD_REQUEST
       )
     }
-    if (body.userId) {
-      const profile = await this.userService.findTransactionalProfile(body.userId)
-      if (!profile?.signature) {
+
+    const subTipo = body.subTipo || 'OT'
+    const isDJ = subTipo === 'DJ'
+
+    // Solo la DJ requiere firma y aceptación del checkbox
+    if (isDJ) {
+      if (!body.declaracionJurada) {
         throw new HttpException(
-          'Debes registrar tu firma digital antes de enviar una Declaración Jurada. Ve a tu perfil para añadirla.',
-          HttpStatus.UNPROCESSABLE_ENTITY
+          'Se requiere firmar la declaración jurada',
+          HttpStatus.BAD_REQUEST
         )
+      }
+      if (body.userId) {
+        const profile = await this.userService.findTransactionalProfile(body.userId)
+        if (!profile?.signature) {
+          throw new HttpException(
+            'Debes registrar tu firma digital antes de enviar una Declaración Jurada. Ve a tu perfil para añadirla.',
+            HttpStatus.UNPROCESSABLE_ENTITY
+          )
+        }
       }
     }
 
@@ -1111,8 +1118,9 @@ export class ExpenseService {
       total: body.total,
       description: body.data,
       expenseType: 'otros_gastos',
-      declaracionJurada: true,
-      declaracionJuradaFirmante: body.declaracionJuradaFirmante,
+      subTipo,
+      declaracionJurada: isDJ ? true : false,
+      declaracionJuradaFirmante: isDJ ? body.declaracionJuradaFirmante : undefined,
       file: body.imageUrl || undefined,
       status: 'pending',
       createdBy: body.userId || 'system',
@@ -1124,8 +1132,9 @@ export class ExpenseService {
       categoryLimitWarning: categoryMeta.warning,
       data: JSON.stringify({
         type: 'otros_gastos',
-        declaracionJurada: true,
-        firmante: body.declaracionJuradaFirmante,
+        subTipo,
+        declaracionJurada: isDJ,
+        firmante: isDJ ? body.declaracionJuradaFirmante : undefined,
       }),
     })
 
@@ -2440,5 +2449,149 @@ export class ExpenseService {
       }
     }
     return { approved: count }
+  }
+
+  /**
+   * Gastos directos del colaborador: expenses sin rendición (loose) + expenses de rendiciones isDirecta.
+   */
+  async findMyDirectExpenses(
+    userId: string,
+    clientId: string,
+    filters: { tipo?: string; dateFrom?: string; dateTo?: string; page?: number; limit?: number } = {}
+  ) {
+    const page = Math.max(1, filters.page ?? 1)
+    const limit = Math.min(100, filters.limit ?? 50)
+    const skip = (page - 1) * limit
+
+    // Obtener IDs de rendiciones directas del usuario
+    const ExpenseReport = this.expenseReportService['expenseReportModel'] as any
+    const directReportDocs = await ExpenseReport.find({
+      userId: new Types.ObjectId(userId),
+      clientId: new Types.ObjectId(clientId),
+      isDirecta: true,
+    }).select('_id status').lean().exec()
+    const directReportIds = directReportDocs.map((r: any) => r._id)
+    const directReportStatusMap = new Map<string, string>(
+      directReportDocs.map((r: any) => [String(r._id), r.status])
+    )
+
+    // Buscar expenses: loose (sin rendición) O en rendición directa, del mismo usuario/cliente
+    const match: any = {
+      clientId: new Types.ObjectId(clientId),
+      createdBy: userId,
+      $or: [
+        { expenseReportId: { $exists: false } },
+        { expenseReportId: null },
+        ...(directReportIds.length > 0 ? [{ expenseReportId: { $in: directReportIds } }] : []),
+      ],
+    }
+
+    if (filters.tipo && filters.tipo !== 'all') {
+      match.expenseType = filters.tipo
+    }
+
+    const pipeline: any[] = [{ $match: match }]
+
+    if (filters.dateFrom || filters.dateTo) {
+      pipeline.push({
+        $addFields: {
+          _parsedDate: {
+            $cond: {
+              if: { $regexMatch: { input: { $ifNull: ['$fechaEmision', ''] }, regex: /^\d{2}\/\d{2}\/\d{4}$/ } },
+              then: {
+                $dateFromString: {
+                  dateString: {
+                    $concat: [
+                      { $substr: ['$fechaEmision', 6, 4] }, '-',
+                      { $substr: ['$fechaEmision', 3, 2] }, '-',
+                      { $substr: ['$fechaEmision', 0, 2] },
+                    ],
+                  },
+                },
+              },
+              else: { $dateFromString: { dateString: { $ifNull: ['$fechaEmision', '1970-01-01'] }, onError: new Date('1970-01-01') } },
+            },
+          },
+        },
+      })
+      const dateMatch: any = {}
+      if (filters.dateFrom) dateMatch.$gte = new Date(filters.dateFrom)
+      if (filters.dateTo) { const to = new Date(filters.dateTo); to.setHours(23, 59, 59, 999); dateMatch.$lte = to }
+      pipeline.push({ $match: { _parsedDate: dateMatch } })
+    }
+
+    pipeline.push(
+      { $lookup: { from: 'categories', localField: 'categoryId', foreignField: '_id', as: '_cat' } },
+      { $lookup: { from: 'projects', localField: 'proyectId', foreignField: '_id', as: '_proj' } },
+    )
+
+    const countPipeline = [...pipeline, { $count: 'total' }]
+    const countResult = await this.expenseRepository.aggregate(countPipeline).exec()
+    const total = countResult[0]?.total ?? 0
+
+    pipeline.push({ $sort: { createdAt: -1 } }, { $skip: skip }, { $limit: limit })
+
+    const expenses = await this.expenseRepository.aggregate(pipeline).exec()
+
+    const data = expenses.map((e: any) => ({
+      ...e,
+      _categoryDoc: e._cat?.[0] ?? null,
+      _projectDoc: e._proj?.[0] ?? null,
+      _reportStatus: e.expenseReportId ? (directReportStatusMap.get(String(e.expenseReportId)) ?? null) : null,
+    }))
+
+    return { data, total, page, limit, pages: Math.ceil(total / limit) }
+  }
+
+  /**
+   * Agrupa los expenses loose del usuario en una rendición directa y la envía a contabilidad.
+   */
+  async submitMyDirectExpenses(
+    userId: string,
+    clientId: string,
+    motivo?: string
+  ) {
+    // Buscar expenses loose (sin rendición) del usuario
+    const looseExpenses = await this.expenseRepository.find({
+      clientId: new Types.ObjectId(clientId),
+      createdBy: userId,
+      $or: [{ expenseReportId: { $exists: false } }, { expenseReportId: null }],
+    }).select('_id total').lean().exec()
+
+    if (looseExpenses.length === 0) {
+      throw new BadRequestException('No tienes gastos pendientes de enviar.')
+    }
+
+    const today = new Date()
+    const label = today.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric' })
+    const report = await this.expenseReportService.create(
+      {
+        motivo: motivo?.trim() || `Gastos del ${label}`,
+        isDirecta: true,
+        userId,
+        clientId,
+      } as any,
+      userId,
+      true
+    )
+
+    const reportId = (report as any)._id.toString()
+
+    // Vincular expenses a la rendición
+    await this.expenseRepository.updateMany(
+      { _id: { $in: looseExpenses.map((e: any) => e._id) } },
+      { $set: { expenseReportId: new Types.ObjectId(reportId) } }
+    ).exec()
+
+    // Registrar en la rendición
+    await this.expenseReportService['expenseReportModel'].findByIdAndUpdate(
+      reportId,
+      { $set: { expenseIds: looseExpenses.map((e: any) => e._id) } }
+    ).exec()
+
+    // Enviar a pending_accounting (isDirecta auto-transiciona desde submitted)
+    const updatedReport = await this.expenseReportService.update(reportId, { status: 'submitted' } as any)
+
+    return { reportId, expensesSubmitted: looseExpenses.length, report: updatedReport }
   }
 }

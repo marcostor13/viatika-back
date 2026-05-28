@@ -264,6 +264,40 @@ export class ExpenseController {
     )
   }
 
+  @Get('my-direct-expenses')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(ROLES.COLABORADOR, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
+  getMyDirectExpenses(
+    @Request() req: any,
+    @Query('tipo') tipo?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const userId = req.user._id || req.user.sub
+    const raw = req.user?.clientId
+    const clientId = raw && typeof raw === 'object' && '_id' in raw ? String(raw._id) : String(raw ?? '')
+    return this.expenseService.findMyDirectExpenses(userId, clientId, {
+      tipo, dateFrom, dateTo,
+      page: page ? Number(page) : undefined,
+      limit: limit ? Number(limit) : undefined,
+    })
+  }
+
+  @Post('my-direct-expenses/submit')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(ROLES.COLABORADOR, ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  async submitMyDirectExpenses(
+    @Request() req: any,
+    @Body() body: { motivo?: string } = {}
+  ) {
+    const userId = req.user._id || req.user.sub
+    const raw = req.user?.clientId
+    const clientId = raw && typeof raw === 'object' && '_id' in raw ? String(raw._id) : String(raw ?? '')
+    return this.expenseService.submitMyDirectExpenses(userId, clientId, body.motivo)
+  }
+
   @Get('stats')
   @Roles(
     ROLES.SUPER_ADMIN,

@@ -78,6 +78,29 @@ export class ExpenseReportController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Get('directas/expenses/:clientId')
+  findDirectRendicionExpenses(
+    @Param('clientId') clientId: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('projectId') projectId?: string,
+    @Query('categoryId') categoryId?: string,
+    @Query('docNumber') docNumber?: string,
+  ) {
+    return this.expenseReportService.findDirectRendicionExpenses(clientId, {
+      page: page ? Number(page) : undefined,
+      limit: limit ? Number(limit) : undefined,
+      dateFrom,
+      dateTo,
+      projectId,
+      categoryId,
+      docNumber,
+    })
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Get('client/:clientId')
   findAllByClient(@Param('clientId') clientId: string, @Request() req: any) {
     const role = req.user.roles[0]

@@ -251,6 +251,10 @@ export class Expense {
     required: false,
   })
   approvalCont?: ExpenseApproval
+
+  /** Sub-tipo para 'otros_gastos': TK (Ticket), RC (Recibos diversos), DJ (Declaración Jurada), OT (Otros) */
+  @Prop({ type: String, required: false })
+  subTipo?: string
 }
 
 export const ExpenseSchema = SchemaFactory.createForClass(Expense)

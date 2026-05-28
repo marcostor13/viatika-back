@@ -469,23 +469,68 @@ export class ExpenseReportService {
     if (dto.status === 'pending_accounting') {
       try {
         const clientId = String(fullyUpdatedReport.clientId)
-        const accountingUsers = await this.userService.findAccountingRecipientsWithIds(clientId)
+        const ownerRef = fullyUpdatedReport.userId as any
+        const ownerId = ownerRef?._id ? String(ownerRef._id) : String(ownerRef)
+        const collaboratorName =
+          (typeof ownerRef === 'object' && ownerRef?.name) || 'Colaborador'
+        const reportTitle = fullyUpdatedReport.title
+        const budgetFormatted = Number(fullyUpdatedReport.budget).toFixed(2)
+        const expenseCount = fullyUpdatedReport.expenseIds?.length ?? 0
+        const platformUrl = this.emailService.buildAppUrl(
+          `/mis-rendiciones/${id}/detalle`
+        )
+
+        const ownerProfile = await this.userService.findTransactionalProfile(ownerId)
+        const ownerCoordinatorId = ownerProfile?.coordinatorId?.toString?.() || ''
+        const ownerEmailLower =
+          (typeof ownerRef === 'object' && ownerRef?.email
+            ? String(ownerRef.email).trim().toLowerCase()
+            : '')
+
+        const accountingUsersRaw =
+          await this.userService.findAccountingRecipientsWithIds(clientId)
+        const accountingUsers = accountingUsersRaw.filter(
+          u =>
+            u._id !== ownerId &&
+            u._id !== ownerCoordinatorId &&
+            (ownerEmailLower
+              ? u.email?.trim().toLowerCase() !== ownerEmailLower
+              : true)
+        )
         for (const u of accountingUsers) {
           await this.notificationsService.create({
             userId: u._id,
             title: 'Rendición aprobada por Coordinador',
-            message: `La rendición "${fullyUpdatedReport.title}" fue aprobada por el coordinador y está lista para tu aprobación final.`,
+            message: `La rendición "${reportTitle}" fue aprobada por el coordinador y está lista para tu aprobación final.`,
             type: 'info',
             actionUrl: `/mis-rendiciones/${id}/detalle`,
           })
+
+          try {
+            const accountingEmailEnabled = await this.userService.isEmailEnabled(u._id)
+            if (accountingEmailEnabled) {
+              await this.emailService.sendRendicionPendienteContabilidad(u.email, {
+                clientId,
+                recipientName: u.name,
+                collaboratorName,
+                reportTitle,
+                budgetFormatted,
+                expenseCount,
+                platformUrl,
+              })
+            }
+          } catch (mailErr) {
+            console.error(
+              `[pending_accounting] Error correo contabilidad ${u.email}:`,
+              mailErr
+            )
+          }
         }
-        // Notificar al colaborador
-        const ownerRef = fullyUpdatedReport.userId as any
-        const ownerId = ownerRef?._id ? String(ownerRef._id) : String(ownerRef)
+
         await this.notificationsService.create({
           userId: ownerId,
           title: 'Tu rendición fue aprobada por el Coordinador',
-          message: `Tu rendición "${fullyUpdatedReport.title}" fue aprobada por el coordinador. Contabilidad realizará la revisión final.`,
+          message: `Tu rendición "${reportTitle}" fue aprobada por el coordinador. Contabilidad realizará la revisión final.`,
           type: 'success',
           actionUrl: `/mis-rendiciones/${id}/detalle`,
         })
@@ -498,37 +543,73 @@ export class ExpenseReportService {
     if (dto.status === 'approved') {
       const owner = fullyUpdatedReport.userId as any
       const ownerId = owner?._id ? String(owner._id) : String(owner)
+      const reportTitle = fullyUpdatedReport.title
+      const budgetFormatted = Number(fullyUpdatedReport.budget).toFixed(2)
+      const platformUrl = this.emailService.buildAppUrl(
+        `/mis-rendiciones/${id}/detalle`
+      )
+      const collaboratorName =
+        (typeof owner === 'object' && owner?.name) || 'Colaborador'
+
       try {
-        const ownerEmailEnabled = owner?._id
+        const ownerEmail =
+          (typeof owner === 'object' && owner?.email) || undefined
+        const ownerEmailEnabled = ownerId
           ? await this.userService.isEmailEnabled(ownerId)
           : false
-        if (owner && owner.email && ownerEmailEnabled) {
-          await this.emailService.sendRendicionFullyApprovedEmail(owner.email, {
-            userName: owner.name || 'Colaborador',
-            title: fullyUpdatedReport.title,
+        if (ownerEmail && ownerEmailEnabled) {
+          await this.emailService.sendRendicionFullyApprovedEmail(ownerEmail, {
+            clientId: String(fullyUpdatedReport.clientId),
+            userName: collaboratorName,
+            title: reportTitle,
             budget: fullyUpdatedReport.budget,
-            platformUrl: this.emailService.buildAppUrl(`/mis-rendiciones/${id}/detalle`),
+            platformUrl,
           })
         }
         await this.notificationsService.create({
           userId: ownerId,
           title: 'Rendición aprobada por Contabilidad',
-          message: `Tu rendición "${fullyUpdatedReport.title}" ha sido aprobada por contabilidad. Revisa el detalle para los próximos pasos.`,
+          message: `Tu rendición "${reportTitle}" ha sido aprobada por contabilidad. Revisa el detalle para los próximos pasos.`,
           type: 'success',
           actionUrl: `/mis-rendiciones/${id}/detalle`,
         })
 
-        // Notificar al coordinador
+        // Notificar al coordinador (in-app + correo)
         const profile = await this.userService.findTransactionalProfile(ownerId)
         const coordinatorId = profile?.coordinatorId?.toString?.()
         if (coordinatorId) {
           await this.notificationsService.create({
             userId: coordinatorId,
             title: 'Rendición aprobada por Contabilidad',
-            message: `La rendición "${fullyUpdatedReport.title}" fue aprobada por contabilidad.`,
+            message: `La rendición "${reportTitle}" fue aprobada por contabilidad.`,
             type: 'info',
             actionUrl: `/mis-rendiciones/${id}/detalle`,
           })
+
+          try {
+            const coordinator =
+              await this.userService.findEmailNameClient(coordinatorId)
+            const coordinatorEmailEnabled =
+              await this.userService.isEmailEnabled(coordinatorId)
+            if (coordinator?.email && coordinatorEmailEnabled) {
+              await this.emailService.sendRendicionAprobadaCoordinador(
+                coordinator.email,
+                {
+                  clientId: String(fullyUpdatedReport.clientId),
+                  coordinatorName: coordinator.name,
+                  collaboratorName,
+                  reportTitle,
+                  budgetFormatted,
+                  platformUrl,
+                }
+              )
+            }
+          } catch (mailErr) {
+            console.error(
+              `[approved] Error correo rendición aprobada a coordinador ${coordinatorId}:`,
+              mailErr
+            )
+          }
         }
       } catch (error) {
         console.error('Error enviando notificaciones de rendición aprobada por contabilidad', error)
@@ -568,6 +649,7 @@ export class ExpenseReportService {
         }
 
         const emailData = {
+          clientId,
           collaboratorName: creatorName,
           reportTitle: fullyUpdatedReport.title,
           budgetFormatted,
@@ -575,8 +657,14 @@ export class ExpenseReportService {
           platformUrl,
         }
 
-        // Control de duplicados por email
+        // Control de duplicados por email.
+        // Reservamos primero al colaborador autor para que, si por configuración
+        // también figura en Contabilidad/Tesorería, NO reciba el correo orientado
+        // al revisor; solo recibe la confirmación "Usted ha enviado…".
         const sentEmails = new Set<string>()
+        const ownerEmail = (fullyUpdatedReport.userId as any)?.email as string | undefined
+        const ownerEmailKey = ownerEmail?.trim().toLowerCase() || ''
+        if (ownerEmailKey) sentEmails.add(ownerEmailKey)
 
         // Correo al coordinador del colaborador
         const profile = await this.userService.findTransactionalProfile(ownerId2)
@@ -584,13 +672,18 @@ export class ExpenseReportService {
         if (coordinatorId) {
           const coordinator = await this.userService.findEmailNameClient(coordinatorId)
           if (coordinator?.email) {
-            sentEmails.add(coordinator.email.trim().toLowerCase())
-            const coordEmailEnabled = await this.userService.isEmailEnabled(coordinatorId)
-            if (coordEmailEnabled) {
-              await this.emailService.sendRendicionSubmitted(coordinator.email, {
-                recipientName: coordinator.name,
-                ...emailData,
-              })
+            const coordEmailKey = coordinator.email.trim().toLowerCase()
+            // Si el coordinador coincide con el colaborador, no le mandamos el
+            // correo orientado al revisor; la confirmación va más abajo.
+            if (!sentEmails.has(coordEmailKey)) {
+              sentEmails.add(coordEmailKey)
+              const coordEmailEnabled = await this.userService.isEmailEnabled(coordinatorId)
+              if (coordEmailEnabled) {
+                await this.emailService.sendRendicionSubmitted(coordinator.email, {
+                  recipientName: coordinator.name,
+                  ...emailData,
+                })
+              }
             }
           }
         }
@@ -599,12 +692,28 @@ export class ExpenseReportService {
         const accountingRecipients =
           await this.userService.findContabilidadRecipients(clientId)
         for (const r of accountingRecipients) {
-          if (sentEmails.has(r.email.trim().toLowerCase())) continue
-          sentEmails.add(r.email.trim().toLowerCase())
+          const key = r.email.trim().toLowerCase()
+          if (sentEmails.has(key)) continue
+          sentEmails.add(key)
           await this.emailService.sendRendicionSubmitted(r.email, {
             recipientName: r.name,
             ...emailData,
           })
+        }
+
+        // Confirmación al colaborador autor de la rendición (siempre, si tiene email habilitado).
+        if (ownerEmail) {
+          const ownerEmailEnabled = await this.userService.isEmailEnabled(ownerId2)
+          if (ownerEmailEnabled) {
+            await this.emailService.sendRendicionSubmittedToColaborador(ownerEmail, {
+              clientId,
+              collaboratorName: creatorName,
+              reportTitle: emailData.reportTitle,
+              budgetFormatted: emailData.budgetFormatted,
+              expenseCount: emailData.expenseCount,
+              platformUrl: emailData.platformUrl,
+            })
+          }
         }
       } catch (error) {
         console.error(
@@ -957,6 +1066,7 @@ export class ExpenseReportService {
       : new Date().toISOString().slice(0, 10)
 
     const baseData = {
+      clientId: String(report.clientId),
       collaboratorName: owner.name || 'Colaborador',
       coordinatorName: coordinator?.name,
       reportTitle: report.title || 'Rendición',
@@ -1100,8 +1210,10 @@ export class ExpenseReportService {
       ? await this.userService.isEmailEnabled(updated.userId.toString())
       : false
     const closedAtStr = closureRecord.closedAt.toLocaleDateString('es-PE')
+    const clientIdStr = updated.clientId.toString()
     if (collaboratorEmailEnabled) {
       this.emailService.sendRendicionCerrada(collaborator!.email, {
+        clientId: clientIdStr,
         recipientName: collaborator!.name,
         reportTitle: updated.title,
         closedAt: closedAtStr,
@@ -1109,13 +1221,14 @@ export class ExpenseReportService {
     }
 
     const settlement = (updated as any).settlement
-    const clientId = updated.clientId.toString()
+    const clientId = clientIdStr
     const platformUrl = this.emailService.buildAppUrl(`/mis-rendiciones/${id}/detalle`)
 
     if (settlement?.type === 'devolucion') {
       const amountFormatted = Math.abs(Number(settlement.difference)).toFixed(2)
       if (collaboratorEmailEnabled) {
         this.emailService.sendRendicionDevolucionColaborador(collaborator!.email, {
+          clientId,
           recipientName: collaborator!.name,
           reportTitle: updated.title,
           amountFormatted,
@@ -1137,6 +1250,7 @@ export class ExpenseReportService {
       const accountingUsers = await this.userService.findAccountingRecipientsWithIds(clientId)
       for (const u of accountingUsers) {
         this.emailService.sendRendicionReembolsoContabilidad(u.email, {
+          clientId,
           recipientName: u.name,
           reportLabel: `${updated.title} · ${id}`,
           reportTitle: updated.title,
@@ -1219,6 +1333,7 @@ export class ExpenseReportService {
 
     if (collaboratorEmailEnabled) {
       this.emailService.sendRendicionCerrada(collaborator!.email, {
+        clientId,
         recipientName: collaboratorName,
         reportTitle: report.title,
         closedAt: voucher.uploadedAt.toLocaleDateString('es-PE'),
@@ -1235,6 +1350,7 @@ export class ExpenseReportService {
     const accountingUsers = await this.userService.findAccountingRecipientsWithIds(clientId)
     for (const u of accountingUsers) {
       this.emailService.sendRendicionDevolucionCargada(u.email, {
+        clientId,
         recipientName: u.name,
         collaboratorName,
         reportTitle: report.title,
@@ -1355,6 +1471,7 @@ export class ExpenseReportService {
       for (const admin of admins) {
         if (admin.email) {
           await this.emailService.sendRendicionCancelada(admin.email, {
+            clientId: String(report.clientId),
             adminName: admin.name || 'Administrador',
             collaboratorName,
             reportTitle: report.title,

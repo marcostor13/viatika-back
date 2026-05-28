@@ -538,6 +538,7 @@ export class ExpenseService {
     categoryName: string
   ) {
     return {
+      clientId: body.clientId,
       providerName: creatorName,
       invoiceNumber: `${data.serie || ''}-${data.correlativo || ''}`,
       date: data.fechaEmision || new Date().toISOString().split('T')[0],
@@ -584,60 +585,84 @@ export class ExpenseService {
       categoryName
     )
 
-    if (body.userId) {
+    // Destinatarios: solo los involucrados — dueño de la rendición, su
+    // coordinador y Contabilidad. Sin broadcast a todos los usuarios del cliente.
+    const seen = new Set<string>()
+    const sendTo = async (email?: string | null, userId?: string | null) => {
+      const e = email?.trim()
+      if (!e) return
+      const key = e.toLowerCase()
+      if (seen.has(key)) return
+      seen.add(key)
       try {
-        const creator = await this.userService.findOne(body.userId)
-        const creatorEmailEnabled = await this.userService.isEmailEnabled(body.userId)
-        if (creator?.email && creatorEmailEnabled) {
-          await this.emailService.sendInvoiceUploadedExpenseNotification(
-            creator.email,
-            notificationPayload
-          )
+        if (userId) {
+          const enabled = await this.userService.isEmailEnabled(userId)
+          if (!enabled) return
         }
-      } catch (error) {
-        this.logger.warn('No se pudo enviar notificación al creador:', error)
+        await this.emailService.sendInvoiceUploadedExpenseNotification(
+          e,
+          notificationPayload
+        )
+      } catch (err) {
+        this.logger.warn(`Error notificando subida de gasto a ${e}:`, err)
       }
     }
 
-    try {
-      const colaboradores = await this.userService.findAll(
-        new Types.ObjectId(body.clientId)
-      )
-
-      if (!colaboradores || colaboradores.length === 0) {
-        this.logger.debug(
-          'No se encontraron usuarios con rol COLABORADOR activos'
+    // Resolver dueño de la rendición vinculada (si existe).
+    let reportOwnerId: string | undefined
+    if (body.expenseReportId) {
+      try {
+        const report = await this.expenseReportService.findOne(body.expenseReportId)
+        const ownerRef = (report as any)?.userId
+        reportOwnerId = ownerRef?._id
+          ? String(ownerRef._id)
+          : ownerRef
+            ? String(ownerRef)
+            : undefined
+      } catch (err) {
+        this.logger.warn(
+          `No se pudo obtener la rendición ${body.expenseReportId}:`,
+          err
         )
-        return
       }
+    }
 
-      this.logger.debug(
-        `Encontrados ${colaboradores.length} colaboradores activos para notificar`
-      )
-      for (const colaborador of colaboradores) {
-        if (!colaborador.email) continue
-        try {
-          const emailEnabled = await this.userService.isEmailEnabled(colaborador._id.toString())
-          if (!emailEnabled) continue
-          await this.emailService.sendInvoiceUploadedExpenseNotification(
-            colaborador.email,
-            notificationPayload
-          )
-          this.logger.debug(
-            `Notificación enviada al colaborador: ${colaborador.email}`
-          )
-        } catch (error) {
-          this.logger.warn(
-            `Error al enviar notificación al colaborador ${colaborador.email}:`,
-            error
-          )
-        }
+    // 1) Dueño de la rendición (o creador si no hay rendición).
+    const ownerCandidate = reportOwnerId || body.userId || undefined
+    if (ownerCandidate) {
+      try {
+        const owner = await this.userService.findOne(ownerCandidate)
+        await sendTo(owner?.email, ownerCandidate)
+      } catch (err) {
+        this.logger.warn('No se pudo notificar al dueño del gasto/rendición:', err)
       }
-    } catch (error) {
-      this.logger.error(
-        'Error al enviar notificaciones a colaboradores:',
-        error
-      )
+    }
+
+    // 2) Coordinador del dueño.
+    if (ownerCandidate) {
+      try {
+        const profile = await this.userService.findTransactionalProfile(ownerCandidate)
+        const coordinatorId = profile?.coordinatorId?.toString?.()
+        if (coordinatorId) {
+          const coordinator = await this.userService.findEmailNameClient(coordinatorId)
+          await sendTo(coordinator?.email, coordinatorId)
+        }
+      } catch (err) {
+        this.logger.warn('No se pudo notificar al coordinador:', err)
+      }
+    }
+
+    // 3) Contabilidad/Tesorería (solo por rol Contabilidad, ya filtrado en el helper).
+    if (body.clientId) {
+      try {
+        const contabilidad =
+          await this.userService.findContabilidadRecipients(body.clientId)
+        for (const u of contabilidad) {
+          await sendTo(u.email)
+        }
+      } catch (err) {
+        this.logger.warn('No se pudo notificar a contabilidad:', err)
+      }
     }
   }
 
@@ -1841,6 +1866,7 @@ export class ExpenseService {
                 await this.emailService.sendInvoiceApprovedToColaborador(
                   colaborador.email,
                   {
+                    clientId: expense.clientId?.toString?.() ?? String(expense.clientId),
                     providerName: colaborador.name,
                     invoiceNumber: `${invoiceData.serie || ''}-${
                       invoiceData.correlativo || ''

@@ -395,6 +395,12 @@ export class AdvanceService {
       dto.clientId!
     )
 
+    void this.notifyColaboradorViaticoSubmitted(
+      advance as AdvanceDocument,
+      dto.userId!,
+      dto.clientId!
+    )
+
     const refreshed = await this.advanceModel
       .findById((advance as any)._id)
       .populate('projectId')
@@ -444,7 +450,7 @@ export class AdvanceService {
         ? advance.endDate.toISOString().slice(0, 10)
         : String(advance.endDate).slice(0, 10)
 
-    const platformUrl = this.emailService.buildAppUrl('/tesoreria')
+    const platformUrl = this.emailService.buildAppUrl('/viaticos')
     const manualResendUrl = `/advance/${advanceId}/resend-coordinator-email`
 
     const setNotif = async (payload: {
@@ -537,6 +543,7 @@ export class AdvanceService {
       await this.emailService.sendViaticoSolicitudToCoordinator(
         coordinator.email,
         {
+          clientId,
           coordinatorName: coordinator.name,
           collaboratorName: collaborator.name,
           place: advance.place ?? '',
@@ -576,7 +583,14 @@ export class AdvanceService {
     if (!collaborator) return
 
     const coordinatorId = profile?.coordinatorId?.toString()
-    const recipients = allRecipients.filter(r => r._id !== coordinatorId)
+    const collaboratorIdStr = String(collaboratorUserId)
+    const collaboratorEmail = collaborator.email?.trim().toLowerCase() || ''
+    const recipients = allRecipients.filter(
+      r =>
+        r._id !== coordinatorId &&
+        r._id !== collaboratorIdStr &&
+        (collaboratorEmail ? r.email?.trim().toLowerCase() !== collaboratorEmail : true)
+    )
     if (!recipients.length) return
 
     const project = await this.projectService.findOne(
@@ -617,6 +631,7 @@ export class AdvanceService {
 
       try {
         await this.emailService.sendViaticoSolicitudToContabilidad(r.email, {
+          clientId,
           recipientName: r.name,
           collaboratorName: collaborator.name,
           place: advance.place ?? '',
@@ -631,6 +646,62 @@ export class AdvanceService {
           `Correo solicitud viático contabilidad ${advanceId} a ${r.email}: ${err instanceof Error ? err.message : String(err)}`
         )
       }
+    }
+  }
+
+  /** Confirma al colaborador que su solicitud de viáticos fue enviada y queda pendiente de aprobación. */
+  private async notifyColaboradorViaticoSubmitted(
+    advance: AdvanceDocument,
+    collaboratorUserId: string,
+    clientId: string
+  ): Promise<void> {
+    const advanceId = (advance as any)._id?.toString?.() ?? String(advance._id)
+
+    const collaborator =
+      await this.userService.findEmailNameClient(collaboratorUserId)
+    if (!collaborator?.email) return
+
+    const collabEmailEnabled = await this.userService.isEmailEnabled(collaboratorUserId)
+    if (!collabEmailEnabled) return
+
+    let projectLabel = ''
+    try {
+      const project = await this.projectService.findOne(
+        advance.projectId!.toString(),
+        clientId
+      )
+      projectLabel = `[${project.code} - ${project.name}]`
+    } catch {
+      projectLabel = ''
+    }
+
+    const totalFormatted = Number(advance.amount).toFixed(2)
+    const startStr =
+      advance.startDate instanceof Date
+        ? advance.startDate.toISOString().slice(0, 10)
+        : String(advance.startDate ?? '').slice(0, 10)
+    const endStr =
+      advance.endDate instanceof Date
+        ? advance.endDate.toISOString().slice(0, 10)
+        : String(advance.endDate ?? '').slice(0, 10)
+
+    const platformUrl = this.emailService.buildAppUrl('/mis-rendiciones')
+
+    try {
+      await this.emailService.sendViaticoSolicitudToColaborador(collaborator.email, {
+        clientId,
+        collaboratorName: collaborator.name,
+        place: advance.place ?? '',
+        startDate: startStr,
+        endDate: endStr,
+        totalFormatted,
+        projectLabel,
+        platformUrl,
+      })
+    } catch (err: unknown) {
+      this.logger.error(
+        `Correo confirmación viático colaborador ${advanceId} a ${collaborator.email}: ${err instanceof Error ? err.message : String(err)}`
+      )
     }
   }
 
@@ -680,6 +751,7 @@ export class AdvanceService {
       `/mis-rendiciones?viaticoAdvanceId=${encodeURIComponent(aid)}`
     )
     await this.emailService.sendViaticoRechazoColaborador(collab.email, {
+      clientId: advance.clientId?.toString(),
       collaboratorName: profile?.name ?? collab.name,
       collaboratorDocument: this.viaticoNotifyField(profile?.dni),
       collaboratorArea: this.viaticoNotifyField(profile?.area),
@@ -723,18 +795,8 @@ export class AdvanceService {
         cc = `${pr.code ?? '—'} - ${pr.name ?? '—'}`
       }
     }
-    const start =
-      advance.startDate instanceof Date
-        ? advance.startDate.toISOString().slice(0, 10)
-        : advance.startDate
-          ? String(advance.startDate).slice(0, 10)
-          : '—'
-    const end =
-      advance.endDate instanceof Date
-        ? advance.endDate.toISOString().slice(0, 10)
-        : advance.endDate
-          ? String(advance.endDate).slice(0, 10)
-          : '—'
+    const start = this.emailService.formatDateDDMMYYYY(advance.startDate as any) || '—'
+    const end = this.emailService.formatDateDDMMYYYY(advance.endDate as any) || '—'
     const lines = advance.lines ?? []
     const breakdownItems: string[] = []
     for (const row of lines) {
@@ -753,7 +815,7 @@ export class AdvanceService {
         ? `<ul style="margin:8px 0 16px 0;padding-left:22px;color:#0f172a;">${breakdownItems.join('')}</ul>`
         : `<p style="margin:8px 0 16px;color:#64748b;font-size:13px;">${this.escapeHtmlForEmail('(sin líneas)')}</p>`
 
-    const apprDate = approvedAt.toISOString().slice(0, 16).replace('T', ' ')
+    const apprDate = `${this.emailService.formatDateDDMMYYYY(approvedAt)} ${String(approvedAt.getHours()).padStart(2, '0')}:${String(approvedAt.getMinutes()).padStart(2, '0')}`
     const amountStr = `S/ ${Number(advance.amount).toFixed(2)}`
     const compromiso = `${amountStr} registrados en compromiso del centro de costo (hasta registro de pago en tesorería).`
 
@@ -897,6 +959,7 @@ export class AdvanceService {
     for (const r of recipients) {
       try {
         await this.emailService.sendViaticoPendienteL2(r.email, {
+          clientId: advance.clientId?.toString(),
           recipientName: r.name,
           urgent,
           urgentBanner,
@@ -933,14 +996,8 @@ export class AdvanceService {
         cc = `${pr.code ?? '—'} - ${pr.name ?? '—'}`
       }
     }
-    const start =
-      advance.startDate instanceof Date
-        ? advance.startDate.toISOString().slice(0, 10)
-        : advance.startDate ? String(advance.startDate).slice(0, 10) : '—'
-    const end =
-      advance.endDate instanceof Date
-        ? advance.endDate.toISOString().slice(0, 10)
-        : advance.endDate ? String(advance.endDate).slice(0, 10) : '—'
+    const start = this.emailService.formatDateDDMMYYYY(advance.startDate as any) || '—'
+    const end = this.emailService.formatDateDDMMYYYY(advance.endDate as any) || '—'
 
     const lines = advance.lines ?? []
     const breakdownItems: string[] = []
@@ -959,7 +1016,7 @@ export class AdvanceService {
         ? `<ul style="margin:8px 0 16px 0;padding-left:22px;color:#0f172a;">${breakdownItems.join('')}</ul>`
         : `<p style="margin:8px 0 16px;color:#64748b;font-size:13px;">${this.escapeHtmlForEmail('(sin líneas)')}</p>`
 
-    const apprDate = approvedAt.toISOString().slice(0, 16).replace('T', ' ')
+    const apprDate = `${this.emailService.formatDateDDMMYYYY(approvedAt)} ${String(approvedAt.getHours()).padStart(2, '0')}:${String(approvedAt.getMinutes()).padStart(2, '0')}`
     const amountStr = `S/ ${Number(advance.amount).toFixed(2)}`
 
     const tableOpen =
@@ -1098,6 +1155,7 @@ export class AdvanceService {
     for (const r of recipients) {
       try {
         await this.emailService.sendViaticoAprobacionContabilidad(r.email, {
+          clientId: advance.clientId?.toString(),
           recipientName: r.name,
           urgent,
           urgentBanner,
@@ -1183,6 +1241,7 @@ export class AdvanceService {
       : new Date().toISOString().slice(0, 10)
 
     const baseData = {
+      clientId: advance.clientId?.toString(),
       collaboratorName: collab.name,
       coordinatorName: coordinator?.name,
       projectLabel,
@@ -1736,6 +1795,7 @@ export class AdvanceService {
     for (const r of recipients) {
       if (!r.email?.trim()) continue
       await this.emailService.sendRendicionReembolsoContabilidad(r.email, {
+        clientId,
         recipientName: r.name || 'Estimado/a',
         reportLabel,
         reportTitle,
@@ -1791,6 +1851,7 @@ export class AdvanceService {
     if (collaborator?.email) {
       this.emailService
         .sendDevolucionPendiente(collaborator.email, {
+          clientId: advance.clientId?.toString(),
           recipientName: collaborator.name,
           amountDue: advance.settlement.difference.toFixed(2),
           dueDate: dueDate.toLocaleDateString('es-PE', {
@@ -1885,6 +1946,7 @@ export class AdvanceService {
         ? this.emailService.sendDevolucionValidada.bind(this.emailService)
         : this.emailService.sendDevolucionRechazada.bind(this.emailService)
       sendFn(collaborator.email, {
+        clientId: advance.clientId?.toString(),
         recipientName: collaborator.name,
         amountDue: rr.amountDue.toFixed(2),
         rejectionReason,
@@ -2099,14 +2161,8 @@ export class AdvanceService {
     }
 
     const totalFormatted = Number(advance.amount).toFixed(2)
-    const startStr =
-      advance.startDate instanceof Date
-        ? advance.startDate.toISOString().slice(0, 10)
-        : String(advance.startDate ?? '').slice(0, 10)
-    const endStr =
-      advance.endDate instanceof Date
-        ? advance.endDate.toISOString().slice(0, 10)
-        : String(advance.endDate ?? '').slice(0, 10)
+    const startStr = this.emailService.formatDateDDMMYYYY(advance.startDate as any)
+    const endStr = this.emailService.formatDateDDMMYYYY(advance.endDate as any)
 
     const plainSummary = [
       `Colaborador: ${collaborator.name}`,
@@ -2130,6 +2186,7 @@ export class AdvanceService {
 
     if (coordEmailEnabled) {
       await this.emailService.sendViaticoCancelacion(coordinator.email, {
+        clientId: advance.clientId?.toString(),
         coordinatorName: coordinator.name,
         collaboratorName: collaborator.name,
         place: advance.place ?? '—',

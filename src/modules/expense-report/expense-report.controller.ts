@@ -49,6 +49,17 @@ export class ExpenseReportController {
   ) {
     const createdBy = req.user._id
     const isCollaborator = req.user.roles?.includes(ROLES.COLABORADOR)
+
+    // Rendición directa: requiere permiso 'nueva-rendicion' si quien crea es colaborador
+    if (createExpenseReportDto.isDirecta && isCollaborator) {
+      const hasPermission = req.user.permissions?.modules?.includes('nueva-rendicion')
+      if (!hasPermission) {
+        throw new ForbiddenException(
+          'No tienes permiso para crear rendiciones directas.'
+        )
+      }
+    }
+
     const result = await this.expenseReportService.create(
       createExpenseReportDto,
       createdBy,
@@ -60,7 +71,7 @@ export class ExpenseReportController {
       action: 'create_rendicion',
       module: 'rendiciones',
       entityId: result?._id?.toString(),
-      details: createExpenseReportDto.title,
+      details: result.title,
       clientId: req.user.clientId,
     })
     return result

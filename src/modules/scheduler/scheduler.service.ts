@@ -146,6 +146,7 @@ export class SchedulerService {
 
     this.emailService
       .sendViaticoRecordatorioColaborador(collaborator.email, {
+        clientId: advance.clientId?.toString(),
         collaboratorName: collaborator.name,
         place: advance.place || '',
         startDate: this.formatDate(advance.startDate!),
@@ -188,6 +189,7 @@ export class SchedulerService {
 
     this.emailService
       .sendViaticoResumenCoordinador(coordinator.email, {
+        clientId: advance.clientId?.toString(),
         coordinatorName: coordinator.name,
         collaboratorName: collaborator.name,
         place: advance.place || '',
@@ -222,6 +224,7 @@ export class SchedulerService {
 
     this.emailService
       .sendViaticoRecordatorioUltimoDia(collaborator.email, {
+        clientId: advance.clientId?.toString(),
         collaboratorName: collaborator.name,
         place: advance.place || '',
         endDate: this.formatDate(advance.endDate!),

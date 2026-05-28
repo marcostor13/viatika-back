@@ -95,6 +95,7 @@ export class ClientOnboardingService {
     try {
       const { firstName, lastName } = this.splitName(adminUser.name)
       await this.emailService.sendProviderWelcomeEmail(adminUser.email, {
+        clientId: createdClient._id.toString(),
         firstName,
         lastName,
         password: temporaryPassword,

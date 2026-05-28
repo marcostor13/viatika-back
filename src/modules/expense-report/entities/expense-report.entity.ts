@@ -87,6 +87,8 @@ export interface ExpenseReportDocument extends Document {
   createdBy: Types.ObjectId
   approvedBy?: Types.ObjectId
   projectId?: Types.ObjectId
+  motivo?: string
+  isDirecta?: boolean
   // New fields
   accountNumber?: string
   idDocument?: string
@@ -109,14 +111,20 @@ export interface ExpenseReportDocument extends Document {
 
 @Schema({ timestamps: true })
 export class ExpenseReport {
-  @Prop({ required: true })
+  @Prop({ required: false })
   title: string
 
   @Prop()
   description: string
 
-  @Prop({ required: true, default: 0 })
+  @Prop({ required: false, default: 0 })
   budget: number
+
+  @Prop({ required: false })
+  motivo?: string
+
+  @Prop({ required: false, default: false })
+  isDirecta?: boolean
 
   @Prop({ required: true, type: Types.ObjectId, ref: 'User' })
   userId: Types.ObjectId

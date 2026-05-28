@@ -2,6 +2,7 @@ import {
   IsString,
   IsNumber,
   IsOptional,
+  IsBoolean,
   IsMongoId,
   IsIn,
   IsArray,
@@ -35,7 +36,8 @@ class BudgetItemDto {
 
 export class CreateExpenseReportDto {
   @IsString()
-  title: string
+  @IsOptional()
+  title?: string
 
   @IsString()
   @IsOptional()
@@ -44,6 +46,14 @@ export class CreateExpenseReportDto {
   @IsNumber()
   @IsOptional()
   budget?: number
+
+  @IsString()
+  @IsOptional()
+  motivo?: string
+
+  @IsBoolean()
+  @IsOptional()
+  isDirecta?: boolean
 
   @IsMongoId()
   userId: string // The collaborator assigned

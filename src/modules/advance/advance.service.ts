@@ -308,7 +308,9 @@ export class AdvanceService {
       )
     }
 
-    const metaDesc = `Viático: ${dto.place.trim()} (${dto.startDate.slice(0, 10)} → ${dto.endDate.slice(0, 10)})`
+    const startFmt = this.emailService.formatDateDDMMYYYY(dto.startDate)
+    const endFmt = this.emailService.formatDateDDMMYYYY(dto.endDate)
+    const metaDesc = `Viático: ${dto.place.trim()} (${startFmt} → ${endFmt})`
     const description = dto.observations?.trim()
       ? `${metaDesc} | ${dto.observations.trim()}`
       : metaDesc

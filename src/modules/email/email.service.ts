@@ -149,6 +149,19 @@ export class EmailService {
     }
   }
 
+  /**
+   * Reemplaza cualquier ocurrencia de fecha en formato `yyyy-mm-dd` dentro de
+   * un texto por `dd/mm/aaaa`. Útil para títulos heredados que se construyeron
+   * con el formato ISO antes de la normalización.
+   */
+  normalizeIsoDatesInText(text?: string | null): string {
+    if (!text) return ''
+    return String(text).replace(
+      /\b(\d{4})-(\d{2})-(\d{2})\b/g,
+      (_, y, m, d) => `${d}/${m}/${y}`
+    )
+  }
+
   /** Normaliza fechas a `dd/mm/aaaa` para todas las plantillas de correo. */
   formatDateDDMMYYYY(value?: Date | string | number | null): string {
     if (value === null || value === undefined || value === '') return ''
@@ -756,7 +769,7 @@ export class EmailService {
         context: {
           logoUrl: await this.resolveLogoUrl(this.extractClientId(data)),
           userName: data.userName,
-          title: data.title,
+          title: this.normalizeIsoDatesInText(data.title),
           budget: `S/ ${Number(data.budget).toFixed(2)}`,
           platformUrl: this.resolvePlatformHref(data.platformUrl),
           year: new Date().getFullYear(),
@@ -785,14 +798,16 @@ export class EmailService {
   ) {
     try {
       const { platformUrl, ...rest } = data
+      const reportTitle = this.normalizeIsoDatesInText(data.reportTitle)
       await this.send({
         to: email,
-        subject: `Rendición enviada para aprobación — ${data.reportTitle}`,
+        subject: `Rendición enviada para aprobación — ${reportTitle}`,
         template: './rendicion-submitted-colaborador',
         context: {
           logoUrl: await this.resolveLogoUrl(this.extractClientId(data)),
           year: new Date().getFullYear(),
           ...rest,
+          reportTitle,
           platformUrl: this.resolvePlatformHref(platformUrl),
         },
       })
@@ -817,14 +832,16 @@ export class EmailService {
   ) {
     try {
       const { platformUrl, ...rest } = data
+      const reportTitle = this.normalizeIsoDatesInText(data.reportTitle)
       await this.send({
         to: email,
-        subject: `Rendición pendiente de aprobación final — ${data.reportTitle}`,
+        subject: `Rendición pendiente de aprobación final — ${reportTitle}`,
         template: './rendicion-pendiente-contabilidad',
         context: {
           logoUrl: await this.resolveLogoUrl(this.extractClientId(data)),
           year: new Date().getFullYear(),
           ...rest,
+          reportTitle,
           platformUrl: this.resolvePlatformHref(platformUrl),
         },
       })
@@ -848,14 +865,16 @@ export class EmailService {
   ) {
     try {
       const { platformUrl, ...rest } = data
+      const reportTitle = this.normalizeIsoDatesInText(data.reportTitle)
       await this.send({
         to: email,
-        subject: `Rendición aprobada por Contabilidad — ${data.reportTitle}`,
+        subject: `Rendición aprobada por Contabilidad — ${reportTitle}`,
         template: './rendicion-aprobada-coordinador',
         context: {
           logoUrl: await this.resolveLogoUrl(this.extractClientId(data)),
           year: new Date().getFullYear(),
           ...rest,
+          reportTitle,
           platformUrl: this.resolvePlatformHref(platformUrl),
         },
       })
@@ -879,14 +898,16 @@ export class EmailService {
   ) {
     try {
       this.logger.debug(`Enviando correo de rendición enviada a ${email}`)
+      const reportTitle = this.normalizeIsoDatesInText(data.reportTitle)
       await this.send({
         to: email,
-        subject: `Rendición enviada para revisión — ${data.reportTitle}`,
+        subject: `Rendición enviada para revisión — ${reportTitle}`,
         template: './rendicion-submitted',
         context: {
           logoUrl: await this.resolveLogoUrl(this.extractClientId(data)),
           year: new Date().getFullYear(),
           ...data,
+          reportTitle,
           platformUrl: this.resolvePlatformHref(data.platformUrl),
         },
       })
@@ -1171,7 +1192,9 @@ export class EmailService {
     }
   ) {
     try {
-      const subject = `Rendición «${data.reportLabel}» requiere reembolso de S/ ${data.amountFormatted} a ${data.collaboratorName}`
+      const reportLabel = this.normalizeIsoDatesInText(data.reportLabel)
+      const reportTitle = this.normalizeIsoDatesInText(data.reportTitle)
+      const subject = `Rendición «${reportLabel}» requiere reembolso de S/ ${data.amountFormatted} a ${data.collaboratorName}`
       const { detailUrl, ...rest } = data
       await this.send({
         to: email,
@@ -1181,6 +1204,8 @@ export class EmailService {
           logoUrl: await this.resolveLogoUrl(this.extractClientId(data)),
           year: new Date().getFullYear(),
           ...rest,
+          reportLabel,
+          reportTitle,
           detailUrl: this.resolvePlatformHref(detailUrl),
         },
       })
@@ -1209,7 +1234,8 @@ export class EmailService {
     }
   ) {
     try {
-      const subject = `Reembolso de gastos registrado — ${data.reportTitle}`
+      const reportTitle = this.normalizeIsoDatesInText(data.reportTitle)
+      const subject = `Reembolso de gastos registrado — ${reportTitle}`
       const { platformUrl, ...rest } = data
       await this.send({
         to: email,
@@ -1229,6 +1255,7 @@ export class EmailService {
           logoUrl: await this.resolveLogoUrl(this.extractClientId(data)),
           year: new Date().getFullYear(),
           ...rest,
+          reportTitle,
           transferDate: this.formatDateDDMMYYYY(data.transferDate),
           platformUrl: this.resolvePlatformHref(platformUrl),
         },
@@ -1296,11 +1323,12 @@ export class EmailService {
     data: { clientId?: string; recipientName: string; reportTitle: string; closedAt: string }
   ) {
     try {
+      const reportTitle = this.normalizeIsoDatesInText(data.reportTitle)
       await this.send({
         to: email,
-        subject: `Rendición Cerrada Definitivamente — ${data.reportTitle}`,
+        subject: `Rendición Cerrada Definitivamente — ${reportTitle}`,
         template: './rendicion-cerrada',
-        context: { logoUrl: await this.resolveLogoUrl(this.extractClientId(data)), year: new Date().getFullYear(), ...data, closedAt: this.formatDateDDMMYYYY(data.closedAt) },
+        context: { logoUrl: await this.resolveLogoUrl(this.extractClientId(data)), year: new Date().getFullYear(), ...data, reportTitle, closedAt: this.formatDateDDMMYYYY(data.closedAt) },
       })
     } catch (error) {
       this.logger.error(`Error correo rendición cerrada a ${email}:`, error)
@@ -1312,11 +1340,12 @@ export class EmailService {
     data: { clientId?: string; recipientName: string; reportTitle: string; amountFormatted: string; closedAt: string; platformUrl?: string }
   ) {
     try {
+      const reportTitle = this.normalizeIsoDatesInText(data.reportTitle)
       await this.send({
         to: email,
-        subject: `Devolución pendiente — ${data.reportTitle} — S/ ${data.amountFormatted}`,
+        subject: `Devolución pendiente — ${reportTitle} — S/ ${data.amountFormatted}`,
         template: './rendicion-devolucion-colaborador',
-        context: { logoUrl: await this.resolveLogoUrl(this.extractClientId(data)), year: new Date().getFullYear(), ...data, closedAt: this.formatDateDDMMYYYY(data.closedAt), platformUrl: this.resolvePlatformHref(data.platformUrl) },
+        context: { logoUrl: await this.resolveLogoUrl(this.extractClientId(data)), year: new Date().getFullYear(), ...data, reportTitle, closedAt: this.formatDateDDMMYYYY(data.closedAt), platformUrl: this.resolvePlatformHref(data.platformUrl) },
       })
     } catch (error) {
       this.logger.error(`Error correo devolucion colaborador a ${email}:`, error)
@@ -1328,11 +1357,12 @@ export class EmailService {
     data: { clientId?: string; recipientName: string; collaboratorName: string; reportTitle: string; amountFormatted: string; depositDate: string; bankOrigin?: string; operationNumber?: string; platformUrl?: string }
   ) {
     try {
+      const reportTitle = this.normalizeIsoDatesInText(data.reportTitle)
       await this.send({
         to: email,
-        subject: `Comprobante de devolución cargado — ${data.reportTitle} — ${data.collaboratorName}`,
+        subject: `Comprobante de devolución cargado — ${reportTitle} — ${data.collaboratorName}`,
         template: './rendicion-devolucion-cargada',
-        context: { logoUrl: await this.resolveLogoUrl(this.extractClientId(data)), year: new Date().getFullYear(), ...data, depositDate: this.formatDateDDMMYYYY(data.depositDate), platformUrl: this.resolvePlatformHref(data.platformUrl) },
+        context: { logoUrl: await this.resolveLogoUrl(this.extractClientId(data)), year: new Date().getFullYear(), ...data, reportTitle, depositDate: this.formatDateDDMMYYYY(data.depositDate), platformUrl: this.resolvePlatformHref(data.platformUrl) },
       })
     } catch (error) {
       this.logger.error(`Error correo devolucion cargada a ${email}:`, error)
@@ -1344,11 +1374,12 @@ export class EmailService {
     data: { clientId?: string; adminName: string; collaboratorName: string; reportTitle: string; cancelReason?: string }
   ) {
     try {
+      const reportTitle = this.normalizeIsoDatesInText(data.reportTitle)
       await this.send({
         to: email,
-        subject: `Rendición cancelada por el colaborador — ${data.reportTitle}`,
+        subject: `Rendición cancelada por el colaborador — ${reportTitle}`,
         template: './rendicion-cancelada',
-        context: { logoUrl: await this.resolveLogoUrl(this.extractClientId(data)), year: new Date().getFullYear(), ...data },
+        context: { logoUrl: await this.resolveLogoUrl(this.extractClientId(data)), year: new Date().getFullYear(), ...data, reportTitle },
       })
     } catch (error) {
       this.logger.error(`Error correo rendición cancelada a ${email}:`, error)

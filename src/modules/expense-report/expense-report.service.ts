@@ -1273,7 +1273,7 @@ export class ExpenseReportService {
     const collaboratorEmailEnabled = collaborator?.email
       ? await this.userService.isEmailEnabled(updated.userId.toString())
       : false
-    const closedAtStr = closureRecord.closedAt.toLocaleDateString('es-PE')
+    const closedAtStr = this.emailService.formatDateDDMMYYYY(closureRecord.closedAt)
     const clientIdStr = updated.clientId.toString()
     if (collaboratorEmailEnabled) {
       this.emailService.sendRendicionCerrada(collaborator!.email, {
@@ -1400,7 +1400,7 @@ export class ExpenseReportService {
         clientId,
         recipientName: collaboratorName,
         reportTitle: report.title,
-        closedAt: voucher.uploadedAt.toLocaleDateString('es-PE'),
+        closedAt: this.emailService.formatDateDDMMYYYY(voucher.uploadedAt),
       }).catch(() => {})
     }
     this.notificationsService.create({

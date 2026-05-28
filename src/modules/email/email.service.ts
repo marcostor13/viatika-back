@@ -24,6 +24,19 @@ export class EmailService {
       this.logger.debug(`[EMAILS DISABLED] Omitiendo envío a ${options.to} — ${options.subject}`)
       return
     }
+    // Pase final: normaliza cualquier `yyyy-mm-dd` que aún pueda haberse colado
+    // en el subject o en cualquier string del context. Idempotente con dd/mm/aaaa.
+    if (options.subject && typeof options.subject === 'string') {
+      options.subject = this.normalizeIsoDatesInText(options.subject)
+    }
+    if (options.context && typeof options.context === 'object') {
+      const ctx = options.context as Record<string, unknown>
+      for (const [k, v] of Object.entries(ctx)) {
+        if (typeof v === 'string') {
+          ctx[k] = this.normalizeIsoDatesInText(v)
+        }
+      }
+    }
     await this.mailerService.sendMail(options)
   }
 
@@ -167,9 +180,17 @@ export class EmailService {
     if (value === null || value === undefined || value === '') return ''
 
     if (typeof value === 'string') {
-      const isoMatch = /^(\d{4})-(\d{2})-(\d{2})/.exec(value)
+      const trimmed = value.trim()
+      // ISO yyyy-mm-dd (con o sin hora).
+      const isoMatch = /^(\d{4})-(\d{2})-(\d{2})/.exec(trimmed)
       if (isoMatch) return `${isoMatch[3]}/${isoMatch[2]}/${isoMatch[1]}`
-      if (/^\d{2}\/\d{2}\/\d{4}$/.test(value)) return value
+      // Variantes d/m/yyyy, dd/m/yyyy, d/mm/yyyy y dd/mm/yyyy: normaliza zero-pad.
+      const slashMatch = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(trimmed)
+      if (slashMatch) {
+        const dd = slashMatch[1].padStart(2, '0')
+        const mm = slashMatch[2].padStart(2, '0')
+        return `${dd}/${mm}/${slashMatch[3]}`
+      }
     }
 
     const d = value instanceof Date ? value : new Date(value)

@@ -28,7 +28,7 @@ export class CategoryGroupController {
   ) {}
 
   @Post()
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   @UseGuards(JwtAuthGuard, RolesGuard)
   async create(@Body() dto: CreateCategoryGroupDto, @Request() req: any) {
     const result = await this.groupService.create(dto)
@@ -51,7 +51,7 @@ export class CategoryGroupController {
   }
 
   @Patch(':id/:clientId')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   @UseGuards(JwtAuthGuard, RolesGuard)
   async update(
     @Param('id') id: string,
@@ -73,7 +73,7 @@ export class CategoryGroupController {
   }
 
   @Delete(':id/:clientId')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   @UseGuards(JwtAuthGuard, RolesGuard)
   async remove(
     @Param('id') id: string,

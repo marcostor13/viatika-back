@@ -36,6 +36,7 @@ export class CategoryController {
   ) {}
 
   @Post()
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   @UseGuards(JwtAuthGuard, RolesGuard)
   async create(@Body() createCategoryDto: CreateCategoryDto, @Request() req: any) {
     const result = await this.categoryService.create(createCategoryDto)
@@ -52,6 +53,7 @@ export class CategoryController {
   }
 
   @Post('import')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @UseInterceptors(
     FileInterceptor('file', {
@@ -160,6 +162,7 @@ export class CategoryController {
   }
 
   @Patch(':id/:clientId')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   @UseGuards(JwtAuthGuard, RolesGuard)
   async update(
     @Param('id') id: string,
@@ -185,6 +188,7 @@ export class CategoryController {
   }
 
   @Delete(':id/:clientId')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   @UseGuards(JwtAuthGuard, RolesGuard)
   async remove(
     @Param('id') id: string,

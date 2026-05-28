@@ -262,11 +262,62 @@ export class ExpenseReportService {
     }
 
     const filter: Record<string, unknown> = { _id: { $in: ids } }
-    if (opts.type && opts.type !== 'all') filter['expenseType'] = opts.type
-    if (opts.status && opts.status !== 'all') filter['status'] = opts.status
-    if (opts.search?.trim()) {
-      filter['description'] = { $regex: opts.search.trim(), $options: 'i' }
+    const and: Record<string, unknown>[] = []
+    if (opts.type && opts.type !== 'all') {
+      filter['expenseType'] =
+        opts.type === 'comprobante_caja'
+          ? { $in: ['comprobante_caja', 'recibo_caja'] }
+          : opts.type
     }
+    if (opts.status && opts.status !== 'all') {
+      // El filtro se basa en la aprobación dual (approvalCont / approvalCoord),
+      // que es lo que la UI muestra como badge. Si un comprobante legacy no
+      // tiene aprobación dual, la UI lo muestra como "Pendiente" por defecto,
+      // por lo que el campo legacy `status` se ignora aquí para mantener
+      // coherencia visual.
+      if (opts.status === 'approved') {
+        filter['approvalCont.status'] = 'approved'
+        filter['approvalCoord.status'] = 'approved'
+      } else if (opts.status === 'rejected') {
+        and.push({
+          $or: [
+            { 'approvalCont.status': 'rejected' },
+            { 'approvalCoord.status': 'rejected' },
+          ],
+        })
+      } else if (opts.status === 'pending') {
+        filter['$nor'] = [
+          {
+            'approvalCont.status': 'approved',
+            'approvalCoord.status': 'approved',
+          },
+          { 'approvalCont.status': 'rejected' },
+          { 'approvalCoord.status': 'rejected' },
+        ]
+      } else {
+        filter['status'] = opts.status
+      }
+    }
+    if (opts.search?.trim()) {
+      // El "concepto" se guarda en distintos campos según el tipo de
+      // comprobante (description plano, JSON dentro de description/data, o
+      // mobilityRows[].gestion/origen/destino), por lo que el search debe
+      // cubrir todos esos lugares.
+      const term = opts.search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const rx = { $regex: term, $options: 'i' }
+      and.push({
+        $or: [
+          { description: rx },
+          { data: rx },
+          { 'mobilityRows.gestion': rx },
+          { 'mobilityRows.concepto': rx },
+          { 'mobilityRows.origen': rx },
+          { 'mobilityRows.destino': rx },
+          { 'mobilityRows.clienteProveedor': rx },
+        ],
+      })
+    }
+    if (and.length) filter['$and'] = and
 
     const all = await this.expenseModel
       .find(filter)
@@ -1400,7 +1451,7 @@ export class ExpenseReportService {
     const collaboratorEmailEnabled = collaborator?.email
       ? await this.userService.isEmailEnabled(updated.userId.toString())
       : false
-    const closedAtStr = closureRecord.closedAt.toLocaleDateString('es-PE')
+    const closedAtStr = this.emailService.formatDateDDMMYYYY(closureRecord.closedAt)
     const clientIdStr = updated.clientId.toString()
     if (collaboratorEmailEnabled) {
       this.emailService.sendRendicionCerrada(collaborator!.email, {
@@ -1527,7 +1578,7 @@ export class ExpenseReportService {
         clientId,
         recipientName: collaboratorName,
         reportTitle: report.title,
-        closedAt: voucher.uploadedAt.toLocaleDateString('es-PE'),
+        closedAt: this.emailService.formatDateDDMMYYYY(voucher.uploadedAt),
       }).catch(() => {})
     }
     this.notificationsService.create({

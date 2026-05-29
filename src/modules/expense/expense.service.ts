@@ -1135,6 +1135,10 @@ export class ExpenseService {
         subTipo,
         declaracionJurada: isDJ,
         firmante: isDJ ? body.declaracionJuradaFirmante : undefined,
+        description: body.data,
+        serie: body.serie || undefined,
+        correlativo: body.correlativo || undefined,
+        rucEmisor: body.rucEmisor || undefined,
       }),
     })
 

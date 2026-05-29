@@ -95,4 +95,16 @@ export class CreateExpenseDto {
   @IsString()
   @IsOptional()
   subTipo?: string
+
+  @IsString()
+  @IsOptional()
+  serie?: string
+
+  @IsString()
+  @IsOptional()
+  correlativo?: string
+
+  @IsString()
+  @IsOptional()
+  rucEmisor?: string
 }

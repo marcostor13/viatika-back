@@ -863,6 +863,7 @@ export class ExpenseReportService {
       projectId?: string
       categoryId?: string
       docNumber?: string
+      tipo?: string
     } = {}
   ) {
     const page = Math.max(1, filters.page ?? 1)
@@ -900,6 +901,11 @@ export class ExpenseReportService {
         { correlativo: { $regex: dn, $options: 'i' } },
         { receiptNumeroDocumento: { $regex: dn, $options: 'i' } },
       ]
+    }
+
+    // Filtro tipo de documento
+    if (filters.tipo && filters.tipo !== 'all') {
+      matchStage.expenseType = filters.tipo
     }
 
     // Filtro proyecto
@@ -957,7 +963,7 @@ export class ExpenseReportService {
     pipeline.push(
       { $lookup: { from: 'projects', localField: 'proyectId', foreignField: '_id', as: '_project' } },
       { $lookup: { from: 'categories', localField: 'categoryId', foreignField: '_id', as: '_category' } },
-      { $addFields: { _projectDoc: { $arrayElemAt: ['$project', 0] }, _categoryDoc: { $arrayElemAt: ['$_category', 0] } } },
+      { $addFields: { _projectDoc: { $arrayElemAt: ['$_project', 0] }, _categoryDoc: { $arrayElemAt: ['$_category', 0] } } },
       { $sort: { createdAt: -1 } },
       { $skip: skip },
       { $limit: limit }

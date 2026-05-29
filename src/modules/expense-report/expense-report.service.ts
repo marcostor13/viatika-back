@@ -477,6 +477,10 @@ export class ExpenseReportService {
         )
       }
       $set.rejectionReason = reason
+      // Quién rechazó se infiere del estado previo: pending_accounting → Contabilidad;
+      // submitted/solicited → Coordinador.
+      $set.rejectedByRole =
+        existing.status === 'pending_accounting' ? 'contabilidad' : 'coordinador'
     } else if (
       dto.rejectionReason !== undefined &&
       dto.status !== 'submitted'
@@ -486,6 +490,7 @@ export class ExpenseReportService {
 
     if (dto.status === 'submitted' || dto.status === 'solicited') {
       $unset.rejectionReason = ''
+      $unset.rejectedByRole = ''
     }
 
     const updatePayload: Record<string, unknown> = {}
@@ -687,6 +692,45 @@ export class ExpenseReportService {
       } catch (err) {
         console.error(`[ExpenseReportService] Liquidación post-aprobación ${id}:`, err)
       }
+
+      // Si la liquidación arroja saldo a favor de la empresa, avisar al colaborador.
+      try {
+        const liquidated = await this.expenseReportModel
+          .findById(id)
+          .select('settlement title clientId')
+          .lean<{ settlement?: { type?: string; difference?: number }; title?: string; clientId?: any }>()
+          .exec()
+        const diffAbs = Math.abs(Number(liquidated?.settlement?.difference ?? 0))
+        if (liquidated?.settlement?.type === 'devolucion' && diffAbs >= 0.01) {
+          const amountFormatted = diffAbs.toFixed(2)
+          const ownerEmailLocal =
+            (typeof owner === 'object' && owner?.email) || undefined
+          if (ownerEmailLocal) {
+            const ownerEmailEnabledLocal = ownerId
+              ? await this.userService.isEmailEnabled(ownerId)
+              : false
+            if (ownerEmailEnabledLocal) {
+              await this.emailService.sendRendicionDevolucionColaborador(ownerEmailLocal, {
+                clientId: String(liquidated.clientId ?? fullyUpdatedReport.clientId),
+                recipientName: collaboratorName,
+                reportTitle: liquidated.title ?? reportTitle,
+                amountFormatted,
+                closedAt: this.emailService.formatDateDDMMYYYY(new Date()),
+                platformUrl,
+              })
+            }
+          }
+          await this.notificationsService.create({
+            userId: ownerId,
+            title: 'Saldo pendiente de devolución',
+            message: `Tu rendición "${reportTitle}" fue aprobada. Tienes un saldo de S/ ${amountFormatted} a devolver a la empresa.`,
+            type: 'warning',
+            actionUrl: `/mis-rendiciones/${id}/detalle`,
+          }).catch(() => {})
+        }
+      } catch (err) {
+        console.error(`[ExpenseReportService] Aviso devolución post-aprobación ${id}:`, err)
+      }
     }
 
     // Rendición enviada (submitted)
@@ -821,18 +865,88 @@ export class ExpenseReportService {
       }
     }
 
-    // Rendición rechazada: notificar al colaborador
+    // Rendición rechazada: notificar al colaborador (siempre) y al coordinador (solo si la rechazó Contabilidad).
     if (dto.status === 'rejected') {
       try {
         const ownerRef = fullyUpdatedReport.userId as any
         const ownerId = ownerRef?._id ? String(ownerRef._id) : String(ownerRef)
+        const collaboratorName =
+          (typeof ownerRef === 'object' && ownerRef?.name) || 'Colaborador'
+        const ownerEmail = (typeof ownerRef === 'object' && ownerRef?.email) || undefined
+        const reportTitle = fullyUpdatedReport.title
+        const rejectionReason =
+          (fullyUpdatedReport as any).rejectionReason || 'Ver detalle'
+        // Distinguir quién rechazó según el estado previo del documento.
+        const rejectedByContabilidad = existing.status === 'pending_accounting'
+        const rejectedByLabel = rejectedByContabilidad
+          ? 'Contabilidad'
+          : 'el Coordinador'
+        const platformUrl = this.emailService.buildAppUrl(
+          `/mis-rendiciones/${id}/detalle`
+        )
+
         await this.notificationsService.create({
           userId: ownerId,
           title: 'Rendición rechazada',
-          message: `Tu rendición "${fullyUpdatedReport.title}" fue rechazada. Motivo: ${(fullyUpdatedReport as any).rejectionReason || 'Ver detalle'}`,
+          message: `Tu rendición "${reportTitle}" fue rechazada por ${rejectedByLabel}. Motivo: ${rejectionReason}`,
           type: 'error',
           actionUrl: `/mis-rendiciones/${id}/detalle`,
         })
+
+        // Correo al colaborador.
+        if (ownerEmail) {
+          const ownerEmailEnabled = await this.userService.isEmailEnabled(ownerId)
+          if (ownerEmailEnabled) {
+            await this.emailService.sendRendicionRechazadaColaborador(ownerEmail, {
+              clientId: String(fullyUpdatedReport.clientId),
+              collaboratorName,
+              reportTitle,
+              rejectionReason,
+              rejectedBy: rejectedByLabel,
+              platformUrl,
+            })
+          }
+        }
+
+        // Si lo rechazó Contabilidad, también notificar al coordinador (in-app + correo).
+        if (rejectedByContabilidad) {
+          const profile = await this.userService.findTransactionalProfile(ownerId)
+          const coordinatorId = profile?.coordinatorId?.toString?.()
+          if (coordinatorId) {
+            await this.notificationsService.create({
+              userId: coordinatorId,
+              title: 'Rendición rechazada por Contabilidad',
+              message: `La rendición "${reportTitle}" de ${collaboratorName} fue rechazada por Contabilidad. Motivo: ${rejectionReason}`,
+              type: 'warning',
+              actionUrl: `/mis-rendiciones/${id}/detalle`,
+            })
+
+            try {
+              const coordinator =
+                await this.userService.findEmailNameClient(coordinatorId)
+              const coordinatorEmailEnabled =
+                await this.userService.isEmailEnabled(coordinatorId)
+              if (coordinator?.email && coordinatorEmailEnabled) {
+                await this.emailService.sendRendicionRechazadaCoordinador(
+                  coordinator.email,
+                  {
+                    clientId: String(fullyUpdatedReport.clientId),
+                    coordinatorName: coordinator.name,
+                    collaboratorName,
+                    reportTitle,
+                    rejectionReason,
+                    platformUrl,
+                  }
+                )
+              }
+            } catch (mailErr) {
+              console.error(
+                `[rejected] Error correo rechazo a coordinador ${coordinatorId}:`,
+                mailErr
+              )
+            }
+          }
+        }
       } catch (error) {
         console.error('Error enviando notificación de rechazo de rendición', error)
       }
@@ -863,6 +977,7 @@ export class ExpenseReportService {
       projectId?: string
       categoryId?: string
       docNumber?: string
+      tipo?: string
     } = {}
   ) {
     const page = Math.max(1, filters.page ?? 1)
@@ -900,6 +1015,11 @@ export class ExpenseReportService {
         { correlativo: { $regex: dn, $options: 'i' } },
         { receiptNumeroDocumento: { $regex: dn, $options: 'i' } },
       ]
+    }
+
+    // Filtro tipo de documento
+    if (filters.tipo && filters.tipo !== 'all') {
+      matchStage.expenseType = filters.tipo
     }
 
     // Filtro proyecto
@@ -957,7 +1077,7 @@ export class ExpenseReportService {
     pipeline.push(
       { $lookup: { from: 'projects', localField: 'proyectId', foreignField: '_id', as: '_project' } },
       { $lookup: { from: 'categories', localField: 'categoryId', foreignField: '_id', as: '_category' } },
-      { $addFields: { _projectDoc: { $arrayElemAt: ['$project', 0] }, _categoryDoc: { $arrayElemAt: ['$_category', 0] } } },
+      { $addFields: { _projectDoc: { $arrayElemAt: ['$_project', 0] }, _categoryDoc: { $arrayElemAt: ['$_category', 0] } } },
       { $sort: { createdAt: -1 } },
       { $skip: skip },
       { $limit: limit }
@@ -1463,11 +1583,14 @@ export class ExpenseReportService {
     }
 
     const settlement = (updated as any).settlement
+    const settlementDiffAbs = Math.abs(Number(settlement?.difference ?? 0))
     const clientId = clientIdStr
     const platformUrl = this.emailService.buildAppUrl(`/mis-rendiciones/${id}/detalle`)
 
-    if (settlement?.type === 'devolucion') {
-      const amountFormatted = Math.abs(Number(settlement.difference)).toFixed(2)
+    // Solo enviar correos de devolución / reembolso si hay un monto real (>= 0.01).
+    // Evita los correos con "S/ 0.00" cuando el settlement persistido quedó stale.
+    if (settlement?.type === 'devolucion' && settlementDiffAbs >= 0.01) {
+      const amountFormatted = settlementDiffAbs.toFixed(2)
       if (collaboratorEmailEnabled) {
         this.emailService.sendRendicionDevolucionColaborador(collaborator!.email, {
           clientId,
@@ -1487,8 +1610,8 @@ export class ExpenseReportService {
           actionUrl: `/mis-rendiciones/${id}/detalle`,
         }).catch(() => {})
       }
-    } else if (settlement?.type === 'reembolso') {
-      const amountFormatted = Math.abs(Number(settlement.difference)).toFixed(2)
+    } else if (settlement?.type === 'reembolso' && settlementDiffAbs >= 0.01) {
+      const amountFormatted = settlementDiffAbs.toFixed(2)
       const accountingUsers = await this.userService.findAccountingRecipientsWithIds(clientId)
       for (const u of accountingUsers) {
         this.emailService.sendRendicionReembolsoContabilidad(u.email, {
@@ -1767,6 +1890,8 @@ export class ExpenseReportService {
 
     const collaborator = await this.userService.findEmailNameClient(report.userId.toString())
     const platformUrl = this.emailService.buildAppUrl(`/mis-rendiciones/${id}/detalle`)
+    const clientIdStr = report.clientId.toString()
+    const reportTitle = updated.title
 
     this.notificationsService.create({
       userId: report.userId.toString(),
@@ -1776,7 +1901,29 @@ export class ExpenseReportService {
       actionUrl: `/mis-rendiciones/${id}/detalle`,
     }).catch(() => {})
 
-    // Notificar al coordinador
+    if (collaborator?.email) {
+      const collaboratorEmailEnabled =
+        await this.userService.isEmailEnabled(report.userId.toString())
+      if (collaboratorEmailEnabled) {
+        this.emailService
+          .sendRendicionReabierta(collaborator.email, {
+            clientId: clientIdStr,
+            recipientName: collaborator.name,
+            reportTitle,
+            reason: trimmedReason,
+            intro:
+              'Su rendición cerrada fue reabierta por Contabilidad. Ya puede editar sus comprobantes y volver a enviarla.',
+            platformUrl,
+          })
+          .catch((err: unknown) =>
+            console.error(
+              `Correo reapertura colaborador ${collaborator.email}: ${err instanceof Error ? err.message : String(err)}`
+            )
+          )
+      }
+    }
+
+    // Notificar al coordinador (in-app + correo)
     try {
       const profile = await this.userService.findTransactionalProfile(report.userId.toString())
       const coordinatorId = profile?.coordinatorId?.toString?.()
@@ -1784,10 +1931,31 @@ export class ExpenseReportService {
         this.notificationsService.create({
           userId: coordinatorId,
           title: 'Rendición reabierta por Contabilidad',
-          message: `La rendición "${updated.title}" fue reabierta. Motivo: ${trimmedReason.slice(0, 100)}.`,
+          message: `La rendición "${reportTitle}" fue reabierta. Motivo: ${trimmedReason.slice(0, 100)}.`,
           type: 'info',
           actionUrl: `/mis-rendiciones/${id}/detalle`,
         }).catch(() => {})
+
+        try {
+          const coordinator = await this.userService.findEmailNameClient(coordinatorId)
+          const coordinatorEmailEnabled = await this.userService.isEmailEnabled(coordinatorId)
+          if (coordinator?.email && coordinatorEmailEnabled) {
+            this.emailService
+              .sendRendicionReabierta(coordinator.email, {
+                clientId: clientIdStr,
+                recipientName: coordinator.name,
+                reportTitle,
+                reason: trimmedReason,
+                intro: `La rendición de ${collaborator?.name || 'el colaborador'} que usted aprobó fue reabierta por Contabilidad.`,
+                platformUrl,
+              })
+              .catch((err: unknown) =>
+                console.error(
+                  `Correo reapertura coordinador ${coordinator.email}: ${err instanceof Error ? err.message : String(err)}`
+                )
+              )
+          }
+        } catch {}
       }
     } catch {}
 

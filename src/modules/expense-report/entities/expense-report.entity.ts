@@ -81,6 +81,7 @@ export interface ExpenseReportDocument extends Document {
   clientId: Types.ObjectId
   status: ExpenseReportStatus
   rejectionReason?: string
+  rejectedByRole?: 'coordinador' | 'contabilidad'
   expenseIds: Types.ObjectId[]
   advanceIds?: Types.ObjectId[]
   settlement?: Settlement
@@ -139,6 +140,10 @@ export class ExpenseReport {
   @Prop({ required: false })
   rejectionReason?: string
 
+  /** Quién rechazó la rendición: coordinador (rechazo en fase de revisión) o contabilidad (rechazo en aprobación final). */
+  @Prop({ required: false, enum: ['coordinador', 'contabilidad'] })
+  rejectedByRole?: 'coordinador' | 'contabilidad'
+
   @Prop({ type: [{ type: Types.ObjectId, ref: 'Expense' }], default: [] })
   expenseIds: Types.ObjectId[]
 
@@ -154,16 +159,12 @@ export class ExpenseReport {
   @Prop({ type: [{ type: Types.ObjectId, ref: 'Advance' }], default: [] })
   advanceIds?: Types.ObjectId[]
 
-  @Prop({
-    type: {
-      advanceTotal: { type: Number },
-      expenseTotal: { type: Number },
-      difference: { type: Number },
-      type: { type: String, enum: ['reembolso', 'devolucion', 'equilibrado'] },
-      settledAt: { type: Date },
-      _id: false,
-    },
-  })
+  /**
+   * Se define como objeto plano para evitar el conflicto de casteo con la
+   * clave interna `type` del subdocumento (ej. settlement.type = 'devolucion').
+   * Mongoose interpretaría `type` como descriptor del tipo y descartaría el resto.
+   */
+  @Prop({ type: Object })
   settlement?: Settlement
 
   @Prop()

@@ -905,6 +905,105 @@ export class EmailService {
     }
   }
 
+  /** Notifica al colaborador que su rendición fue rechazada (coord o contabilidad). */
+  async sendRendicionRechazadaColaborador(
+    email: string,
+    data: {
+      clientId?: string
+      collaboratorName: string
+      reportTitle: string
+      rejectionReason: string
+      rejectedBy: string
+      platformUrl?: string
+    }
+  ) {
+    try {
+      const { platformUrl, ...rest } = data
+      const reportTitle = this.normalizeIsoDatesInText(data.reportTitle)
+      await this.send({
+        to: email,
+        subject: `Rendición rechazada — ${reportTitle}`,
+        template: './rendicion-rechazada-colaborador',
+        context: {
+          logoUrl: await this.resolveLogoUrl(this.extractClientId(data)),
+          year: new Date().getFullYear(),
+          ...rest,
+          reportTitle,
+          platformUrl: this.resolvePlatformHref(platformUrl),
+        },
+      })
+      this.logger.debug(`Correo rendición rechazada (colaborador) enviado a ${email}`)
+    } catch (error) {
+      this.logger.error(`Error rendición rechazada (colaborador) a ${email}:`, error)
+    }
+  }
+
+  /** Notifica al coordinador que la rendición que aprobó fue rechazada por Contabilidad. */
+  async sendRendicionRechazadaCoordinador(
+    email: string,
+    data: {
+      clientId?: string
+      coordinatorName: string
+      collaboratorName: string
+      reportTitle: string
+      rejectionReason: string
+      platformUrl?: string
+    }
+  ) {
+    try {
+      const { platformUrl, ...rest } = data
+      const reportTitle = this.normalizeIsoDatesInText(data.reportTitle)
+      await this.send({
+        to: email,
+        subject: `Rendición rechazada por Contabilidad — ${reportTitle}`,
+        template: './rendicion-rechazada-coordinador',
+        context: {
+          logoUrl: await this.resolveLogoUrl(this.extractClientId(data)),
+          year: new Date().getFullYear(),
+          ...rest,
+          reportTitle,
+          platformUrl: this.resolvePlatformHref(platformUrl),
+        },
+      })
+      this.logger.debug(`Correo rendición rechazada (coordinador) enviado a ${email}`)
+    } catch (error) {
+      this.logger.error(`Error rendición rechazada (coordinador) a ${email}:`, error)
+    }
+  }
+
+  /** Notifica reapertura de rendición cerrada (colaborador o coordinador). */
+  async sendRendicionReabierta(
+    email: string,
+    data: {
+      clientId?: string
+      recipientName: string
+      reportTitle: string
+      reason: string
+      intro: string
+      platformUrl?: string
+    }
+  ) {
+    try {
+      const { platformUrl, ...rest } = data
+      const reportTitle = this.normalizeIsoDatesInText(data.reportTitle)
+      await this.send({
+        to: email,
+        subject: `Rendición reabierta — ${reportTitle}`,
+        template: './rendicion-reabierta',
+        context: {
+          logoUrl: await this.resolveLogoUrl(this.extractClientId(data)),
+          year: new Date().getFullYear(),
+          ...rest,
+          reportTitle,
+          platformUrl: this.resolvePlatformHref(platformUrl),
+        },
+      })
+      this.logger.debug(`Correo rendición reabierta enviado a ${email}`)
+    } catch (error) {
+      this.logger.error(`Error rendición reabierta a ${email}:`, error)
+    }
+  }
+
   async sendRendicionSubmitted(
     email: string,
     data: {

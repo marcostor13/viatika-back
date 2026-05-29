@@ -391,15 +391,16 @@ export class ExpenseService {
     data: ExtractedInvoiceData,
     clientId: string
   ): Promise<void> {
-    if (data.serie && data.correlativo) {
+    if (data.serie && data.correlativo && data.rucEmisor) {
       const existingInvoice = await this.findBySeriAndCorrelativo(
         data.serie,
         data.correlativo,
-        clientId
+        clientId,
+        data.rucEmisor
       )
       if (existingInvoice) {
         throw new HttpException(
-          `Ya existe una factura/boleta con el número ${data.serie}-${data.correlativo}`,
+          `Ya existe una factura/boleta del emisor con RUC ${data.rucEmisor} y número ${data.serie}-${data.correlativo}`,
           HttpStatus.CONFLICT
         )
       }
@@ -2090,11 +2091,12 @@ export class ExpenseService {
   async findBySeriAndCorrelativo(
     serie: string,
     correlativo: string,
-    clientId?: string
+    clientId?: string,
+    rucEmisor?: string
   ): Promise<Expense | null> {
     try {
       this.logger.debug(
-        `Buscando duplicados - Serie: ${serie}, Correlativo: ${correlativo}, clientId: ${clientId}`
+        `Buscando duplicados - Serie: ${serie}, Correlativo: ${correlativo}, clientId: ${clientId}, rucEmisor: ${rucEmisor}`
       )
 
       const query: any = {}
@@ -2118,13 +2120,14 @@ export class ExpenseService {
             }
 
             this.logger.debug(
-              `Revisando factura ${expense._id}: Serie: ${dataObj?.serie}, Correlativo: ${dataObj?.correlativo}`
+              `Revisando factura ${expense._id}: Serie: ${dataObj?.serie}, Correlativo: ${dataObj?.correlativo}, RUC: ${dataObj?.rucEmisor}`
             )
 
             if (
               dataObj &&
               dataObj.serie === serie &&
-              dataObj.correlativo === correlativo
+              dataObj.correlativo === correlativo &&
+              (!rucEmisor || dataObj.rucEmisor === rucEmisor)
             ) {
               this.logger.debug(`DUPLICADO ENCONTRADO: Factura ${expense._id}`)
               return expense

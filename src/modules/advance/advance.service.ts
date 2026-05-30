@@ -1642,7 +1642,7 @@ export class AdvanceService {
 
     const amountFormatted = amountReimburse.toFixed(2)
     const reportTitle = report.title || 'Rendición'
-    const reportLabel = `${reportTitle} · ${reportId}`
+    const reportLabel = reportTitle
 
     for (const r of recipients) {
       if (!r.email?.trim()) continue

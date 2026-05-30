@@ -67,7 +67,7 @@ export interface ReimbursementPaymentInfo {
   cci?: string
   transferDate: Date
   reference?: string
-  paymentReceiptUrl: string
+  paymentReceiptUrl?: string
   paymentReceiptFileName?: string
   paymentReceiptMimeType?: string
   paymentReceiptSizeBytes?: number
@@ -230,7 +230,7 @@ export class ExpenseReport {
       cci: { type: String },
       transferDate: { type: Date },
       reference: { type: String },
-      paymentReceiptUrl: { type: String, required: true },
+      paymentReceiptUrl: { type: String },
       paymentReceiptFileName: { type: String },
       paymentReceiptMimeType: { type: String },
       paymentReceiptSizeBytes: { type: Number },

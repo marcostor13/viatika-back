@@ -32,9 +32,9 @@ export class RegisterReimbursementPaymentDto {
   @IsOptional()
   reference?: string
 
+  @IsOptional()
   @IsUrl()
-  @IsNotEmpty()
-  paymentReceiptUrl: string
+  paymentReceiptUrl?: string
 
   @IsString()
   @IsOptional()

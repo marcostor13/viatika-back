@@ -1327,13 +1327,21 @@ export class ExpenseReportService {
       )
     }
 
-    const receiptValidation = this.validatePaymentReceipt(
-      dto.paymentReceiptMimeType,
-      dto.paymentReceiptFileName,
-      dto.paymentReceiptSizeBytes
-    )
-    if (!receiptValidation.ok) {
-      throw new BadRequestException(receiptValidation.reason)
+    if (dto.method !== 'efectivo' && !dto.paymentReceiptUrl) {
+      throw new BadRequestException(
+        'El comprobante es obligatorio para pagos por transferencia o cheque.'
+      )
+    }
+
+    if (dto.paymentReceiptUrl) {
+      const receiptValidation = this.validatePaymentReceipt(
+        dto.paymentReceiptMimeType,
+        dto.paymentReceiptFileName,
+        dto.paymentReceiptSizeBytes
+      )
+      if (!receiptValidation.ok) {
+        throw new BadRequestException(receiptValidation.reason)
+      }
     }
 
     const report = await this.expenseReportModel.findById(reportId).exec()

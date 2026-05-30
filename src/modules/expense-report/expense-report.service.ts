@@ -78,6 +78,25 @@ export class ExpenseReportService {
     return String(clientId)
   }
 
+  /**
+   * Para correos / notificaciones: muestra el "presupuesto" alineado con la UI
+   * (`totalAnticipado` del frontend) — suma TODOS los anticipos vinculados
+   * con status approved/paid/settled. Si la rendición no tiene anticipos
+   * (caso directa), cae a `report.budget` para no mostrar S/ 0.00.
+   */
+  private async computeReportBudgetDisplay(report: any): Promise<number> {
+    if (!report?._id) return Number(report?.budget) || 0
+    const reportId = String(report._id)
+    const rawAdvanceIds: string[] = (Array.isArray(report.advanceIds) ? report.advanceIds : []).map(
+      (x: any) => (x && typeof x === 'object' && '_id' in x ? String(x._id) : String(x))
+    )
+    const linkedAdvances = await this.advanceService.findByExpenseReportId(reportId, rawAdvanceIds)
+    const total = linkedAdvances
+      .filter((a: any) => ['approved', 'paid', 'settled'].includes(a.status))
+      .reduce((s: number, a: any) => s + (Number(a.amount) || 0), 0)
+    return total > 0 ? total : Number(report.budget) || 0
+  }
+
   private async validateBeforeSubmit(reportId: string): Promise<void> {
     const report = await this.expenseReportModel
       .findById(reportId)
@@ -543,7 +562,9 @@ export class ExpenseReportService {
         const collaboratorName =
           (typeof ownerRef === 'object' && ownerRef?.name) || 'Colaborador'
         const reportTitle = fullyUpdatedReport.title
-        const budgetFormatted = Number(fullyUpdatedReport.budget).toFixed(2)
+        const budgetFormatted = (
+          await this.computeReportBudgetDisplay(fullyUpdatedReport)
+        ).toFixed(2)
         const expenseCount = fullyUpdatedReport.expenseIds?.length ?? 0
         const platformUrl = this.emailService.buildAppUrl(
           `/mis-rendiciones/${id}/detalle`
@@ -614,7 +635,8 @@ export class ExpenseReportService {
       const owner = fullyUpdatedReport.userId as any
       const ownerId = owner?._id ? String(owner._id) : String(owner)
       const reportTitle = fullyUpdatedReport.title
-      const budgetFormatted = Number(fullyUpdatedReport.budget).toFixed(2)
+      const budgetDisplay = await this.computeReportBudgetDisplay(fullyUpdatedReport)
+      const budgetFormatted = budgetDisplay.toFixed(2)
       const platformUrl = this.emailService.buildAppUrl(
         `/mis-rendiciones/${id}/detalle`
       )
@@ -632,7 +654,7 @@ export class ExpenseReportService {
             clientId: String(fullyUpdatedReport.clientId),
             userName: collaboratorName,
             title: reportTitle,
-            budget: fullyUpdatedReport.budget,
+            budget: budgetDisplay,
             platformUrl,
           })
         }
@@ -741,7 +763,9 @@ export class ExpenseReportService {
         const user = await this.userService.findOne(ownerId2)
         const creatorName = user.name || 'Un colaborador'
         const clientId = String(fullyUpdatedReport.clientId)
-        const budgetFormatted = Number(fullyUpdatedReport.budget).toFixed(2)
+        const budgetFormatted = (
+          await this.computeReportBudgetDisplay(fullyUpdatedReport)
+        ).toFixed(2)
         const expenseCount = fullyUpdatedReport.expenseIds?.length ?? 0
         const platformUrl = this.emailService.buildAppUrl(`/mis-rendiciones/${id}/detalle`)
 
@@ -1617,7 +1641,7 @@ export class ExpenseReportService {
         this.emailService.sendRendicionReembolsoContabilidad(u.email, {
           clientId,
           recipientName: u.name,
-          reportLabel: `${updated.title} · ${id}`,
+          reportLabel: updated.title,
           reportTitle: updated.title,
           collaboratorName: collaborator?.name || 'Colaborador',
           amountFormatted,
@@ -1879,10 +1903,18 @@ export class ExpenseReportService {
     }
 
     const reopenEntry = { reason: trimmedReason, reopenedBy, reopenedAt: new Date(), fromStatus: report.status }
+    // Al reabrir, la notificación previa a contabilidad (si la hubo) queda obsoleta:
+    // los montos pueden cambiar antes del próximo cierre. Limpiamos esa marca para
+    // que el correo se vuelva a enviar con el monto correcto. No tocamos
+    // `reimbursementPaymentInfo` ni `returnVoucher` porque representan pagos reales.
     const updated = await this.expenseReportModel
       .findByIdAndUpdate(
         id,
-        { $set: { status: 'open' }, $push: { reopenHistory: reopenEntry } },
+        {
+          $set: { status: 'open' },
+          $unset: { reimbursementAccountingNotifiedAt: '' },
+          $push: { reopenHistory: reopenEntry },
+        },
         { new: true }
       )
       .exec()

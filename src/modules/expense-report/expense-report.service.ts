@@ -1915,12 +1915,17 @@ export class ExpenseReportService {
     // los montos pueden cambiar antes del próximo cierre. Limpiamos esa marca para
     // que el correo se vuelva a enviar con el monto correcto. No tocamos
     // `reimbursementPaymentInfo` ni `returnVoucher` porque representan pagos reales.
+    // También limpiamos `settlement` porque sus montos (advanceTotal, expenseTotal,
+    // difference) reflejan el estado al momento del cierre anterior; cualquier nuevo
+    // anticipo o gasto durante esta reapertura los volvería stale. Sin settlement, la UI
+    // y los flujos de cierre/reembolso/devolución caen al cómputo live. La próxima
+    // aprobación reconstruirá un settlement fresco vía liquidateExpenseReport.
     const updated = await this.expenseReportModel
       .findByIdAndUpdate(
         id,
         {
           $set: { status: 'open' },
-          $unset: { reimbursementAccountingNotifiedAt: '' },
+          $unset: { reimbursementAccountingNotifiedAt: '', settlement: '' },
           $push: { reopenHistory: reopenEntry },
         },
         { new: true }

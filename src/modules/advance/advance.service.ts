@@ -115,6 +115,16 @@ export class AdvanceService {
     return `<h3 style="margin:22px 0 10px 0;font-size:13px;color:#0f172a;text-transform:uppercase;letter-spacing:0.04em;border-bottom:2px solid #22c55e;padding-bottom:6px;">${t}</h3>`
   }
 
+  /** Formato de monto con coma de miles y 2 decimales (p. ej. 2990 → "2,990.00"). */
+  private formatViaticoMoney(value: number | string): string {
+    const n = typeof value === 'number' ? value : Number(value)
+    if (!Number.isFinite(n)) return '0.00'
+    return n.toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })
+  }
+
   private isViaticoSolicitud(dto: CreateAdvanceDto): boolean {
     return !!(
       dto.place?.trim() &&
@@ -430,7 +440,7 @@ export class AdvanceService {
       clientLabel = String(c.comercialName || c.businessName || '')
     }
 
-    const totalFormatted = Number(advance.amount).toFixed(2)
+    const totalFormatted = this.formatViaticoMoney(advance.amount)
     const startStr =
       advance.startDate instanceof Date
         ? advance.startDate.toISOString().slice(0, 10)
@@ -586,7 +596,7 @@ export class AdvanceService {
     if (!(await this.userService.isEmailEnabled(uid))) return
     const profile =
       await this.userService.findCollaboratorViaticoNotifyProfile(uid)
-    let projectLabel = 'Centro de costo'
+    let projectLabel = '—'
     if (advance.projectId) {
       try {
         const p = await this.projectService.findOne(
@@ -650,14 +660,21 @@ export class AdvanceService {
     const start = this.emailService.formatDateDDMMYYYY(advance.startDate as any) || '—'
     const end = this.emailService.formatDateDDMMYYYY(advance.endDate as any) || '—'
     const lines = advance.lines ?? []
-    const breakdownItems: string[] = []
+    const categoryTotals = new Map<string, number>()
     for (const row of lines) {
       const cat = (row as { categoryId?: unknown }).categoryId
       const catName =
         cat && typeof cat === 'object' && cat !== null && 'name' in cat
           ? String((cat as { name?: string }).name)
           : 'Categoría'
-      const lineText = `${catName}: S/ ${Number(row.lineTotal).toFixed(2)}`
+      categoryTotals.set(
+        catName,
+        (categoryTotals.get(catName) ?? 0) + Number(row.lineTotal)
+      )
+    }
+    const breakdownItems: string[] = []
+    for (const [catName, total] of categoryTotals) {
+      const lineText = `${catName}: S/ ${this.formatViaticoMoney(total)}`
       breakdownItems.push(
         `<li style="margin:6px 0;">${this.escapeHtmlForEmail(lineText)}</li>`
       )
@@ -668,7 +685,7 @@ export class AdvanceService {
         : `<p style="margin:8px 0 16px;color:#64748b;font-size:13px;">${this.escapeHtmlForEmail('(sin líneas)')}</p>`
 
     const apprDate = `${this.emailService.formatDateDDMMYYYY(approvedAt)} ${String(approvedAt.getHours()).padStart(2, '0')}:${String(approvedAt.getMinutes()).padStart(2, '0')}`
-    const amountStr = `S/ ${Number(advance.amount).toFixed(2)}`
+    const amountStr = `S/ ${this.formatViaticoMoney(advance.amount)}`
     const compromiso = `${amountStr} registrados en compromiso del centro de costo (hasta registro de pago en tesorería).`
 
     const tableOpen =
@@ -676,7 +693,7 @@ export class AdvanceService {
     const tableClose = '</table>'
 
     const detalleRows = [
-      this.viaticoEmailKvRow('Centro de costo', cc),
+      this.viaticoEmailKvRow('Proyecto', cc),
       this.viaticoEmailKvRow(
         'Lugar',
         advance.place?.trim() ? advance.place.trim() : '—'
@@ -852,15 +869,22 @@ export class AdvanceService {
     const end = this.emailService.formatDateDDMMYYYY(advance.endDate as any) || '—'
 
     const lines = advance.lines ?? []
-    const breakdownItems: string[] = []
+    const categoryTotals = new Map<string, number>()
     for (const row of lines) {
       const cat = (row as { categoryId?: unknown }).categoryId
       const catName =
         cat && typeof cat === 'object' && cat !== null && 'name' in cat
           ? String((cat as { name?: string }).name)
           : 'Categoría'
+      categoryTotals.set(
+        catName,
+        (categoryTotals.get(catName) ?? 0) + Number(row.lineTotal)
+      )
+    }
+    const breakdownItems: string[] = []
+    for (const [catName, total] of categoryTotals) {
       breakdownItems.push(
-        `<li style="margin:6px 0;">${this.escapeHtmlForEmail(`${catName}: S/ ${Number(row.lineTotal).toFixed(2)}`)}</li>`
+        `<li style="margin:6px 0;">${this.escapeHtmlForEmail(`${catName}: S/ ${this.formatViaticoMoney(total)}`)}</li>`
       )
     }
     const breakdownHtml =
@@ -869,14 +893,14 @@ export class AdvanceService {
         : `<p style="margin:8px 0 16px;color:#64748b;font-size:13px;">${this.escapeHtmlForEmail('(sin líneas)')}</p>`
 
     const apprDate = `${this.emailService.formatDateDDMMYYYY(approvedAt)} ${String(approvedAt.getHours()).padStart(2, '0')}:${String(approvedAt.getMinutes()).padStart(2, '0')}`
-    const amountStr = `S/ ${Number(advance.amount).toFixed(2)}`
+    const amountStr = `S/ ${this.formatViaticoMoney(advance.amount)}`
 
     const tableOpen =
       '<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;">'
     const tableClose = '</table>'
 
     const detalleRows = [
-      this.viaticoEmailKvRow('Centro de costo', cc),
+      this.viaticoEmailKvRow('Proyecto', cc),
       this.viaticoEmailKvRow('Lugar', advance.place?.trim() ? advance.place.trim() : '—'),
       this.viaticoEmailKvRow('Fechas del viaje', `${start} al ${end}`),
       this.viaticoEmailKvRow('Monto solicitado', amountStr),
@@ -1073,7 +1097,7 @@ export class AdvanceService {
       ? await this.userService.isEmailEnabled(coordinatorId)
       : false
 
-    let projectLabel = 'Centro de costo'
+    let projectLabel = '—'
     if (advance.projectId) {
       try {
         const p = await this.projectService.findOne(
@@ -1097,7 +1121,7 @@ export class AdvanceService {
       collaboratorName: collab.name,
       coordinatorName: coordinator?.name,
       projectLabel,
-      amountFormatted: Number(advance.amount).toFixed(2),
+      amountFormatted: this.formatViaticoMoney(advance.amount),
       transferDate,
       reference: advance.paymentInfo?.reference || '—',
       paymentMethod: advance.paymentInfo?.method || 'transferencia_bancaria',
@@ -1279,7 +1303,7 @@ export class AdvanceService {
       this.notificationsService.create({
         userId: saved.userId.toString(),
         title: 'Solicitud de viáticos aprobada',
-        message: `Tu solicitud de viáticos por S/ ${Number(saved.amount).toFixed(2)} fue aprobada. El pago está siendo procesado.`,
+        message: `Tu solicitud de viáticos por S/ ${this.formatViaticoMoney(saved.amount)} fue aprobada. El pago está siendo procesado.`,
         type: 'success',
         actionUrl: '/mis-rendiciones',
       }).catch(() => { })
@@ -1287,7 +1311,7 @@ export class AdvanceService {
       this.notificationsService.create({
         userId: saved.userId.toString(),
         title: 'Solicitud de viáticos en revisión',
-        message: `Tu solicitud de viáticos por S/ ${Number(saved.amount).toFixed(2)} fue aprobada en el primer nivel y está pendiente de aprobación final.`,
+        message: `Tu solicitud de viáticos por S/ ${this.formatViaticoMoney(saved.amount)} fue aprobada en el primer nivel y está pendiente de aprobación final.`,
         type: 'info',
         actionUrl: '/mis-rendiciones',
       }).catch(() => { })
@@ -1331,7 +1355,7 @@ export class AdvanceService {
     this.notificationsService.create({
       userId: saved.userId.toString(),
       title: 'Solicitud de viáticos aprobada',
-      message: `Tu solicitud de viáticos por S/ ${Number(saved.amount).toFixed(2)} fue aprobada completamente. El pago está siendo procesado.`,
+      message: `Tu solicitud de viáticos por S/ ${this.formatViaticoMoney(saved.amount)} fue aprobada completamente. El pago está siendo procesado.`,
       type: 'success',
       actionUrl: '/mis-rendiciones',
     }).catch(() => { })
@@ -1383,7 +1407,7 @@ export class AdvanceService {
     this.notificationsService.create({
       userId: saved.userId.toString(),
       title: 'Solicitud de viáticos rechazada',
-      message: `Tu solicitud de viáticos por S/ ${Number(saved.amount).toFixed(2)} fue rechazada. Motivo: ${dto.rejectionReason}`,
+      message: `Tu solicitud de viáticos por S/ ${this.formatViaticoMoney(saved.amount)} fue rechazada. Motivo: ${dto.rejectionReason}`,
       type: 'error',
       actionUrl: '/mis-rendiciones',
     }).catch(() => { })
@@ -1476,7 +1500,7 @@ export class AdvanceService {
     this.notificationsService.create({
       userId: saved.userId.toString(),
       title: 'Pago de viático registrado',
-      message: `Se registró el pago de tu viático por S/ ${Number(saved.amount).toFixed(2)}. Ya puedes registrar tus gastos.`,
+      message: `Se registró el pago de tu viático por S/ ${this.formatViaticoMoney(saved.amount)}. Ya puedes registrar tus gastos.`,
       type: 'success',
       actionUrl,
     }).catch(() => { })
@@ -1631,7 +1655,7 @@ export class AdvanceService {
       `/mis-rendiciones/${reportId}/detalle`
     )
 
-    const amountFormatted = amountReimburse.toFixed(2)
+    const amountFormatted = this.formatViaticoMoney(amountReimburse)
     const reportTitle = report.title || 'Rendición'
     const reportLabel = reportTitle
 
@@ -1696,7 +1720,7 @@ export class AdvanceService {
         .sendDevolucionPendiente(collaborator.email, {
           clientId: advance.clientId?.toString(),
           recipientName: collaborator.name,
-          amountDue: advance.settlement.difference.toFixed(2),
+          amountDue: this.formatViaticoMoney(advance.settlement.difference),
           dueDate: this.emailService.formatDateDDMMYYYY(dueDate),
           advanceId: id,
         })
@@ -1787,7 +1811,7 @@ export class AdvanceService {
       sendFn(collaborator.email, {
         clientId: advance.clientId?.toString(),
         recipientName: collaborator.name,
-        amountDue: rr.amountDue.toFixed(2),
+        amountDue: this.formatViaticoMoney(rr.amountDue),
         rejectionReason,
         advanceId: id,
       }).catch((err: any) =>
@@ -1988,7 +2012,7 @@ export class AdvanceService {
       return
     const coordEmailEnabled = await this.userService.isEmailEnabled(coordId.toString())
 
-    let projectLabel = 'Centro de costo'
+    let projectLabel = '—'
     try {
       const p = await this.projectService.findOne(
         advance.projectId.toString(),
@@ -1999,7 +2023,7 @@ export class AdvanceService {
       /* use fallback */
     }
 
-    const totalFormatted = Number(advance.amount).toFixed(2)
+    const totalFormatted = this.formatViaticoMoney(advance.amount)
     const startStr = this.emailService.formatDateDDMMYYYY(advance.startDate as any)
     const endStr = this.emailService.formatDateDDMMYYYY(advance.endDate as any)
 
@@ -2007,7 +2031,7 @@ export class AdvanceService {
       `Colaborador: ${collaborator.name}`,
       `Lugar: ${advance.place ?? '—'}`,
       `Fechas: ${startStr} al ${endStr}`,
-      `Centro de costo: ${projectLabel}`,
+      `Proyecto: ${projectLabel}`,
       `Monto total: S/ ${totalFormatted}`,
     ].join('\n')
 

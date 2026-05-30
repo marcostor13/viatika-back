@@ -1541,23 +1541,14 @@ export class AdvanceService {
       return
     }
 
-    let advanceTotal = 0
-    if (paidAdvances.length > 0) {
-      advanceTotal = paidAdvances.reduce(
-        (s, a) => s + (Number(a.amount) || 0),
-        0
-      )
-    } else if (settledAdvances.length > 0) {
-      advanceTotal = settledAdvances.reduce(
-        (s, a) => s + (Number(a.amount) || 0),
-        0
-      )
-    } else {
-      advanceTotal = approvedAdvances.reduce(
-        (s, a) => s + (Number(a.amount) || 0),
-        0
-      )
-    }
+    // Sumar TODOS los anticipos activos (paid + settled + approved). Tras una reapertura
+    // pueden coexistir 'settled' del ciclo anterior y 'paid' del nuevo viático solicitado;
+    // tomar solo un bucket subestima el advanceTotal y produce un settlement incorrecto.
+    const activeAdvances = [...paidAdvances, ...settledAdvances, ...approvedAdvances]
+    const advanceTotal = activeAdvances.reduce(
+      (s, a) => s + (Number(a.amount) || 0),
+      0
+    )
 
     const difference = advanceTotal - expenseTotal
     let type: 'reembolso' | 'devolucion' | 'equilibrado'

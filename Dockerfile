@@ -1,16 +1,17 @@
-# Stage 1: Build
-FROM node:20-slim AS build
+# Etapa de construcción
+FROM node:20-alpine AS builder
 WORKDIR /app
-COPY package*.json .
-RUN npm install --force
+COPY package*.json ./
+RUN npm ci
 COPY . .
 RUN npm run build
 
-# Stage 2: Production
-FROM node:20-slim
+# Etapa de producción
+FROM node:20-alpine
 WORKDIR /app
-COPY package*.json .
-RUN npm install --omit=dev --force
-COPY --from=build /app/dist ./dist
-EXPOSE 3016
-CMD ["node", "dist/main.js"]
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+COPY package*.json ./
+
+EXPOSE 3000
+CMD ["npm", "run", "start:prod"]

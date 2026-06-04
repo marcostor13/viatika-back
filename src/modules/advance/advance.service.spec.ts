@@ -86,6 +86,7 @@ const mockUserService = {
     employeeCode: 'EMP01',
   }),
   findViaticoAccountingNotifyRecipients: jest.fn().mockResolvedValue([]),
+  isEmailEnabled: jest.fn().mockResolvedValue(true),
 }
 
 const mockNotificationsService = {
@@ -618,6 +619,268 @@ describe('AdvanceService', () => {
         paid: 4,
         settled: 5,
       })
+    })
+  })
+
+  // ── findAllByClient ───────────────────────────────────────────────────
+  describe('findAllByClient', () => {
+    it('returns advances filtered by clientId', async () => {
+      const advances = [makeMockAdvance()]
+      mockAdvanceModel.find.mockReturnValue(makeQuery(advances))
+      const result = await service.findAllByClient(clientId)
+      expect(mockAdvanceModel.find).toHaveBeenCalledWith(
+        expect.objectContaining({ clientId: expect.any(Types.ObjectId) })
+      )
+      expect(result).toEqual(advances)
+    })
+  })
+
+  // ── findMyAdvances ────────────────────────────────────────────────────
+  describe('findMyAdvances', () => {
+    it('returns advances filtered by userId and clientId', async () => {
+      const advances = [makeMockAdvance()]
+      mockAdvanceModel.find.mockReturnValue(makeQuery(advances))
+      const result = await service.findMyAdvances(userId, clientId)
+      expect(mockAdvanceModel.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: expect.any(Types.ObjectId),
+          clientId: expect.any(Types.ObjectId),
+        })
+      )
+      expect(result).toEqual(advances)
+    })
+  })
+
+  // ── findPending ───────────────────────────────────────────────────────
+  describe('findPending', () => {
+    it('returns advances in pending_l1, pending_l2, or approved status', async () => {
+      const advances = [makeMockAdvance({ status: 'pending_l1' }), makeMockAdvance({ status: 'approved' })]
+      mockAdvanceModel.find.mockReturnValue(makeQuery(advances))
+      const result = await service.findPending(clientId)
+      const findCall = mockAdvanceModel.find.mock.calls[0][0]
+      expect(findCall.status.$in).toEqual(expect.arrayContaining(['pending_l1', 'pending_l2', 'approved']))
+      expect(result).toEqual(advances)
+    })
+  })
+
+  // ── findForViaticosPage ───────────────────────────────────────────────
+  describe('findForViaticosPage', () => {
+    it('returns all client advances for admin role', async () => {
+      const advances = [makeMockAdvance()]
+      mockAdvanceModel.find.mockReturnValue(makeQuery(advances))
+      await service.findForViaticosPage({
+        requesterId: userId,
+        requesterRole: 'Administrador',
+        clientId,
+      })
+      const findCall = mockAdvanceModel.find.mock.calls[0][0]
+      expect(findCall.coordinatorId).toBeUndefined()
+    })
+
+    it('filters by coordinatorId for non-admin with canApproveL1', async () => {
+      const advances = [makeMockAdvance()]
+      mockAdvanceModel.find.mockReturnValue(makeQuery(advances))
+      await service.findForViaticosPage({
+        requesterId: userId,
+        requesterRole: 'Colaborador',
+        requesterPermissions: { canApproveL1: true },
+        clientId,
+      })
+      const findCall = mockAdvanceModel.find.mock.calls[0][0]
+      expect(findCall.coordinatorId).toBeDefined()
+    })
+
+    it('applies status filter when provided', async () => {
+      mockAdvanceModel.find.mockReturnValue(makeQuery([]))
+      await service.findForViaticosPage({
+        requesterId: userId,
+        requesterRole: 'Administrador',
+        clientId,
+        status: 'approved',
+      })
+      const findCall = mockAdvanceModel.find.mock.calls[0][0]
+      expect(findCall.status).toBe('approved')
+    })
+
+    it('does not apply status filter when status is "all"', async () => {
+      mockAdvanceModel.find.mockReturnValue(makeQuery([]))
+      await service.findForViaticosPage({
+        requesterId: userId,
+        requesterRole: 'Administrador',
+        clientId,
+        status: 'all',
+      })
+      const findCall = mockAdvanceModel.find.mock.calls[0][0]
+      expect(findCall.status).toBeUndefined()
+    })
+  })
+
+  // ── findPaymentReceiptsForCollaborator ────────────────────────────────
+  describe('findPaymentReceiptsForCollaborator', () => {
+    it('filters by userId, clientId and receipt status', async () => {
+      const leanQuery = {
+        ...makeQuery([]),
+        lean: jest.fn().mockReturnThis(),
+        select: jest.fn().mockReturnThis(),
+      }
+      mockAdvanceModel.find.mockReturnValue(leanQuery)
+      await service.findPaymentReceiptsForCollaborator(userId, clientId)
+      expect(mockAdvanceModel.find).toHaveBeenCalledWith(
+        expect.objectContaining({ status: expect.objectContaining({ $in: expect.arrayContaining(['paid', 'settled']) }) })
+      )
+    })
+  })
+
+  // ── findByExpenseReportId ─────────────────────────────────────────────
+  describe('findByExpenseReportId', () => {
+    it('queries by expenseReportId when no advanceIds provided', async () => {
+      mockAdvanceModel.find.mockReturnValue({ exec: jest.fn().mockResolvedValue([]) })
+      await service.findByExpenseReportId(reportId)
+      const findCall = mockAdvanceModel.find.mock.calls[0][0]
+      expect(findCall.expenseReportId).toBeDefined()
+    })
+
+    it('queries by $or when advanceIds are provided', async () => {
+      mockAdvanceModel.find.mockReturnValue({ exec: jest.fn().mockResolvedValue([]) })
+      await service.findByExpenseReportId(reportId, [advanceId])
+      const findCall = mockAdvanceModel.find.mock.calls[0][0]
+      expect(findCall.$or).toBeDefined()
+    })
+  })
+
+  // ── findPendingReturns ────────────────────────────────────────────────
+  describe('findPendingReturns', () => {
+    it('queries for pending/proof_uploaded/rejected returnRecord status', async () => {
+      mockAdvanceModel.find.mockReturnValue(makeQuery([]))
+      await service.findPendingReturns(clientId)
+      const findCall = mockAdvanceModel.find.mock.calls[0][0]
+      expect(findCall['returnRecord.status'].$in).toEqual(
+        expect.arrayContaining(['pending', 'proof_uploaded', 'rejected'])
+      )
+    })
+  })
+
+  // ── liquidateExpenseReport ────────────────────────────────────────────
+  describe('liquidateExpenseReport', () => {
+    it('returns early when report is not in approved status', async () => {
+      mockExpenseReportService.findOneWithAdvances.mockResolvedValue({ status: 'open', clientId, advanceIds: [], expenseIds: [] })
+      await service.liquidateExpenseReport(reportId)
+      expect(mockAdvanceModel.find).not.toHaveBeenCalled()
+    })
+
+    it('returns early when report is not found', async () => {
+      mockExpenseReportService.findOneWithAdvances.mockResolvedValue(null)
+      await service.liquidateExpenseReport(reportId)
+      expect(mockAdvanceModel.find).not.toHaveBeenCalled()
+    })
+
+    it('marks paid advances as settled and saves settlement', async () => {
+      const paidAdvance = makeMockAdvance({ status: 'paid', amount: 500 })
+      mockExpenseReportService.findOneWithAdvances.mockResolvedValue({
+        status: 'approved',
+        clientId: new Types.ObjectId(clientId),
+        advanceIds: [],
+        expenseIds: [{ status: 'approved', total: 300 }],
+      })
+      mockAdvanceModel.find.mockReturnValue({ exec: jest.fn().mockResolvedValue([paidAdvance]) })
+      await service.liquidateExpenseReport(reportId)
+      expect(paidAdvance.status).toBe('settled')
+      expect(paidAdvance.save).toHaveBeenCalled()
+      expect(mockExpenseReportService.updateSettlement).toHaveBeenCalledWith(
+        reportId,
+        expect.objectContaining({ type: 'devolucion' })
+      )
+    })
+  })
+
+  // ── resubmitRejected ─────────────────────────────────────────────────
+  describe('resubmitRejected', () => {
+    const validDto: any = {
+      place: 'Lima',
+      startDate: '2026-01-01',
+      endDate: '2026-01-05',
+      projectId: new Types.ObjectId().toString(),
+      lines: [],
+      amount: 100,
+    }
+
+    it('throws NotFoundException when advance is not found', async () => {
+      mockAdvanceModel.findById.mockReturnValue(null)
+      await expect(service.resubmitRejected(advanceId, validDto, userId, clientId)).rejects.toThrow(NotFoundException)
+    })
+
+    it('throws BadRequestException when advance is in invalid state', async () => {
+      const advance = makeMockAdvance({ status: 'approved' })
+      mockAdvanceModel.findById.mockResolvedValue(advance)
+      await expect(service.resubmitRejected(advanceId, validDto, userId, clientId)).rejects.toThrow(BadRequestException)
+    })
+
+    it('throws ForbiddenException when acting user is not the owner', async () => {
+      const advance = makeMockAdvance({ status: 'rejected', userId: new Types.ObjectId() })
+      mockAdvanceModel.findById.mockResolvedValue(advance)
+      await expect(service.resubmitRejected(advanceId, validDto, userId, clientId)).rejects.toThrow(ForbiddenException)
+    })
+
+    it('throws ForbiddenException when clientId does not match', async () => {
+      const advance = makeMockAdvance({
+        status: 'rejected',
+        userId: new Types.ObjectId(userId),
+        clientId: new Types.ObjectId(),
+      })
+      mockAdvanceModel.findById.mockResolvedValue(advance)
+      await expect(service.resubmitRejected(advanceId, validDto, userId, clientId)).rejects.toThrow(ForbiddenException)
+    })
+
+    it('throws ForbiddenException when user has no signature', async () => {
+      const advance = makeMockAdvance({
+        status: 'rejected',
+        userId: new Types.ObjectId(userId),
+        clientId: new Types.ObjectId(clientId),
+      })
+      mockAdvanceModel.findById.mockResolvedValue(advance)
+      mockUserService.findTransactionalProfile.mockResolvedValue({ signature: '' })
+      await expect(service.resubmitRejected(advanceId, validDto, userId, clientId)).rejects.toThrow(ForbiddenException)
+    })
+  })
+
+  // ── cancelByCollaborator ──────────────────────────────────────────────
+  describe('cancelByCollaborator', () => {
+    it('throws NotFoundException when advance is not found', async () => {
+      mockAdvanceModel.findById.mockResolvedValue(null)
+      await expect(service.cancelByCollaborator(advanceId, userId)).rejects.toThrow(NotFoundException)
+    })
+
+    it('throws ForbiddenException when user is not the owner', async () => {
+      const advance = makeMockAdvance({ status: 'pending_l1', userId: new Types.ObjectId() })
+      mockAdvanceModel.findById.mockResolvedValue(advance)
+      await expect(service.cancelByCollaborator(advanceId, userId)).rejects.toThrow(ForbiddenException)
+    })
+
+    it('throws BadRequestException when advance is not in pending_l1 status', async () => {
+      const advance = makeMockAdvance({ status: 'approved', userId: new Types.ObjectId(userId) })
+      mockAdvanceModel.findById.mockResolvedValue(advance)
+      await expect(service.cancelByCollaborator(advanceId, userId)).rejects.toThrow(BadRequestException)
+    })
+
+    it('cancels advance and sets status to cancelled', async () => {
+      const advance = makeMockAdvance({ status: 'pending_l1', userId: new Types.ObjectId(userId) })
+      mockAdvanceModel.findById.mockResolvedValue(advance)
+      mockUserService.findTransactionalProfile.mockResolvedValue({ coordinatorId: null })
+      const result = await service.cancelByCollaborator(advanceId, userId)
+      expect(advance.status).toBe('cancelled')
+      expect(advance.save).toHaveBeenCalled()
+    })
+  })
+
+  // ── resendCoordinatorNotification ─────────────────────────────────────
+  describe('resendCoordinatorNotification', () => {
+    it('throws ForbiddenException when advance clientId does not match', async () => {
+      const advance = makeMockAdvance({
+        clientId: new Types.ObjectId(),
+        userId: new Types.ObjectId(userId),
+      })
+      mockAdvanceModel.findById.mockReturnValue(makeQuery(advance))
+      await expect(service.resendCoordinatorNotification(advanceId, clientId)).rejects.toThrow(ForbiddenException)
     })
   })
 })

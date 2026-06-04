@@ -41,7 +41,7 @@ export class AuthController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(ROLES.CONTABILIDAD)
+  @Roles(ROLES.CONTABILIDAD, ROLES.ADMIN)
   @Get('companies')
   async getCompanies() {
     return this.authService.getHubCompanies()

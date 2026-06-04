@@ -10,6 +10,14 @@ export type ExpenseStatus =
   | 'sunat_not_found'
   | 'sunat_error'
 
+export interface ExpenseApproval {
+  status: 'pending' | 'approved' | 'rejected'
+  userId?: string
+  userName?: string
+  date?: Date
+  reason?: string
+}
+
 export type ExpenseType =
   | 'factura'
   | 'planilla_movilidad'
@@ -24,7 +32,6 @@ export interface MobilityRowCoords {
 
 export interface MobilityRow {
   fecha: string
-  concepto: string
   total: number
   clienteProveedor: string
   origen: string
@@ -74,6 +81,10 @@ export interface ExpenseDocument extends Document {
   declaracionJuradaFirmante?: string
   reviewHistory?: ExpenseReviewHistory[]
   internalCode?: string
+  comentario?: string
+  placaVehiculo?: string
+  approvalCoord?: ExpenseApproval
+  approvalCont?: ExpenseApproval
 }
 
 export interface GetExpenseDocument extends Omit<ExpenseDocument, '_id'> {
@@ -176,7 +187,6 @@ export class Expense {
     type: [
       {
         fecha: { type: String },
-        concepto: { type: String },
         total: { type: Number },
         clienteProveedor: { type: String },
         origen: { type: String },
@@ -209,6 +219,42 @@ export class Expense {
 
   @Prop({ type: String, required: false })
   declaracionJuradaFirmante?: string
+
+  @Prop({ type: String, required: false })
+  comentario?: string
+
+  @Prop({ type: String, required: false })
+  placaVehiculo?: string
+
+  @Prop({
+    type: {
+      status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
+      userId: { type: String },
+      userName: { type: String },
+      date: { type: Date },
+      reason: { type: String },
+      _id: false,
+    },
+    required: false,
+  })
+  approvalCoord?: ExpenseApproval
+
+  @Prop({
+    type: {
+      status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
+      userId: { type: String },
+      userName: { type: String },
+      date: { type: Date },
+      reason: { type: String },
+      _id: false,
+    },
+    required: false,
+  })
+  approvalCont?: ExpenseApproval
+
+  /** Sub-tipo para 'otros_gastos': TK (Ticket), RC (Recibos diversos), DJ (Declaración Jurada), OT (Otros) */
+  @Prop({ type: String, required: false })
+  subTipo?: string
 }
 
 export const ExpenseSchema = SchemaFactory.createForClass(Expense)

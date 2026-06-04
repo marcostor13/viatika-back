@@ -1,5 +1,5 @@
-import { IsString, IsOptional, IsEnum, IsNumber } from 'class-validator'
-import { ExpenseStatus } from '../entities/expense.entity'
+import { IsString, IsOptional, IsEnum, IsNumber, IsArray } from 'class-validator'
+import { ExpenseStatus, MobilityRow } from '../entities/expense.entity'
 
 export class UpdateExpenseDto {
   @IsString()
@@ -56,4 +56,16 @@ export class UpdateExpenseDto {
 
   @IsOptional()
   statusDate?: Date
+
+  @IsString()
+  @IsOptional()
+  comentario?: string
+
+  @IsString()
+  @IsOptional()
+  placaVehiculo?: string
+
+  @IsArray()
+  @IsOptional()
+  mobilityRows?: MobilityRow[]
 }

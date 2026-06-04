@@ -54,6 +54,8 @@ export interface IUserResponse {
     cci: string
     accountType: string
   }
+  profilePic?: string
+  emailNotificationsEnabled?: boolean
 }
 
 @Injectable()
@@ -183,6 +185,10 @@ export class UserService {
       phone: (user as any).phone,
       coordinatorId: (user as any).coordinatorId,
       bankAccount: (user as any).bankAccount,
+      signature: (user as any).signature,
+      mustChangePassword: !!(user as any).mustChangePassword,
+      profilePic: (user as any).profilePic,
+      emailNotificationsEnabled: !!(user as any).emailNotificationsEnabled,
     }
   }
 
@@ -267,6 +273,7 @@ export class UserService {
       role: user.roleId,
       client: user.clientId,
       isActive: user.isActive,
+      isCompanyAdmin: (user as any).isCompanyAdmin ?? false,
     }))
   }
 
@@ -415,19 +422,18 @@ export class UserService {
   async findViaticoAccountingNotifyRecipients(
     clientId: string
   ): Promise<{ email: string; name: string }[]> {
-    const adminRoles = await this.roleService.getAdminRoles()
     const contabilidadRole = await this.roleService.getByName('Contabilidad')
+    if (!contabilidadRole) return []
 
-    // Users scoped to this client (admins + tesoreria/contabilidad modules)
+    // Solo rol Contabilidad. Administrador NO es Contabilidad: tiene su propio
+    // canal de notificaciones (findAdminsByClient). Los módulos de UI tampoco
+    // cuentan: habilitan pantallas pero no implican ser destinatario contable.
     const scopedUsers = await this.userModel
       .find({
         clientId: new Types.ObjectId(clientId),
         isActive: true,
-        $or: [
-          { roleId: { $in: adminRoles.map(r => (r as any)._id) } },
-          { 'permissions.modules': 'tesoreria' },
-          { 'permissions.modules': 'contabilidad' },
-        ],
+        emailNotificationsEnabled: true,
+        roleId: (contabilidadRole as any)._id,
       })
       .select('email name')
       .exec()
@@ -439,6 +445,7 @@ export class UserService {
             clientId: null,
             roleId: (contabilidadRole as any)._id,
             isActive: true,
+            emailNotificationsEnabled: true,
           })
           .select('email name')
           .exec()
@@ -456,10 +463,102 @@ export class UserService {
   }
 
   /**
-   * Solo usuarios con rol Contabilidad o módulos tesorería/contabilidad.
-   * No incluye administradores a menos que tengan dichos módulos.
+   * Solo usuarios con rol Contabilidad. No incluye administradores ni
+   * a quienes tengan los módulos tesoreria/contabilidad por permiso de UI.
    */
   async findContabilidadRecipients(
+    clientId: string
+  ): Promise<{ email: string; name: string }[]> {
+    const contabilidadRole = await this.roleService.getByName('Contabilidad')
+    if (!contabilidadRole) return []
+
+    const scopedUsers = await this.userModel
+      .find({
+        clientId: new Types.ObjectId(clientId),
+        isActive: true,
+        emailNotificationsEnabled: true,
+        roleId: (contabilidadRole as any)._id,
+      })
+      .select('email name')
+      .exec()
+
+    const globalContabilidad = contabilidadRole
+      ? await this.userModel
+          .find({
+            clientId: null,
+            roleId: (contabilidadRole as any)._id,
+            isActive: true,
+            emailNotificationsEnabled: true,
+          })
+          .select('email name')
+          .exec()
+      : []
+
+    const seen = new Set<string>()
+    const out: { email: string; name: string }[] = []
+    for (const u of [...scopedUsers, ...globalContabilidad]) {
+      const em = u.email?.trim().toLowerCase()
+      if (!em || seen.has(em)) continue
+      seen.add(em)
+      out.push({ email: u.email, name: u.name })
+    }
+    return out
+  }
+
+  /**
+   * Usuarios con rol Contabilidad (sin filtrar por emailNotificationsEnabled,
+   * porque hay flujos que separan notificación in-app del correo).
+   * NO incluye usuarios cuyo único vínculo con contabilidad sean permisos de módulo.
+   */
+  async findContabilidadUsersForNotif(
+    clientId: string
+  ): Promise<{ _id: string; email: string; name: string; emailNotificationsEnabled: boolean }[]> {
+    const contabilidadRole = await this.roleService.getByName('Contabilidad')
+    if (!contabilidadRole) return []
+
+    const scopedUsers = await this.userModel
+      .find({
+        clientId: new Types.ObjectId(clientId),
+        isActive: true,
+        roleId: (contabilidadRole as any)._id,
+      })
+      .select('_id email name emailNotificationsEnabled')
+      .exec()
+
+    const globalContabilidad = contabilidadRole
+      ? await this.userModel
+          .find({
+            clientId: null,
+            roleId: (contabilidadRole as any)._id,
+            isActive: true,
+          })
+          .select('_id email name emailNotificationsEnabled')
+          .exec()
+      : []
+
+    const seen = new Set<string>()
+    const out: { _id: string; email: string; name: string; emailNotificationsEnabled: boolean }[] = []
+    for (const u of [...scopedUsers, ...globalContabilidad]) {
+      const em = u.email?.trim().toLowerCase()
+      if (!em || seen.has(em)) continue
+      seen.add(em)
+      out.push({
+        _id: String((u as any)._id),
+        email: u.email,
+        name: u.name,
+        emailNotificationsEnabled: !!(u as any).emailNotificationsEnabled,
+      })
+    }
+    return out
+  }
+
+  /**
+   * Destinatarios para "Aprobación final requerida" (pending_l2).
+   * Incluye: rol Contabilidad o usuarios con `permissions.canApproveL2 = true`.
+   * `canApproveL2` es una asignación explícita de aprobador, no un permiso de UI.
+   * NO incluye a quienes solo tengan los módulos tesoreria/contabilidad por permiso de pantalla.
+   */
+  async findL2ApprovalNotifyRecipients(
     clientId: string
   ): Promise<{ email: string; name: string }[]> {
     const contabilidadRole = await this.roleService.getByName('Contabilidad')
@@ -468,12 +567,10 @@ export class UserService {
       .find({
         clientId: new Types.ObjectId(clientId),
         isActive: true,
+        emailNotificationsEnabled: true,
         $or: [
-          ...(contabilidadRole
-            ? [{ roleId: (contabilidadRole as any)._id }]
-            : []),
-          { 'permissions.modules': 'tesoreria' },
-          { 'permissions.modules': 'contabilidad' },
+          ...(contabilidadRole ? [{ roleId: (contabilidadRole as any)._id }] : []),
+          { 'permissions.canApproveL2': true },
         ],
       })
       .select('email name')
@@ -485,6 +582,7 @@ export class UserService {
             clientId: null,
             roleId: (contabilidadRole as any)._id,
             isActive: true,
+            emailNotificationsEnabled: true,
           })
           .select('email name')
           .exec()
@@ -504,18 +602,17 @@ export class UserService {
   async findAccountingRecipientsWithIds(
     clientId: string
   ): Promise<{ _id: string; email: string; name: string }[]> {
-    const adminRoles = await this.roleService.getAdminRoles()
     const contabilidadRole = await this.roleService.getByName('Contabilidad')
+    if (!contabilidadRole) return []
 
+    // Solo rol Contabilidad. Administrador NO recibe estos correos: tiene su
+    // propio canal vía findAdminsByClient cuando aplica.
     const scopedUsers = await this.userModel
       .find({
         clientId: new Types.ObjectId(clientId),
         isActive: true,
-        $or: [
-          { roleId: { $in: adminRoles.map(r => (r as any)._id) } },
-          { 'permissions.modules': 'tesoreria' },
-          { 'permissions.modules': 'contabilidad' },
-        ],
+        emailNotificationsEnabled: true,
+        roleId: (contabilidadRole as any)._id,
       })
       .select('_id email name')
       .exec()
@@ -526,6 +623,7 @@ export class UserService {
             clientId: null,
             roleId: (contabilidadRole as any)._id,
             isActive: true,
+            emailNotificationsEnabled: true,
           })
           .select('_id email name')
           .exec()
@@ -632,6 +730,27 @@ export class UserService {
         roleId: { $in: roleIds },
         isActive: true,
       })
+      .exec()
+  }
+
+  async deleteByClientId(clientId: string): Promise<void> {
+    await this.userModel
+      .deleteMany({ clientId: new Types.ObjectId(clientId) })
+      .exec()
+  }
+
+  /** Retorna true solo si el usuario tiene notificaciones por correo habilitadas. */
+  async isEmailEnabled(userId: string): Promise<boolean> {
+    const u = await this.userModel
+      .findById(userId)
+      .select('emailNotificationsEnabled')
+      .exec()
+    return !!(u as any)?.emailNotificationsEnabled
+  }
+
+  async setEmailNotifications(userId: string, enabled: boolean): Promise<void> {
+    await this.userModel
+      .findByIdAndUpdate(userId, { emailNotificationsEnabled: enabled })
       .exec()
   }
 }

@@ -4,6 +4,7 @@ import { BadRequestException, ForbiddenException } from '@nestjs/common'
 import { Types } from 'mongoose'
 import { ExpenseReportService } from './expense-report.service'
 import { ExpenseReport } from './entities/expense-report.entity'
+import { Expense } from '../expense/entities/expense.entity'
 import { EmailService } from '../email/email.service'
 import { NotificationsService } from '../notifications/notifications.service'
 import { UserService } from '../user/user.service'
@@ -36,6 +37,8 @@ const mockUserService = {
   findOne: jest.fn().mockResolvedValue({ name: 'Colaborador Test', email: 'c@test.com' }),
   findTransactionalProfile: jest.fn().mockResolvedValue(null),
   findEmailNameClient: jest.fn().mockResolvedValue(null),
+  findContabilidadRecipients: jest.fn().mockResolvedValue([]),
+  isEmailEnabled: jest.fn().mockResolvedValue(true),
 }
 
 describe('ExpenseReportService — Fase 5 (envío y aprobación final)', () => {
@@ -66,6 +69,7 @@ describe('ExpenseReportService — Fase 5 (envío y aprobación final)', () => {
       providers: [
         ExpenseReportService,
         { provide: getModelToken(ExpenseReport.name), useValue: mockExpenseReportModel },
+        { provide: getModelToken(Expense.name), useValue: {} },
         { provide: EmailService, useValue: mockEmailService },
         { provide: NotificationsService, useValue: mockNotificationsService },
         { provide: UserService, useValue: mockUserService },
@@ -164,40 +168,22 @@ describe('ExpenseReportService — Fase 5 (envío y aprobación final)', () => {
     expect(mockNotificationsService.create).toHaveBeenCalled()
   })
 
-  it('update(approved): rechaza si algún gasto no está aprobado', async () => {
-    let call = 0
-    mockExpenseReportModel.findById.mockImplementation(() => {
-      call++
-      if (call === 1) {
-        return {
-          select: jest.fn().mockReturnValue({
-            lean: jest.fn().mockReturnValue({
-              exec: jest.fn().mockResolvedValue({ status: 'submitted' }),
-            }),
-          }),
-        }
-      }
-      return {
-        populate: jest.fn().mockReturnValue({
-          select: jest.fn().mockReturnValue({
-            lean: jest.fn().mockReturnValue({
-              exec: jest.fn().mockResolvedValue({
-                expenseIds: [
-                  { _id: expenseId1, status: 'approved', file: '/a.pdf' },
-                  { _id: expenseId2, status: 'pending', file: '/b.pdf' },
-                ],
-              }),
-            }),
-          }),
+  it('update(approved): rechaza si la rendicion no está en pending_accounting', async () => {
+    mockExpenseReportModel.findById.mockReturnValue({
+      select: jest.fn().mockReturnValue({
+        lean: jest.fn().mockReturnValue({
+          exec: jest.fn().mockResolvedValue({ status: 'submitted' }),
         }),
-      }
+      }),
     })
 
-    await expect(service.update(reportId, { status: 'approved' })).rejects.toThrow(/Apruebe todos los gastos/)
+    await expect(service.update(reportId, { status: 'approved' })).rejects.toThrow(
+      /Solo se puede aprobar una rendicion pendiente de contabilidad/
+    )
     expect(mockExpenseReportModel.findByIdAndUpdate).not.toHaveBeenCalled()
   })
 
-  it('update(approved): persiste cuando todos los gastos están aprobados', async () => {
+  it('update(approved): persiste cuando la rendicion está en pending_accounting', async () => {
     let call = 0
     mockExpenseReportModel.findById.mockImplementation(() => {
       call++
@@ -205,23 +191,7 @@ describe('ExpenseReportService — Fase 5 (envío y aprobación final)', () => {
         return {
           select: jest.fn().mockReturnValue({
             lean: jest.fn().mockReturnValue({
-              exec: jest.fn().mockResolvedValue({ status: 'submitted' }),
-            }),
-          }),
-        }
-      }
-      if (call === 2) {
-        return {
-          populate: jest.fn().mockReturnValue({
-            select: jest.fn().mockReturnValue({
-              lean: jest.fn().mockReturnValue({
-                exec: jest.fn().mockResolvedValue({
-                  expenseIds: [
-                    { _id: expenseId1, status: 'approved', file: '/a.pdf' },
-                    { _id: expenseId2, status: 'approved', file: '/b.pdf' },
-                  ],
-                }),
-              }),
+              exec: jest.fn().mockResolvedValue({ status: 'pending_accounting' }),
             }),
           }),
         }
@@ -329,6 +299,7 @@ describe('ExpenseReportService — Fase 8 (cierre definitivo)', () => {
     findTransactionalProfile: jest.fn().mockResolvedValue(null),
     findEmailNameClient: jest.fn().mockResolvedValue({ name: 'Colaborador', email: 'c@test.com' }),
     findAccountingRecipientsWithIds: jest.fn().mockResolvedValue([]),
+    isEmailEnabled: jest.fn().mockResolvedValue(true),
   }
 
   function makeReportDoc(overrides: Record<string, unknown> = {}) {
@@ -359,6 +330,7 @@ describe('ExpenseReportService — Fase 8 (cierre definitivo)', () => {
       providers: [
         ExpenseReportService,
         { provide: getModelToken(ExpenseReport.name), useValue: mockExpenseReportModel },
+        { provide: getModelToken(Expense.name), useValue: {} },
         { provide: EmailService, useValue: mockEmailServicePhase8 },
         { provide: NotificationsService, useValue: mockNotificationsService },
         { provide: UserService, useValue: mockUserServicePhase8 },
@@ -649,6 +621,7 @@ describe('ExpenseReportService — Fase 6 (reembolso: tenant y registro)', () =>
       providers: [
         ExpenseReportService,
         { provide: getModelToken(ExpenseReport.name), useValue: mockExpenseReportModel },
+        { provide: getModelToken(Expense.name), useValue: {} },
         { provide: EmailService, useValue: mockEmailService },
         { provide: NotificationsService, useValue: mockNotificationsService },
         { provide: UserService, useValue: mockUserService },

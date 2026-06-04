@@ -1,6 +1,7 @@
 export enum ROLES {
   SUPER_ADMIN = 'Superadministrador',
-  ADMIN = 'Coordinador',
+  ADMIN = 'Administrador',
+  COORDINADOR = 'Coordinador',
   COLABORADOR = 'Colaborador',
   CONTABILIDAD = 'Contabilidad',
 }

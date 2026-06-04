@@ -14,6 +14,7 @@ const mockEmailService = {
 
 const mockUserService = {
   findEmailNameClient: jest.fn().mockResolvedValue({ name: 'Responsable', email: 'r@test.com' }),
+  isEmailEnabled: jest.fn().mockResolvedValue(true),
 }
 
 const responsibleId = new Types.ObjectId().toString()

@@ -83,4 +83,28 @@ export class CreateExpenseDto {
   @IsString()
   @IsOptional()
   fechaEmision?: string
+
+  @IsString()
+  @IsOptional()
+  comentario?: string
+
+  @IsString()
+  @IsOptional()
+  placaVehiculo?: string
+
+  @IsString()
+  @IsOptional()
+  subTipo?: string
+
+  @IsString()
+  @IsOptional()
+  serie?: string
+
+  @IsString()
+  @IsOptional()
+  correlativo?: string
+
+  @IsString()
+  @IsOptional()
+  rucEmisor?: string
 }

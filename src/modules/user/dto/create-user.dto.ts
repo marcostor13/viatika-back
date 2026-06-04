@@ -105,4 +105,8 @@ export class CreateUserDto {
   @ValidateNested()
   @Type(() => CreateBankAccountDto)
   bankAccount?: CreateBankAccountDto
+
+  @IsBoolean()
+  @IsOptional()
+  isCompanyAdmin?: boolean
 }

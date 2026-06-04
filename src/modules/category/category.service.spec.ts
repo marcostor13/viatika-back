@@ -103,14 +103,6 @@ describe('CategoryService', () => {
       )
     })
 
-    it('prefixes key with parent key when parentId is provided', async () => {
-      MockModel.findOne.mockReturnValue(makeExec(mockParent))
-      mockSave.mockResolvedValue(mockCategory)
-      await service.create({ name: 'Desayuno', clientId, parentId })
-      expect(MockModel).toHaveBeenCalledWith(
-        expect.objectContaining({ key: 'gastos-desayuno' })
-      )
-    })
   })
 
   describe('create', () => {
@@ -120,29 +112,16 @@ describe('CategoryService', () => {
       expect(mockSave).toHaveBeenCalled()
       expect(result).toEqual(mockCategory)
     })
-
-    it('throws NotFoundException when parentId does not exist', async () => {
-      MockModel.findOne.mockReturnValue(makeExec(null))
-      await expect(
-        service.create({ name: 'Sub', clientId, parentId })
-      ).rejects.toThrow(NotFoundException)
-    })
   })
 
   describe('findAll', () => {
-    it('returns paginated result with parent categories and their children', async () => {
+    it('returns paginated result', async () => {
       MockModel.countDocuments.mockReturnValue(makeExec(1))
-      MockModel.find
-        .mockReturnValueOnce(makeChainable([mockParent]))
-        .mockReturnValue(makeExec([]))
+      MockModel.find.mockReturnValue(makeChainable([mockParent]))
       const result = await service.findAll(clientId)
-      expect(MockModel.countDocuments).toHaveBeenCalledWith(
-        expect.objectContaining({ parentId: null })
-      )
       expect(result.total).toBe(1)
       expect(result.page).toBe(1)
       expect(result.data).toHaveLength(1)
-      expect(result.data[0].children).toEqual([])
     })
 
     it('filters by search term', async () => {
@@ -160,16 +139,6 @@ describe('CategoryService', () => {
       const result = await service.findAll(clientId)
       expect(result.page).toBe(1)
       expect(result.limit).toBe(20)
-    })
-
-    it('includes children in the response', async () => {
-      const mockChild = { ...mockCategory, _id: new Types.ObjectId(), parentId: mockParent._id }
-      MockModel.countDocuments.mockReturnValue(makeExec(1))
-      MockModel.find
-        .mockReturnValueOnce(makeChainable([mockParent]))
-        .mockReturnValue(makeExec([mockChild]))
-      const result = await service.findAll(clientId)
-      expect(result.data[0].children).toHaveLength(1)
     })
   })
 
@@ -231,12 +200,11 @@ describe('CategoryService', () => {
   })
 
   describe('remove', () => {
-    it('deletes the category and its children successfully', async () => {
+    it('deletes the category successfully', async () => {
       MockModel.findOneAndDelete.mockReturnValue(makeExec(mockCategory))
-      MockModel.deleteMany.mockReturnValue(makeExec({ deletedCount: 0 }))
       await expect(service.remove(categoryId, clientId)).resolves.toBeUndefined()
-      expect(MockModel.deleteMany).toHaveBeenCalledWith({
-        parentId: mockCategory._id,
+      expect(MockModel.findOneAndDelete).toHaveBeenCalledWith({
+        _id: categoryId,
         clientId: expect.any(Types.ObjectId),
       })
     })

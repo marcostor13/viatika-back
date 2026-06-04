@@ -191,6 +191,14 @@ export class ExpenseController {
   }
 
   /** Rutas estáticas antes de `:clientId` para no capturar `invoice` como clientId */
+  @Get('ruc-info/:ruc')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  async getRucInfo(@Param('ruc') ruc: string, @Request() req: any) {
+    const clientId = req.user?.clientId
+    return this.expenseService.getRucInfo(ruc, clientId)
+  }
+
   @Get('test-sunat-credentials/:clientId')
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -256,6 +264,40 @@ export class ExpenseController {
     )
   }
 
+  @Get('my-direct-expenses')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(ROLES.COLABORADOR, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
+  getMyDirectExpenses(
+    @Request() req: any,
+    @Query('tipo') tipo?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const userId = req.user._id || req.user.sub
+    const raw = req.user?.clientId
+    const clientId = raw && typeof raw === 'object' && '_id' in raw ? String(raw._id) : String(raw ?? '')
+    return this.expenseService.findMyDirectExpenses(userId, clientId, {
+      tipo, dateFrom, dateTo,
+      page: page ? Number(page) : undefined,
+      limit: limit ? Number(limit) : undefined,
+    })
+  }
+
+  @Post('my-direct-expenses/submit')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(ROLES.COLABORADOR, ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  async submitMyDirectExpenses(
+    @Request() req: any,
+    @Body() body: { motivo?: string } = {}
+  ) {
+    const userId = req.user._id || req.user.sub
+    const raw = req.user?.clientId
+    const clientId = raw && typeof raw === 'object' && '_id' in raw ? String(raw._id) : String(raw ?? '')
+    return this.expenseService.submitMyDirectExpenses(userId, clientId, body.motivo)
+  }
+
   @Get('stats')
   @Roles(
     ROLES.SUPER_ADMIN,
@@ -292,7 +334,7 @@ export class ExpenseController {
   }
 
   @Patch('invoice/:id')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   @UseGuards(JwtAuthGuard, RolesGuard)
   update(
     @Param('id') id: string,
@@ -351,7 +393,7 @@ export class ExpenseController {
   }
 
   @Delete('invoice/:id')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   @UseGuards(JwtAuthGuard, RolesGuard)
   async remove(@Param('id') id: string, @Request() req) {
     const result = await this.expenseService.remove(
@@ -369,8 +411,72 @@ export class ExpenseController {
     return result
   }
 
-  @Post('invoice/:id/validate-sunat')
+  // ─── Aprobación dual: Coordinador / Contabilidad ─────────────────────────────
+
+  @Patch('invoice/:id/approve-coord')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COORDINADOR)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  approveByCoord(
+    @Param('id') id: string,
+    @Request() req: { user: { _id?: string; roles?: string[]; clientId?: string } }
+  ) {
+    return this.expenseService.approveByCoord(id, this.toActorContext(req.user))
+  }
+
+  @Patch('invoice/:id/reject-coord')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COORDINADOR)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  rejectByCoord(
+    @Param('id') id: string,
+    @Body() body: { reason: string },
+    @Request() req: { user: { _id?: string; roles?: string[]; clientId?: string } }
+  ) {
+    return this.expenseService.rejectByCoord(id, this.toActorContext(req.user), body.reason)
+  }
+
+  @Patch('invoice/:id/approve-cont')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  approveByContabilidad(
+    @Param('id') id: string,
+    @Request() req: { user: { _id?: string; roles?: string[]; clientId?: string } }
+  ) {
+    return this.expenseService.approveByContabilidad(id, this.toActorContext(req.user))
+  }
+
+  @Patch('invoice/:id/reject-cont')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  rejectByContabilidad(
+    @Param('id') id: string,
+    @Body() body: { reason: string },
+    @Request() req: { user: { _id?: string; roles?: string[]; clientId?: string } }
+  ) {
+    return this.expenseService.rejectByContabilidad(id, this.toActorContext(req.user), body.reason)
+  }
+
+  @Patch('report/:reportId/batch-approve-collab')
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  batchApproveByCollaborator(
+    @Param('reportId') reportId: string,
+    @Request() req: { user: { _id?: string; roles?: string[]; clientId?: string } }
+  ) {
+    return this.expenseService.batchApproveByCollaborator(reportId, this.toActorContext(req.user))
+  }
+
+  @Patch('report/:reportId/batch-approve-coord')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COORDINADOR)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  batchApproveByCoord(
+    @Param('reportId') reportId: string,
+    @Request() req: { user: { _id?: string; roles?: string[]; clientId?: string } }
+  ) {
+    return this.expenseService.batchApproveByCoord(reportId, this.toActorContext(req.user))
+  }
+
+  @Post('invoice/:id/validate-sunat')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD, ROLES.COORDINADOR)
   @UseGuards(JwtAuthGuard, RolesGuard)
   async validateWithSunat(
     @Param('id') id: string,

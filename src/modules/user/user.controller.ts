@@ -60,7 +60,7 @@ export class UserController {
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD, ROLES.COLABORADOR)
   @Get('client/:clientId')
   async findAll(
     @Param('clientId', ParseObjectIdPipe) clientId: Types.ObjectId,
@@ -72,6 +72,14 @@ export class UserController {
     @Req() req?: any
   ) {
     const role: string = req?.user?.roles?.[0] ?? ''
+
+    if (role === ROLES.COLABORADOR) {
+      const hasRendicionesPermission = req?.user?.permissions?.modules?.includes('rendiciones')
+      if (!hasRendicionesPermission) {
+        throw new ForbiddenException('No tienes permiso para ver usuarios de esta empresa')
+      }
+    }
+
     if (role !== ROLES.SUPER_ADMIN && role !== ROLES.CONTABILIDAD) {
       const tokenClientId = req?.user?.clientId?.toString()
       if (!tokenClientId || tokenClientId !== clientId.toString()) {
@@ -89,6 +97,13 @@ export class UserController {
       })
     }
     return this.userService.findAll(clientId)
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('me')
+  async getMe(@Request() req: any) {
+    const userId = req.user._id || req.user.sub
+    return await this.userService.findOne(userId.toString())
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
@@ -142,6 +157,27 @@ export class UserController {
       clientId: req.user.clientId,
     })
     return result
+  }
+
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
+  @Patch(':id/notifications')
+  async updateEmailNotifications(
+    @Param('id', ParseObjectIdPipe) id: Types.ObjectId,
+    @Body() body: { emailNotificationsEnabled: boolean },
+    @Request() req: any
+  ) {
+    await this.userService.setEmailNotifications(id.toString(), !!body.emailNotificationsEnabled)
+    this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email,
+      action: 'update_email_notifications',
+      module: 'usuarios',
+      entityId: id.toString(),
+      details: body.emailNotificationsEnabled ? 'activadas' : 'desactivadas',
+      clientId: req.user.clientId,
+    })
+    return { emailNotificationsEnabled: !!body.emailNotificationsEnabled }
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)

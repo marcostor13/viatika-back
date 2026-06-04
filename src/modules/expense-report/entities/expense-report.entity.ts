@@ -5,6 +5,7 @@ export type ExpenseReportStatus =
   | 'solicited'
   | 'open'
   | 'submitted'
+  | 'pending_accounting'
   | 'approved'
   | 'rejected'
   | 'reimbursed'
@@ -12,6 +13,13 @@ export type ExpenseReportStatus =
   | 'cancelled'
 
 export type ReopeningStatus = 'none' | 'requested' | 'approved'
+
+export interface ReopenRecord {
+  reason: string
+  reopenedBy: string
+  reopenedAt: Date
+  fromStatus: string
+}
 
 export interface ClosureRecord {
   closedAt: Date
@@ -59,7 +67,7 @@ export interface ReimbursementPaymentInfo {
   cci?: string
   transferDate: Date
   reference?: string
-  paymentReceiptUrl: string
+  paymentReceiptUrl?: string
   paymentReceiptFileName?: string
   paymentReceiptMimeType?: string
   paymentReceiptSizeBytes?: number
@@ -73,12 +81,15 @@ export interface ExpenseReportDocument extends Document {
   clientId: Types.ObjectId
   status: ExpenseReportStatus
   rejectionReason?: string
+  rejectedByRole?: 'coordinador' | 'contabilidad'
   expenseIds: Types.ObjectId[]
   advanceIds?: Types.ObjectId[]
   settlement?: Settlement
   createdBy: Types.ObjectId
   approvedBy?: Types.ObjectId
   projectId?: Types.ObjectId
+  motivo?: string
+  isDirecta?: boolean
   // New fields
   accountNumber?: string
   idDocument?: string
@@ -92,18 +103,29 @@ export interface ExpenseReportDocument extends Document {
   reimbursedAt?: Date
   reimbursementAccountingNotifiedAt?: Date
   closureRecord?: ClosureRecord
+  coordinatorApprovedAt?: Date
+  coordinatorApprovedBy?: Types.ObjectId
+  contabilidadApprovedAt?: Date
+  contabilidadApprovedBy?: Types.ObjectId
+  reopenHistory?: ReopenRecord[]
 }
 
 @Schema({ timestamps: true })
 export class ExpenseReport {
-  @Prop({ required: true })
+  @Prop({ required: false })
   title: string
 
   @Prop()
   description: string
 
-  @Prop({ required: true, default: 0 })
+  @Prop({ required: false, default: 0 })
   budget: number
+
+  @Prop({ required: false })
+  motivo?: string
+
+  @Prop({ required: false, default: false })
+  isDirecta?: boolean
 
   @Prop({ required: true, type: Types.ObjectId, ref: 'User' })
   userId: Types.ObjectId
@@ -117,6 +139,10 @@ export class ExpenseReport {
   /** Motivo cuando el administrador rechaza la rendición (visible para el colaborador) */
   @Prop({ required: false })
   rejectionReason?: string
+
+  /** Quién rechazó la rendición: coordinador (rechazo en fase de revisión) o contabilidad (rechazo en aprobación final). */
+  @Prop({ required: false, enum: ['coordinador', 'contabilidad'] })
+  rejectedByRole?: 'coordinador' | 'contabilidad'
 
   @Prop({ type: [{ type: Types.ObjectId, ref: 'Expense' }], default: [] })
   expenseIds: Types.ObjectId[]
@@ -133,16 +159,12 @@ export class ExpenseReport {
   @Prop({ type: [{ type: Types.ObjectId, ref: 'Advance' }], default: [] })
   advanceIds?: Types.ObjectId[]
 
-  @Prop({
-    type: {
-      advanceTotal: { type: Number },
-      expenseTotal: { type: Number },
-      difference: { type: Number },
-      type: { type: String, enum: ['reembolso', 'devolucion', 'equilibrado'] },
-      settledAt: { type: Date },
-      _id: false,
-    },
-  })
+  /**
+   * Se define como objeto plano para evitar el conflicto de casteo con la
+   * clave interna `type` del subdocumento (ej. settlement.type = 'devolucion').
+   * Mongoose interpretaría `type` como descriptor del tipo y descartaría el resto.
+   */
+  @Prop({ type: Object })
   settlement?: Settlement
 
   @Prop()
@@ -208,7 +230,7 @@ export class ExpenseReport {
       cci: { type: String },
       transferDate: { type: Date },
       reference: { type: String },
-      paymentReceiptUrl: { type: String, required: true },
+      paymentReceiptUrl: { type: String },
       paymentReceiptFileName: { type: String },
       paymentReceiptMimeType: { type: String },
       paymentReceiptSizeBytes: { type: Number },
@@ -247,6 +269,32 @@ export class ExpenseReport {
 
   @Prop({ type: Object, required: false })
   closureRecord?: ClosureRecord
+
+  @Prop({ type: Date, required: false })
+  coordinatorApprovedAt?: Date
+
+  @Prop({ type: Types.ObjectId, ref: 'User', required: false })
+  coordinatorApprovedBy?: Types.ObjectId
+
+  @Prop({ type: Date, required: false })
+  contabilidadApprovedAt?: Date
+
+  @Prop({ type: Types.ObjectId, ref: 'User', required: false })
+  contabilidadApprovedBy?: Types.ObjectId
+
+  @Prop({
+    type: [
+      {
+        reason: { type: String, required: true },
+        reopenedBy: { type: String, required: true },
+        reopenedAt: { type: Date, required: true },
+        fromStatus: { type: String, required: true },
+        _id: false,
+      },
+    ],
+    default: [],
+  })
+  reopenHistory?: ReopenRecord[]
 }
 
 export const ExpenseReportSchema = SchemaFactory.createForClass(ExpenseReport)

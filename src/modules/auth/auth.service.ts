@@ -80,6 +80,36 @@ export class AuthService {
       }
     }
 
+    // Administrador: hub flow — can manage all companies
+    const adminUser = validUsers.find(u => (u.role as any)?.name === ROLES.ADMIN)
+    if (adminUser) {
+      if (adminUser.isActive === false) return { isActive: false }
+      const allClients = await this.clientService.findAll()
+      const hubPayload = {
+        email: adminUser.email,
+        userId: (adminUser._id as any).toString(),
+        roles: [ROLES.ADMIN],
+        clientId: '',
+        permissions: adminUser.permissions || { modules: [], canApproveL1: false, canApproveL2: false, categoryIds: [] },
+        mustChangePassword: !!adminUser.mustChangePassword,
+        isHubToken: true,
+      }
+      const hubToken = this.jwtService.sign(hubPayload)
+      const { password: _, ...userData } = adminUser as any
+      return {
+        requiresClientSelection: true,
+        isAdmin: true,
+        access_token: hubToken,
+        ...userData,
+        mustChangePassword: !!adminUser.mustChangePassword,
+        companies: allClients.map((c: any) => ({
+          clientId: c._id.toString(),
+          name: c.comercialName || c.businessName,
+          logo: c.logo || null,
+        })),
+      }
+    }
+
     // Filter inactive
     const activeUsers = validUsers.filter(u => u.isActive !== false)
     if (!activeUsers.length) return { isActive: false }

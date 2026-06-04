@@ -28,6 +28,13 @@ import { ROLES } from '../auth/enums/roles.enum'
 import { NotificationsService } from '../notifications/notifications.service'
 import { CategoryService } from '../category/category.service'
 import { Client } from '../client/entities/client.entity'
+import {
+  applyFechaEmisionDisplayToExpense,
+  applyFechaEmisionDisplayToExpenses,
+  formatFechaEmisionDdMmYyyy,
+  normalizeFechaEmisionInDataJson,
+  parseFechaEmisionInput,
+} from './utils/fecha-emision.util'
 
 /** Usuario autenticado para autorización de gastos (PATCH/DELETE/GET). */
 export interface ExpenseActorContext {
@@ -47,6 +54,8 @@ interface ExtractedInvoiceData {
   moneda?: string
   razonSocial?: string
   direccionEmisor?: string
+  comentario?: string
+  placaVehiculo?: string
   [key: string]: unknown
 }
 
@@ -110,7 +119,7 @@ export class ExpenseService {
     expense: Expense,
     actor: ExpenseActorContext
   ): void {
-    if (actor.roleName === ROLES.SUPER_ADMIN) return
+    if (actor.roleName === ROLES.SUPER_ADMIN || actor.roleName === ROLES.CONTABILIDAD) return
     const expClient = this.normalizeClientId(
       (expense as unknown as { clientId: unknown }).clientId
     )
@@ -207,32 +216,51 @@ export class ExpenseService {
     return dateStr.replace(/-/g, '/')
   }
 
-  private parseExpenseDate(raw?: string | null): Date | null {
-    if (!raw || typeof raw !== 'string') return null
-    const clean = raw.trim()
-    if (!clean) return null
+  private parseExpenseDate(raw?: string | Date | null): Date | null {
+    return parseFechaEmisionInput(raw ?? undefined)
+  }
 
-    const ymdMatch = clean.match(/^(\d{4})[-/](\d{2})[-/](\d{2})$/)
-    if (ymdMatch) {
-      const y = Number(ymdMatch[1])
-      const m = Number(ymdMatch[2]) - 1
-      const d = Number(ymdMatch[3])
-      return new Date(Date.UTC(y, m, d))
+  private normalizeFechaEmisionValue(
+    raw?: string | Date | null
+  ): string | undefined {
+    return formatFechaEmisionDdMmYyyy(raw ?? undefined)
+  }
+
+  private sanitizeFechaEmisionOnWrite(
+    dto: Partial<CreateExpenseDto | UpdateExpenseDto>
+  ): void {
+    if (dto.fechaEmision != null && dto.fechaEmision !== '') {
+      const normalized = this.normalizeFechaEmisionValue(
+        dto.fechaEmision as string | Date
+      )
+      if (normalized) dto.fechaEmision = normalized
     }
-
-    const dmyMatch = clean.match(/^(\d{2})[-/](\d{2})[-/](\d{4})$/)
-    if (dmyMatch) {
-      const d = Number(dmyMatch[1])
-      const m = Number(dmyMatch[2]) - 1
-      const y = Number(dmyMatch[3])
-      return new Date(Date.UTC(y, m, d))
+    if (dto.data != null && typeof dto.data === 'string') {
+      dto.data = normalizeFechaEmisionInDataJson(dto.data) ?? dto.data
     }
+  }
 
-    const parsed = new Date(clean)
-    if (Number.isNaN(parsed.getTime())) return null
-    return new Date(
-      Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate())
-    )
+  /** Mantiene comentario/placa en raíz del gasto alineados con el JSON `data`. */
+  private syncComentarioPlacaFromData(
+    dto: Partial<CreateExpenseDto | UpdateExpenseDto>
+  ): void {
+    if (dto.data == null || typeof dto.data !== 'string') return
+    try {
+      const parsed = JSON.parse(dto.data) as Record<string, unknown>
+      if (dto.comentario === undefined && typeof parsed.comentario === 'string') {
+        const c = parsed.comentario.trim()
+        if (c) dto.comentario = c
+      }
+      if (
+        dto.placaVehiculo === undefined &&
+        typeof parsed.placaVehiculo === 'string'
+      ) {
+        const p = parsed.placaVehiculo.trim()
+        if (p) dto.placaVehiculo = p
+      }
+    } catch {
+      /* mantener dto original */
+    }
   }
 
   private evaluateDeadline(fechaEmisionRaw?: string | null): {
@@ -294,11 +322,26 @@ export class ExpenseService {
   }
 
   private buildUserInitials(name?: string | null): string {
-    const words = String(name || '')
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean)
-    if (words.length === 0) return 'USR'
+    const raw = String(name || '').trim()
+    if (!raw) return 'USR'
+
+    // Formato esperado en BD: "APELLIDO1 APELLIDO2, NOMBRE [NOMBRE2 ...]"
+    // Resultado deseado: inicial(NOMBRE) + inicial(APELLIDO1) + inicial(APELLIDO2)
+    // Ej: "SALAZAR PEREZ, CHRISTIAN" -> "CSP"
+    //     "CARRASCO PERALTA, CHRISTIAN WILMER" -> "CCP"
+    if (raw.includes(',')) {
+      const [apellidosPart = '', nombresPart = ''] = raw.split(',', 2)
+      const apellidos = apellidosPart.trim().split(/\s+/).filter(Boolean)
+      const nombres = nombresPart.trim().split(/\s+/).filter(Boolean)
+      const nombreInicial = nombres[0]?.charAt(0).toUpperCase() ?? ''
+      const apellido1Inicial = apellidos[0]?.charAt(0).toUpperCase() ?? ''
+      const apellido2Inicial = apellidos[1]?.charAt(0).toUpperCase() ?? ''
+      const initials = `${nombreInicial}${apellido1Inicial}${apellido2Inicial}`
+      if (initials) return initials.padEnd(3, 'X').slice(0, 3)
+    }
+
+    // Fallback (sin coma): asumir orden "NOMBRE APELLIDO1 APELLIDO2".
+    const words = raw.split(/\s+/).filter(Boolean)
     const initials = words
       .slice(0, 3)
       .map(w => w.charAt(0).toUpperCase())
@@ -306,15 +349,38 @@ export class ExpenseService {
     return initials.padEnd(3, 'X').slice(0, 3)
   }
 
+  private async resolveOwnerUserId(
+    fallbackUserId: string | undefined,
+    expenseReportId: string | undefined
+  ): Promise<string | undefined> {
+    if (expenseReportId) {
+      try {
+        const report = await this.expenseReportService.findOne(expenseReportId)
+        const reportUserId = (report as any)?.userId
+        if (reportUserId) {
+          if (typeof reportUserId === 'object' && '_id' in reportUserId) {
+            return String((reportUserId as { _id: unknown })._id)
+          }
+          return String(reportUserId)
+        }
+      } catch {
+        // Si la rendición no se puede resolver, caemos al userId del creador.
+      }
+    }
+    return fallbackUserId
+  }
+
   private async generateInternalCode(
     userId: string | undefined,
-    expenseType: 'planilla_movilidad' | 'comprobante_caja'
+    expenseType: 'planilla_movilidad' | 'comprobante_caja',
+    expenseReportId?: string
   ): Promise<string> {
-    if (!userId) return `USR001`
-    const user = await this.userService.findOne(userId)
+    const ownerUserId = await this.resolveOwnerUserId(userId, expenseReportId)
+    if (!ownerUserId) return `USR001`
+    const user = await this.userService.findOne(ownerUserId)
     const initials = this.buildUserInitials(user?.name)
     const count = await this.expenseRepository.countDocuments({
-      createdBy: userId,
+      createdBy: ownerUserId,
       expenseType,
     })
     const correlativo = String(count + 1).padStart(3, '0')
@@ -325,15 +391,16 @@ export class ExpenseService {
     data: ExtractedInvoiceData,
     clientId: string
   ): Promise<void> {
-    if (data.serie && data.correlativo) {
+    if (data.serie && data.correlativo && data.rucEmisor) {
       const existingInvoice = await this.findBySeriAndCorrelativo(
         data.serie,
         data.correlativo,
-        clientId
+        clientId,
+        data.rucEmisor
       )
       if (existingInvoice) {
         throw new HttpException(
-          `Ya existe una factura/boleta con el número ${data.serie}-${data.correlativo}`,
+          `Ya existe una factura/boleta del emisor con RUC ${data.rucEmisor} y número ${data.serie}-${data.correlativo}`,
           HttpStatus.CONFLICT
         )
       }
@@ -382,6 +449,7 @@ export class ExpenseService {
             const response = await firstValueFrom(
               this.httpService.post(sunatApiUrl, params, { headers })
             )
+            console.log('[SUNAT] Raw response:', JSON.stringify(response.data, null, 2))
             validation = this.interpretSunatResponse(response.data)
             expenseStatus = validation.status
           } catch (error) {
@@ -416,7 +484,16 @@ export class ExpenseService {
     const categoryObject = Types.ObjectId.createFromHexString(body.categoryId)
     const projectObject = Types.ObjectId.createFromHexString(body.proyectId)
 
-    const deadlineMeta = this.evaluateDeadline(data.fechaEmision)
+    const normalizedFechaEmision = this.normalizeFechaEmisionValue(
+      data.fechaEmision
+    )
+    const dataPayload = {
+      ...data,
+      fechaEmision: normalizedFechaEmision ?? data.fechaEmision,
+      sunatValidation: validation,
+    }
+
+    const deadlineMeta = this.evaluateDeadline(dataPayload.fechaEmision)
     const amount = Number(data.montoTotal ?? 0)
     const categoryMeta = await this.evaluateCategoryLimit(body, amount)
 
@@ -428,16 +505,18 @@ export class ExpenseService {
         ? new Types.ObjectId(body.expenseReportId)
         : undefined,
       total: data.montoTotal,
-      data: JSON.stringify({ ...data, sunatValidation: validation }),
+      data: JSON.stringify(dataPayload),
       file: body.imageUrl,
       status: status,
       createdBy: body.userId || 'system',
-      fechaEmision: data.fechaEmision,
+      fechaEmision: dataPayload.fechaEmision,
       observado: deadlineMeta.observado,
       observacionPlazo: deadlineMeta.observacionPlazo,
       diasRetraso: deadlineMeta.diasRetraso,
       categoryLimitPercent: categoryMeta.percent,
       categoryLimitWarning: categoryMeta.warning,
+      comentario: data.comentario || undefined,
+      placaVehiculo: data.placaVehiculo || undefined,
     })
   }
 
@@ -460,6 +539,7 @@ export class ExpenseService {
     categoryName: string
   ) {
     return {
+      clientId: body.clientId,
       providerName: creatorName,
       invoiceNumber: `${data.serie || ''}-${data.correlativo || ''}`,
       date: data.fechaEmision || new Date().toISOString().split('T')[0],
@@ -506,57 +586,84 @@ export class ExpenseService {
       categoryName
     )
 
-    if (body.userId) {
+    // Destinatarios: solo los involucrados — dueño de la rendición, su
+    // coordinador y Contabilidad. Sin broadcast a todos los usuarios del cliente.
+    const seen = new Set<string>()
+    const sendTo = async (email?: string | null, userId?: string | null) => {
+      const e = email?.trim()
+      if (!e) return
+      const key = e.toLowerCase()
+      if (seen.has(key)) return
+      seen.add(key)
       try {
-        const creator = await this.userService.findOne(body.userId)
-        if (creator?.email) {
-          await this.emailService.sendInvoiceUploadedExpenseNotification(
-            creator.email,
-            notificationPayload
-          )
+        if (userId) {
+          const enabled = await this.userService.isEmailEnabled(userId)
+          if (!enabled) return
         }
-      } catch (error) {
-        this.logger.warn('No se pudo enviar notificación al creador:', error)
+        await this.emailService.sendInvoiceUploadedExpenseNotification(
+          e,
+          notificationPayload
+        )
+      } catch (err) {
+        this.logger.warn(`Error notificando subida de gasto a ${e}:`, err)
       }
     }
 
-    try {
-      const colaboradores = await this.userService.findAll(
-        new Types.ObjectId(body.clientId)
-      )
-
-      if (!colaboradores || colaboradores.length === 0) {
-        this.logger.debug(
-          'No se encontraron usuarios con rol COLABORADOR activos'
+    // Resolver dueño de la rendición vinculada (si existe).
+    let reportOwnerId: string | undefined
+    if (body.expenseReportId) {
+      try {
+        const report = await this.expenseReportService.findOne(body.expenseReportId)
+        const ownerRef = (report as any)?.userId
+        reportOwnerId = ownerRef?._id
+          ? String(ownerRef._id)
+          : ownerRef
+            ? String(ownerRef)
+            : undefined
+      } catch (err) {
+        this.logger.warn(
+          `No se pudo obtener la rendición ${body.expenseReportId}:`,
+          err
         )
-        return
       }
+    }
 
-      this.logger.debug(
-        `Encontrados ${colaboradores.length} colaboradores activos para notificar`
-      )
-      for (const colaborador of colaboradores) {
-        if (!colaborador.email) continue
-        try {
-          await this.emailService.sendInvoiceUploadedExpenseNotification(
-            colaborador.email,
-            notificationPayload
-          )
-          this.logger.debug(
-            `Notificación enviada al colaborador: ${colaborador.email}`
-          )
-        } catch (error) {
-          this.logger.warn(
-            `Error al enviar notificación al colaborador ${colaborador.email}:`,
-            error
-          )
-        }
+    // 1) Dueño de la rendición (o creador si no hay rendición).
+    const ownerCandidate = reportOwnerId || body.userId || undefined
+    if (ownerCandidate) {
+      try {
+        const owner = await this.userService.findOne(ownerCandidate)
+        await sendTo(owner?.email, ownerCandidate)
+      } catch (err) {
+        this.logger.warn('No se pudo notificar al dueño del gasto/rendición:', err)
       }
-    } catch (error) {
-      this.logger.error(
-        'Error al enviar notificaciones a colaboradores:',
-        error
-      )
+    }
+
+    // 2) Coordinador del dueño.
+    if (ownerCandidate) {
+      try {
+        const profile = await this.userService.findTransactionalProfile(ownerCandidate)
+        const coordinatorId = profile?.coordinatorId?.toString?.()
+        if (coordinatorId) {
+          const coordinator = await this.userService.findEmailNameClient(coordinatorId)
+          await sendTo(coordinator?.email, coordinatorId)
+        }
+      } catch (err) {
+        this.logger.warn('No se pudo notificar al coordinador:', err)
+      }
+    }
+
+    // 3) Contabilidad/Tesorería (solo por rol Contabilidad, ya filtrado en el helper).
+    if (body.clientId) {
+      try {
+        const contabilidad =
+          await this.userService.findContabilidadRecipients(body.clientId)
+        for (const u of contabilidad) {
+          await sendTo(u.email)
+        }
+      } catch (err) {
+        this.logger.warn('No se pudo notificar a contabilidad:', err)
+      }
     }
   }
 
@@ -625,6 +732,70 @@ export class ExpenseService {
         HttpStatus.INTERNAL_SERVER_ERROR,
       )
     }
+  }
+
+  async getRucInfo(ruc: string, clientId: string): Promise<{ razonSocial: string | null; fuente: string }> {
+    // Option A: SUNAT API oficial con el mismo token OAuth2
+    try {
+      const token = await this.generateTokenSunat(clientId)
+      if (token?.access_token) {
+        const url = `https://api.sunat.gob.pe/v1/contribuyente/contribuyentes/${ruc}`
+        const response = await firstValueFrom(
+          this.httpService.get(url, {
+            headers: { Authorization: `Bearer ${token.access_token}` },
+          })
+        )
+        console.log(`[RUC Info] SUNAT respuesta para ${ruc}:`, JSON.stringify(response.data))
+        const data = response.data
+        const razonSocial = data?.ddp_nombre ?? data?.razonSocial ?? data?.nombre ?? null
+        if (razonSocial) {
+          this.logger.log(`[RUC Info] ${ruc} via SUNAT oficial: ${razonSocial}`)
+          return { razonSocial, fuente: 'sunat' }
+        }
+      }
+    } catch (err: any) {
+      console.log(`[RUC Info] SUNAT error para ${ruc}:`, err?.response?.status, JSON.stringify(err?.response?.data ?? err?.message))
+    }
+
+    // Option B-1: api.apis.net.pe v2 (requiere token si lo hay en env)
+    try {
+      const headers: any = { 'Accept': 'application/json' }
+      const apisToken = process.env.APIS_NET_PE_TOKEN
+      if (apisToken) headers['Authorization'] = `Bearer ${apisToken}`
+
+      const url = `https://api.apis.net.pe/v2/sunat/ruc?numero=${ruc}`
+      const response = await firstValueFrom(
+        this.httpService.get(url, { headers, timeout: 6000 } as any)
+      )
+      console.log(`[RUC Info] api.apis.net.pe v2 respuesta para ${ruc}:`, JSON.stringify(response.data))
+      const data = response.data
+      const razonSocial = data?.razonSocial ?? data?.nombre ?? null
+      if (razonSocial) {
+        this.logger.log(`[RUC Info] ${ruc} via api.apis.net.pe v2: ${razonSocial}`)
+        return { razonSocial, fuente: 'tercero' }
+      }
+    } catch (err: any) {
+      console.log(`[RUC Info] api.apis.net.pe v2 error para ${ruc}:`, err?.response?.status, JSON.stringify(err?.response?.data ?? err?.message))
+    }
+
+    // Option B-2: api.apis.net.pe v1 (puede funcionar sin token)
+    try {
+      const url = `https://api.apis.net.pe/v1/ruc?numero=${ruc}`
+      const response = await firstValueFrom(
+        this.httpService.get(url, { timeout: 6000 } as any)
+      )
+      console.log(`[RUC Info] api.apis.net.pe v1 respuesta para ${ruc}:`, JSON.stringify(response.data))
+      const data = response.data
+      const razonSocial = data?.razonSocial ?? data?.nombre ?? null
+      if (razonSocial) {
+        this.logger.log(`[RUC Info] ${ruc} via api.apis.net.pe v1: ${razonSocial}`)
+        return { razonSocial, fuente: 'tercero' }
+      }
+    } catch (err: any) {
+      console.log(`[RUC Info] api.apis.net.pe v1 error para ${ruc}:`, err?.response?.status, JSON.stringify(err?.response?.data ?? err?.message))
+    }
+
+    return { razonSocial: null, fuente: 'not_found' }
   }
 
   private interpretSunatResponse(sunatData: any): {
@@ -864,7 +1035,8 @@ export class ExpenseService {
     const categoryMeta = await this.evaluateCategoryLimit(body, total)
     const internalCode = await this.generateInternalCode(
       body.userId,
-      'planilla_movilidad'
+      'planilla_movilidad',
+      body.expenseReportId
     )
     const expense = await this.expenseRepository.create({
       categoryId: new Types.ObjectId(body.categoryId),
@@ -905,29 +1077,37 @@ export class ExpenseService {
     if (!body.clientId) {
       throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
     }
-    if (!body.declaracionJurada) {
-      throw new HttpException(
-        'Se requiere firmar la declaración jurada',
-        HttpStatus.BAD_REQUEST
-      )
-    }
     if (!body.total || body.total <= 0) {
       throw new HttpException(
         'Se requiere un monto válido',
         HttpStatus.BAD_REQUEST
       )
     }
-    if (body.userId) {
-      const profile = await this.userService.findTransactionalProfile(body.userId)
-      if (!profile?.signature) {
+
+    const subTipo = body.subTipo || 'OT'
+    const isDJ = subTipo === 'DJ'
+
+    // Solo la DJ requiere firma y aceptación del checkbox
+    if (isDJ) {
+      if (!body.declaracionJurada) {
         throw new HttpException(
-          'Debes registrar tu firma digital antes de enviar una Declaración Jurada. Ve a tu perfil para añadirla.',
-          HttpStatus.UNPROCESSABLE_ENTITY
+          'Se requiere firmar la declaración jurada',
+          HttpStatus.BAD_REQUEST
         )
+      }
+      if (body.userId) {
+        const profile = await this.userService.findTransactionalProfile(body.userId)
+        if (!profile?.signature) {
+          throw new HttpException(
+            'Debes registrar tu firma digital antes de enviar una Declaración Jurada. Ve a tu perfil para añadirla.',
+            HttpStatus.UNPROCESSABLE_ENTITY
+          )
+        }
       }
     }
 
-    const deadlineMeta = this.evaluateDeadline(body.fechaEmision)
+    const normalizedFecha = this.normalizeFechaEmisionValue(body.fechaEmision)
+    const deadlineMeta = this.evaluateDeadline(normalizedFecha ?? body.fechaEmision)
     const categoryMeta = await this.evaluateCategoryLimit(body, body.total)
     const expense = await this.expenseRepository.create({
       categoryId: new Types.ObjectId(body.categoryId),
@@ -939,12 +1119,13 @@ export class ExpenseService {
       total: body.total,
       description: body.data,
       expenseType: 'otros_gastos',
-      declaracionJurada: true,
-      declaracionJuradaFirmante: body.declaracionJuradaFirmante,
+      subTipo,
+      declaracionJurada: isDJ ? true : false,
+      declaracionJuradaFirmante: isDJ ? body.declaracionJuradaFirmante : undefined,
       file: body.imageUrl || undefined,
       status: 'pending',
       createdBy: body.userId || 'system',
-      fechaEmision: body.fechaEmision,
+      fechaEmision: normalizedFecha ?? body.fechaEmision,
       observado: deadlineMeta.observado,
       observacionPlazo: deadlineMeta.observacionPlazo,
       diasRetraso: deadlineMeta.diasRetraso,
@@ -952,8 +1133,13 @@ export class ExpenseService {
       categoryLimitWarning: categoryMeta.warning,
       data: JSON.stringify({
         type: 'otros_gastos',
-        declaracionJurada: true,
-        firmante: body.declaracionJuradaFirmante,
+        subTipo,
+        declaracionJurada: isDJ,
+        firmante: isDJ ? body.declaracionJuradaFirmante : undefined,
+        description: body.data,
+        serie: body.serie || undefined,
+        correlativo: body.correlativo || undefined,
+        rucEmisor: body.rucEmisor || undefined,
       }),
     })
 
@@ -1008,7 +1194,8 @@ export class ExpenseService {
       )
     }
 
-    const deadlineMeta = this.evaluateDeadline(body.fechaEmision)
+    const normalizedFecha = this.normalizeFechaEmisionValue(body.fechaEmision)
+    const deadlineMeta = this.evaluateDeadline(normalizedFecha ?? body.fechaEmision)
     const categoryMeta = await this.evaluateCategoryLimit(body, body.total)
     const expense = await this.expenseRepository.create({
       categoryId: new Types.ObjectId(body.categoryId),
@@ -1023,7 +1210,7 @@ export class ExpenseService {
       file: body.imageUrl,
       status: 'pending',
       createdBy: body.userId || 'system',
-      fechaEmision: body.fechaEmision,
+      fechaEmision: normalizedFecha ?? body.fechaEmision,
       observado: deadlineMeta.observado,
       observacionPlazo: deadlineMeta.observacionPlazo,
       diasRetraso: deadlineMeta.diasRetraso,
@@ -1063,11 +1250,13 @@ export class ExpenseService {
       )
     }
 
-    const deadlineMeta = this.evaluateDeadline(body.fechaEmision)
+    const normalizedFecha = this.normalizeFechaEmisionValue(body.fechaEmision)
+    const deadlineMeta = this.evaluateDeadline(normalizedFecha ?? body.fechaEmision)
     const categoryMeta = await this.evaluateCategoryLimit(body, body.total)
     const internalCode = await this.generateInternalCode(
       body.userId,
-      'comprobante_caja'
+      'comprobante_caja',
+      body.expenseReportId
     )
 
     const expense = await this.expenseRepository.create({
@@ -1082,7 +1271,7 @@ export class ExpenseService {
       expenseType: 'comprobante_caja',
       status: 'pending',
       createdBy: body.userId || 'system',
-      fechaEmision: body.fechaEmision,
+      fechaEmision: normalizedFecha ?? body.fechaEmision,
       observado: deadlineMeta.observado,
       observacionPlazo: deadlineMeta.observacionPlazo,
       diasRetraso: deadlineMeta.diasRetraso,
@@ -1106,25 +1295,24 @@ export class ExpenseService {
   }
 
   async create(createExpenseDto: CreateExpenseDto): Promise<Expense> {
-    let fechaEmisionDate: Date | undefined = undefined
-    if ('fechaEmision' in createExpenseDto && createExpenseDto.fechaEmision) {
-      fechaEmisionDate = new Date(createExpenseDto.fechaEmision as any)
-    } else if ((createExpenseDto as any).data) {
-      let dataObj: any = (createExpenseDto as any).data
-      if (typeof dataObj === 'string') {
-        try {
-          dataObj = JSON.parse(dataObj)
-        } catch {}
-      }
-      if (dataObj && dataObj.fechaEmision) {
-        fechaEmisionDate = parseFechaEmision(dataObj.fechaEmision)
+    const dto = { ...createExpenseDto }
+    this.sanitizeFechaEmisionOnWrite(dto)
+    this.syncComentarioPlacaFromData(dto)
+
+    if (!dto.fechaEmision && dto.data) {
+      try {
+        const dataObj =
+          typeof dto.data === 'string' ? JSON.parse(dto.data) : dto.data
+        const fromData = this.normalizeFechaEmisionValue(dataObj?.fechaEmision)
+        if (fromData) dto.fechaEmision = fromData
+      } catch {
+        /* ignore */
       }
     }
 
     const createdExpense = new this.expenseRepository({
-      ...createExpenseDto,
+      ...dto,
       clientId: new Types.ObjectId(createExpenseDto.clientId),
-      fechaEmision: fechaEmisionDate,
       createdBy: createExpenseDto.userId,
     })
     const expense = await createdExpense.save()
@@ -1358,7 +1546,13 @@ export class ExpenseService {
         { path: 'proyectId' },
         { path: 'categoryId' },
       ]) as unknown as Expense[]
-      return { data: populatedResult, total, page, pages: Math.ceil(total / limit), limit }
+      return {
+        data: applyFechaEmisionDisplayToExpenses(populatedResult),
+        total,
+        page,
+        pages: Math.ceil(total / limit),
+        limit,
+      }
     }
 
     const sortBy = filters.sortBy || 'fechaEmision'
@@ -1374,14 +1568,22 @@ export class ExpenseService {
     let data: Expense[] = result
     if (sortBy === 'fechaEmision') {
       data = result.sort((a, b) => {
-        if (!a.fechaEmision || !b.fechaEmision) return 0
-        const dateA = new Date(a.fechaEmision.split('-').reverse().join('-'))
-        const dateB = new Date(b.fechaEmision.split('-').reverse().join('-'))
-        return sortOrder === 'desc' ? dateB.getTime() - dateA.getTime() : dateA.getTime() - dateB.getTime()
+        const dateA = this.parseExpenseDate(a.fechaEmision as string)
+        const dateB = this.parseExpenseDate(b.fechaEmision as string)
+        if (!dateA || !dateB) return 0
+        return sortOrder === 'desc'
+          ? dateB.getTime() - dateA.getTime()
+          : dateA.getTime() - dateB.getTime()
       })
     }
 
-    return { data, total, page, pages: Math.ceil(total / limit), limit }
+    return {
+      data: applyFechaEmisionDisplayToExpenses(data),
+      total,
+      page,
+      pages: Math.ceil(total / limit),
+      limit,
+    }
   }
 
   async getStatusCounts(clientId: string): Promise<{ pending: number; approved: number; rejected: number; total: number }> {
@@ -1401,11 +1603,13 @@ export class ExpenseService {
 
     const expenseIdObject = Types.ObjectId.createFromHexString(id)
 
-    return this.expenseRepository
+    const expense = await this.expenseRepository
       .findOne({ _id: expenseIdObject })
       .populate('proyectId')
       .populate('categoryId')
       .exec()
+
+    return expense ? applyFechaEmisionDisplayToExpense(expense) : null
   }
 
   async getSunatValidationInfo(id: string): Promise<any> {
@@ -1469,7 +1673,7 @@ export class ExpenseService {
   ): Promise<Expense> {
     const expense = await this.loadExpenseOrThrow(id)
     this.assertCanReadExpense(expense, actor)
-    return expense
+    return applyFechaEmisionDisplayToExpense(expense)
   }
 
   async update(
@@ -1485,13 +1689,49 @@ export class ExpenseService {
     const existing = await this.loadExpenseOrThrow(id)
     await this.assertCanMutateExpense(existing, actor)
 
-    return this.expenseRepository
-      .findOneAndUpdate({ _id: expenseIdObject }, updateExpenseDto, {
+    const dto = { ...updateExpenseDto }
+    this.sanitizeFechaEmisionOnWrite(dto)
+    this.syncComentarioPlacaFromData(dto)
+
+    if (dto.mobilityRows && dto.mobilityRows.length > 0) {
+      const client = await this.clientModel
+        .findById(existing.clientId)
+        .lean()
+        .exec()
+      const dailyLimit = client?.limits?.movilidadDiario ?? null
+      if (dailyLimit !== null) {
+        const dailyTotals = new Map<string, number>()
+        for (const row of dto.mobilityRows) {
+          const date = row.fecha || ''
+          dailyTotals.set(date, (dailyTotals.get(date) ?? 0) + (row.total || 0))
+        }
+        for (const [date, dayTotal] of dailyTotals) {
+          if (dayTotal > dailyLimit) {
+            throw new BadRequestException(
+              `El total del día ${date} (S/ ${dayTotal.toFixed(2)}) supera el límite diario de S/ ${dailyLimit.toFixed(2)}`
+            )
+          }
+        }
+      }
+      dto.total = dto.mobilityRows.reduce(
+        (sum, row) => sum + (row.total || 0),
+        0
+      )
+      dto.data = JSON.stringify({
+        type: 'planilla_movilidad',
+        rows: dto.mobilityRows,
+      })
+    }
+
+    const updated = await this.expenseRepository
+      .findOneAndUpdate({ _id: expenseIdObject }, dto, {
         new: true,
       })
       .populate('clientId')
       .populate('categoryId')
       .exec()
+
+    return updated ? applyFechaEmisionDisplayToExpense(updated) : null
   }
 
   async approveInvoice(id: string, approvalDto: ApprovalDto) {
@@ -1635,9 +1875,12 @@ export class ExpenseService {
           for (const colaborador of colaboradores) {
             if (colaborador.email && colaborador._id.toString() !== creadorId) {
               try {
+                const emailEnabled = await this.userService.isEmailEnabled(colaborador._id.toString())
+                if (!emailEnabled) continue
                 await this.emailService.sendInvoiceApprovedToColaborador(
                   colaborador.email,
                   {
+                    clientId: expense.clientId?.toString?.() ?? String(expense.clientId),
                     providerName: colaborador.name,
                     invoiceNumber: `${invoiceData.serie || ''}-${
                       invoiceData.correlativo || ''
@@ -1848,11 +2091,12 @@ export class ExpenseService {
   async findBySeriAndCorrelativo(
     serie: string,
     correlativo: string,
-    clientId?: string
+    clientId?: string,
+    rucEmisor?: string
   ): Promise<Expense | null> {
     try {
       this.logger.debug(
-        `Buscando duplicados - Serie: ${serie}, Correlativo: ${correlativo}, clientId: ${clientId}`
+        `Buscando duplicados - Serie: ${serie}, Correlativo: ${correlativo}, clientId: ${clientId}, rucEmisor: ${rucEmisor}`
       )
 
       const query: any = {}
@@ -1876,13 +2120,14 @@ export class ExpenseService {
             }
 
             this.logger.debug(
-              `Revisando factura ${expense._id}: Serie: ${dataObj?.serie}, Correlativo: ${dataObj?.correlativo}`
+              `Revisando factura ${expense._id}: Serie: ${dataObj?.serie}, Correlativo: ${dataObj?.correlativo}, RUC: ${dataObj?.rucEmisor}`
             )
 
             if (
               dataObj &&
               dataObj.serie === serie &&
-              dataObj.correlativo === correlativo
+              dataObj.correlativo === correlativo &&
+              (!rucEmisor || dataObj.rucEmisor === rucEmisor)
             ) {
               this.logger.debug(`DUPLICADO ENCONTRADO: Factura ${expense._id}`)
               return expense
@@ -1936,19 +2181,31 @@ export class ExpenseService {
     await this.assertCanMutateExpense(expense, actor)
 
     try {
+      // Paso 1: obtener razón social fresca para el RUC emisor
+      let updatedData: string | undefined
+      if (data.rucEmisor) {
+        const { razonSocial } = await this.getRucInfo(data.rucEmisor, clientId)
+        if (razonSocial) {
+          let parsed: any = {}
+          try {
+            parsed = typeof expense.data === 'string' ? JSON.parse(expense.data) : (expense.data ?? {})
+          } catch {}
+          updatedData = JSON.stringify({ ...parsed, razonSocial })
+          this.logger.log(`[validateWithSunatData] razonSocial actualizada para RUC ${data.rucEmisor}: ${razonSocial}`)
+        }
+      }
+
+      // Paso 2: validar comprobante con SUNAT
       const configSunat = await this.sunatConfigService.findOne(clientId)
       const { validation, expenseStatus } =
         await this.validateWithSunatIfPossible(data, clientId, configSunat?.ruc)
 
+      // Paso 3: guardar razón social + resultado de validación en un solo update
+      const updateDoc: any = { sunatValidation: validation, status: expenseStatus }
+      if (updatedData !== undefined) updateDoc.data = updatedData
+
       const updatedExpense = await this.expenseRepository
-        .findByIdAndUpdate(
-          id,
-          {
-            sunatValidation: validation,
-            status: expenseStatus,
-          },
-          { new: true }
-        )
+        .findByIdAndUpdate(id, updateDoc, { new: true })
         .exec()
 
       return {
@@ -1969,12 +2226,379 @@ export class ExpenseService {
       throw error
     }
   }
-}
 
-function parseFechaEmision(fecha: string): Date | undefined {
-  const parts = fecha.split(/[\/\-]/)
-  if (parts.length === 3) {
-    return new Date(`${parts[2]}-${parts[1]}-${parts[0]}`)
+  // ─── Aprobación dual: Coordinador / Contabilidad ─────────────────────────────
+
+  private computeCombinedStatus(
+    coordStatus: string | undefined,
+    contStatus: string | undefined
+  ): 'pending' | 'approved' | 'rejected' {
+    if (coordStatus === 'rejected' || contStatus === 'rejected') return 'rejected'
+    if (coordStatus === 'approved' && contStatus === 'approved') return 'approved'
+    return 'pending'
   }
-  return undefined
+
+  async approveByCoord(
+    id: string,
+    actor: ExpenseActorContext
+  ): Promise<Expense> {
+    const expense = await this.loadExpenseOrThrow(id)
+    this.assertCompanyAccess(expense, actor)
+    const existing = expense as any
+    const contStatus = existing.approvalCont?.status ?? 'pending'
+    const newCombined = this.computeCombinedStatus('approved', contStatus)
+    const updated = await this.expenseRepository
+      .findByIdAndUpdate(
+        id,
+        {
+          $set: {
+            approvalCoord: { status: 'approved', userId: actor.userId, userName: actor.roleName, date: new Date() },
+            status: newCombined,
+          },
+        },
+        { new: true }
+      )
+      .exec()
+    if (!updated) throw new NotFoundException(`Expense ${id} no encontrado`)
+    this.notificationsService
+      .create({
+        userId: String(expense.createdBy),
+        title: 'Comprobante revisado por Coordinador',
+        message: `Tu comprobante fue aprobado por el coordinador.`,
+        type: 'info',
+        actionUrl: `/mis-rendiciones/${this.expenseReportIdString(expense)}/detalle`,
+      })
+      .catch(() => {})
+    return updated
+  }
+
+  async rejectByCoord(
+    id: string,
+    actor: ExpenseActorContext,
+    reason: string
+  ): Promise<Expense> {
+    if (!reason?.trim()) throw new BadRequestException('El motivo de rechazo es obligatorio.')
+    const expense = await this.loadExpenseOrThrow(id)
+    this.assertCompanyAccess(expense, actor)
+    const updated = await this.expenseRepository
+      .findByIdAndUpdate(
+        id,
+        {
+          $set: {
+            approvalCoord: { status: 'rejected', userId: actor.userId, userName: actor.roleName, date: new Date(), reason },
+            status: 'rejected',
+            rejectionReason: reason,
+          },
+        },
+        { new: true }
+      )
+      .exec()
+    if (!updated) throw new NotFoundException(`Expense ${id} no encontrado`)
+    this.notificationsService
+      .create({
+        userId: String(expense.createdBy),
+        title: 'Comprobante observado por Coordinador',
+        message: `Tu comprobante fue rechazado por el coordinador: ${reason.slice(0, 80)}`,
+        type: 'error',
+        actionUrl: `/mis-rendiciones/${this.expenseReportIdString(expense)}/detalle`,
+      })
+      .catch(() => {})
+    return updated
+  }
+
+  async approveByContabilidad(
+    id: string,
+    actor: ExpenseActorContext
+  ): Promise<Expense> {
+    const expense = await this.loadExpenseOrThrow(id)
+    this.assertCompanyAccess(expense, actor)
+    const existing = expense as any
+    const coordStatus = existing.approvalCoord?.status ?? 'pending'
+    const newCombined = this.computeCombinedStatus(coordStatus, 'approved')
+    const updated = await this.expenseRepository
+      .findByIdAndUpdate(
+        id,
+        {
+          $set: {
+            approvalCont: { status: 'approved', userId: actor.userId, userName: actor.roleName, date: new Date() },
+            status: newCombined,
+          },
+        },
+        { new: true }
+      )
+      .exec()
+    if (!updated) throw new NotFoundException(`Expense ${id} no encontrado`)
+    this.notificationsService
+      .create({
+        userId: String(expense.createdBy),
+        title: 'Comprobante revisado por Contabilidad',
+        message: `Tu comprobante fue aprobado por contabilidad.`,
+        type: 'info',
+        actionUrl: `/mis-rendiciones/${this.expenseReportIdString(expense)}/detalle`,
+      })
+      .catch(() => {})
+    return updated
+  }
+
+  async rejectByContabilidad(
+    id: string,
+    actor: ExpenseActorContext,
+    reason: string
+  ): Promise<Expense> {
+    if (!reason?.trim()) throw new BadRequestException('El motivo de rechazo es obligatorio.')
+    const expense = await this.loadExpenseOrThrow(id)
+    this.assertCompanyAccess(expense, actor)
+    const updated = await this.expenseRepository
+      .findByIdAndUpdate(
+        id,
+        {
+          $set: {
+            approvalCont: { status: 'rejected', userId: actor.userId, userName: actor.roleName, date: new Date(), reason },
+            status: 'rejected',
+            rejectionReason: reason,
+          },
+        },
+        { new: true }
+      )
+      .exec()
+    if (!updated) throw new NotFoundException(`Expense ${id} no encontrado`)
+    this.notificationsService
+      .create({
+        userId: String(expense.createdBy),
+        title: 'Comprobante observado por Contabilidad',
+        message: `Tu comprobante fue rechazado por contabilidad: ${reason.slice(0, 80)}`,
+        type: 'error',
+        actionUrl: `/mis-rendiciones/${this.expenseReportIdString(expense)}/detalle`,
+      })
+      .catch(() => {})
+    return updated
+  }
+
+  async batchApproveByCollaborator(
+    reportId: string,
+    actor: ExpenseActorContext
+  ): Promise<{ approved: number }> {
+    const report = await (this.expenseReportService as any).expenseReportModel
+      ?.findById(reportId)
+      .select('expenseIds clientId userId')
+      .lean()
+      .exec()
+    if (!report) throw new NotFoundException(`Rendición ${reportId} no encontrada`)
+
+    const clientId = this.normalizeClientId(report.clientId)
+    if (actor.roleName !== ROLES.SUPER_ADMIN && actor.clientId && clientId !== actor.clientId) {
+      throw new ForbiddenException('No autorizado')
+    }
+
+    const ids = (report.expenseIds ?? []).map((id: any) => new Types.ObjectId(String(id)))
+    if (ids.length === 0) return { approved: 0 }
+
+    const expenses = await this.expenseRepository
+      .find({ _id: { $in: ids } })
+      .select('approvalCont status')
+      .lean()
+      .exec()
+
+    let count = 0
+    for (const expense of expenses) {
+      const e = expense as any
+      const contStatus = e.approvalCont?.status ?? 'pending'
+      if (contStatus === 'approved' && e.status !== 'approved') {
+        await this.expenseRepository.findByIdAndUpdate(String(e._id), {
+          $set: { status: 'approved' },
+        }).exec()
+        count++
+      }
+    }
+    return { approved: count }
+  }
+
+  async batchApproveByCoord(
+    reportId: string,
+    actor: ExpenseActorContext
+  ): Promise<{ approved: number }> {
+    const { Model: ExpenseModel } = { Model: this.expenseRepository }
+    const report = await (this.expenseReportService as any).expenseReportModel
+      ?.findById(reportId)
+      .select('expenseIds clientId')
+      .lean()
+      .exec()
+    if (!report) throw new NotFoundException(`Rendición ${reportId} no encontrada`)
+
+    const clientId = this.normalizeClientId(report.clientId)
+    if (actor.roleName !== ROLES.SUPER_ADMIN && actor.clientId && clientId !== actor.clientId) {
+      throw new ForbiddenException('No autorizado')
+    }
+
+    const ids = (report.expenseIds ?? []).map((id: any) => new Types.ObjectId(String(id)))
+    if (ids.length === 0) return { approved: 0 }
+
+    const expenses = await this.expenseRepository
+      .find({ _id: { $in: ids } })
+      .select('approvalCoord approvalCont status createdBy expenseReportId')
+      .lean()
+      .exec()
+
+    let count = 0
+    for (const expense of expenses) {
+      const e = expense as any
+      const contStatus = e.approvalCont?.status ?? 'pending'
+      const coordStatus = e.approvalCoord?.status ?? 'pending'
+      if (contStatus === 'approved' && coordStatus !== 'approved') {
+        const newCombined = this.computeCombinedStatus('approved', 'approved')
+        await this.expenseRepository.findByIdAndUpdate(String(e._id), {
+          $set: {
+            approvalCoord: { status: 'approved', userId: actor.userId, userName: actor.roleName, date: new Date() },
+            status: newCombined,
+          },
+        }).exec()
+        count++
+      }
+    }
+    return { approved: count }
+  }
+
+  /**
+   * Gastos directos del colaborador: expenses sin rendición (loose) + expenses de rendiciones isDirecta.
+   */
+  async findMyDirectExpenses(
+    userId: string,
+    clientId: string,
+    filters: { tipo?: string; dateFrom?: string; dateTo?: string; page?: number; limit?: number } = {}
+  ) {
+    const page = Math.max(1, filters.page ?? 1)
+    const limit = Math.min(100, filters.limit ?? 50)
+    const skip = (page - 1) * limit
+
+    // Obtener IDs de rendiciones directas del usuario
+    const ExpenseReport = this.expenseReportService['expenseReportModel'] as any
+    const directReportDocs = await ExpenseReport.find({
+      userId: new Types.ObjectId(userId),
+      clientId: new Types.ObjectId(clientId),
+      isDirecta: true,
+    }).select('_id status').lean().exec()
+    const directReportIds = directReportDocs.map((r: any) => r._id)
+    const directReportStatusMap = new Map<string, string>(
+      directReportDocs.map((r: any) => [String(r._id), r.status])
+    )
+
+    // Buscar expenses: loose (sin rendición) O en rendición directa, del mismo usuario/cliente
+    const match: any = {
+      clientId: new Types.ObjectId(clientId),
+      createdBy: userId,
+      $or: [
+        { expenseReportId: { $exists: false } },
+        { expenseReportId: null },
+        ...(directReportIds.length > 0 ? [{ expenseReportId: { $in: directReportIds } }] : []),
+      ],
+    }
+
+    if (filters.tipo && filters.tipo !== 'all') {
+      match.expenseType = filters.tipo
+    }
+
+    const pipeline: any[] = [{ $match: match }]
+
+    if (filters.dateFrom || filters.dateTo) {
+      pipeline.push({
+        $addFields: {
+          _parsedDate: {
+            $cond: {
+              if: { $regexMatch: { input: { $ifNull: ['$fechaEmision', ''] }, regex: /^\d{2}\/\d{2}\/\d{4}$/ } },
+              then: {
+                $dateFromString: {
+                  dateString: {
+                    $concat: [
+                      { $substr: ['$fechaEmision', 6, 4] }, '-',
+                      { $substr: ['$fechaEmision', 3, 2] }, '-',
+                      { $substr: ['$fechaEmision', 0, 2] },
+                    ],
+                  },
+                },
+              },
+              else: { $dateFromString: { dateString: { $ifNull: ['$fechaEmision', '1970-01-01'] }, onError: new Date('1970-01-01') } },
+            },
+          },
+        },
+      })
+      const dateMatch: any = {}
+      if (filters.dateFrom) dateMatch.$gte = new Date(filters.dateFrom)
+      if (filters.dateTo) { const to = new Date(filters.dateTo); to.setHours(23, 59, 59, 999); dateMatch.$lte = to }
+      pipeline.push({ $match: { _parsedDate: dateMatch } })
+    }
+
+    pipeline.push(
+      { $lookup: { from: 'categories', localField: 'categoryId', foreignField: '_id', as: '_cat' } },
+      { $lookup: { from: 'projects', localField: 'proyectId', foreignField: '_id', as: '_proj' } },
+    )
+
+    const countPipeline = [...pipeline, { $count: 'total' }]
+    const countResult = await this.expenseRepository.aggregate(countPipeline).exec()
+    const total = countResult[0]?.total ?? 0
+
+    pipeline.push({ $sort: { createdAt: -1 } }, { $skip: skip }, { $limit: limit })
+
+    const expenses = await this.expenseRepository.aggregate(pipeline).exec()
+
+    const data = expenses.map((e: any) => ({
+      ...e,
+      _categoryDoc: e._cat?.[0] ?? null,
+      _projectDoc: e._proj?.[0] ?? null,
+      _reportStatus: e.expenseReportId ? (directReportStatusMap.get(String(e.expenseReportId)) ?? null) : null,
+    }))
+
+    return { data, total, page, limit, pages: Math.ceil(total / limit) }
+  }
+
+  /**
+   * Agrupa los expenses loose del usuario en una rendición directa y la envía a contabilidad.
+   */
+  async submitMyDirectExpenses(
+    userId: string,
+    clientId: string,
+    motivo?: string
+  ) {
+    // Buscar expenses loose (sin rendición) del usuario
+    const looseExpenses = await this.expenseRepository.find({
+      clientId: new Types.ObjectId(clientId),
+      createdBy: userId,
+      $or: [{ expenseReportId: { $exists: false } }, { expenseReportId: null }],
+    }).select('_id total').lean().exec()
+
+    if (looseExpenses.length === 0) {
+      throw new BadRequestException('No tienes gastos pendientes de enviar.')
+    }
+
+    const today = new Date()
+    const label = today.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric' })
+    const report = await this.expenseReportService.create(
+      {
+        motivo: motivo?.trim() || `Gastos del ${label}`,
+        isDirecta: true,
+        userId,
+        clientId,
+      } as any,
+      userId,
+      true
+    )
+
+    const reportId = (report as any)._id.toString()
+
+    // Vincular expenses a la rendición
+    await this.expenseRepository.updateMany(
+      { _id: { $in: looseExpenses.map((e: any) => e._id) } },
+      { $set: { expenseReportId: new Types.ObjectId(reportId) } }
+    ).exec()
+
+    // Registrar en la rendición
+    await this.expenseReportService['expenseReportModel'].findByIdAndUpdate(
+      reportId,
+      { $set: { expenseIds: looseExpenses.map((e: any) => e._id) } }
+    ).exec()
+
+    // Enviar a pending_accounting (isDirecta auto-transiciona desde submitted)
+    const updatedReport = await this.expenseReportService.update(reportId, { status: 'submitted' } as any)
+
+    return { reportId, expensesSubmitted: looseExpenses.length, report: updatedReport }
+  }
 }

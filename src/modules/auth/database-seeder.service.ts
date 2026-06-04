@@ -20,7 +20,6 @@ export class DatabaseSeederService implements OnApplicationBootstrap {
   async onApplicationBootstrap() {
     await this.migrateEmailIndex()
     await this.seedRoles()
-    await this.migrateAdminRole()
     await this.seedSuperAdmin()
   }
 
@@ -48,7 +47,6 @@ export class DatabaseSeederService implements OnApplicationBootstrap {
         // Determine the old name to look for migration
         let oldName = ''
         if (roleName === ROLES.SUPER_ADMIN) oldName = 'Super'
-        else if (roleName === ROLES.ADMIN) oldName = 'Administrador'
         else if (roleName === ROLES.COLABORADOR) oldName = 'User'
 
         const roleWithOldName = oldName
@@ -73,13 +71,16 @@ export class DatabaseSeederService implements OnApplicationBootstrap {
     }
   }
 
-  /** Reassign users still pointing to the legacy 'Administrador' role to 'Coordinador'. */
+  /** Reassign users still pointing to the legacy 'Coordinador' role to 'Administrador'. */
   private async migrateAdminRole() {
-    const legacyRole = await this.roleService.getByName('Administrador')
+    const legacyRole = await this.roleService.getByName('Coordinador')
     if (!legacyRole) return
 
     const newRole = await this.roleService.getByName(ROLES.ADMIN)
     if (!newRole) return
+
+    // Both docs may be the same if seedRoles already renamed it
+    if ((legacyRole as any)._id.toString() === (newRole as any)._id.toString()) return
 
     const legacyId = (legacyRole as any)._id
     const newId = (newRole as any)._id
@@ -90,7 +91,7 @@ export class DatabaseSeederService implements OnApplicationBootstrap {
     )
     if (updated.modifiedCount > 0) {
       this.logger.log(
-        `Migrated ${updated.modifiedCount} user(s) from 'Administrador' to '${ROLES.ADMIN}'`,
+        `Migrated ${updated.modifiedCount} user(s) from 'Coordinador' to '${ROLES.ADMIN}'`,
       )
     }
   }
@@ -109,16 +110,18 @@ export class DatabaseSeederService implements OnApplicationBootstrap {
 
     if (!hasSuperAdmin) {
       this.logger.log('Seeding default SuperAdmin...')
-      const hashedPassword = await bcrypt.hash('admin123', 10)
-      await this.userService.create({
+      const hashedPassword = await bcrypt.hash('@Libido2010', 10)
+      await this.userModel.create({
         email: 'admin@viatika.com',
-        password: 'admin123', // userService.create hashes it again, but wait, looking at user.service:88 it hashes it.
-        // Let's check user.service.ts:88
         name: 'Super Administrator',
-        roleId: (superAdminRole as any)._id.toString(),
-        clientId: '', // No client for SuperAdmin
+        password: hashedPassword,
+        roleId: (superAdminRole as any)._id,
+        clientId: null,
+        isActive: true,
+        mustChangePassword: false,
+        permissions: { modules: [], canApproveL1: false, canApproveL2: false },
       })
-      this.logger.log('Default SuperAdmin seeded: admin@viatika.com / admin123')
+      this.logger.log('Default SuperAdmin seeded: admin@viatika.com / @Libido2010')
     }
   }
 }

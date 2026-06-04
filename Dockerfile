@@ -1,17 +1,17 @@
-# Etapa de construcción
+# Build stage
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+RUN npm install
 COPY . .
 RUN npm run build
 
-# Etapa de producción
-FROM node:20-alpine
+# Production stage
+FROM node:20-alpine AS production
 WORKDIR /app
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/node_modules ./node_modules
+ENV NODE_ENV=production
 COPY package*.json ./
-
-EXPOSE 3000
-CMD ["npm", "run", "start:prod"]
+RUN npm install --omit=dev
+COPY --from=builder /app/dist ./dist
+EXPOSE 3016
+CMD ["node", "dist/main"]

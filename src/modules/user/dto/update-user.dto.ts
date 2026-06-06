@@ -44,6 +44,14 @@ export class UpdatePermissionsDto {
   @IsArray()
   @IsOptional()
   categoryIds?: string[]
+
+  @IsString()
+  @IsOptional()
+  categoryProfileId?: string
+
+  @IsArray()
+  @IsOptional()
+  categoryProfileIds?: string[]
 }
 
 export class UpdateUserDto {

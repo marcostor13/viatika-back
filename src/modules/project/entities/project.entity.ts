@@ -8,6 +8,10 @@ export interface ProjectDocument extends Document {
   isActive: boolean
   clientId: Types.ObjectId
   clientName?: string
+  /** Línea de negocio asignada al centro de costo (opcional). */
+  lineaNegocioId?: Types.ObjectId
+  /** Perfil de categoría asignado al centro de costo (opcional). */
+  categoryGroupId?: Types.ObjectId
   /** Suma de montos de solicitudes aprobadas pendientes de pago (Fase 3 — compromiso). */
   committedAdvanceTotal?: number
 }
@@ -36,6 +40,12 @@ export class Project {
 
   @Prop({ type: String })
   clientName?: string
+
+  @Prop({ type: Types.ObjectId, ref: 'LineaNegocio', required: false })
+  lineaNegocioId?: Types.ObjectId
+
+  @Prop({ type: Types.ObjectId, ref: 'CategoryGroup', required: false })
+  categoryGroupId?: Types.ObjectId
 
   @Prop({ type: Number, default: 0 })
   committedAdvanceTotal: number

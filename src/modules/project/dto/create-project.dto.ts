@@ -20,4 +20,12 @@ export class CreateProjectDto {
   @IsString()
   @IsOptional()
   clientName?: string
+
+  @IsString()
+  @IsOptional()
+  lineaNegocioId?: string
+
+  @IsString()
+  @IsOptional()
+  categoryGroupId?: string
 }

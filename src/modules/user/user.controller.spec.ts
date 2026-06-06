@@ -32,7 +32,7 @@ const mockUserService = {
   update: jest.fn().mockResolvedValue({ _id: userId }),
   delete: jest.fn().mockResolvedValue({ deleted: true }),
   resetPassword: jest.fn().mockResolvedValue({ message: 'ok' }),
-  bulkImportUsers: jest.fn().mockResolvedValue({ created: 2, skipped: [], errors: [] }),
+  bulkImportUsers: jest.fn().mockResolvedValue({ created: 2, skipped: [], errors: [], credentials: [] }),
   changeOwnPassword: jest.fn().mockResolvedValue(undefined),
 }
 

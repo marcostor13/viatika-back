@@ -51,6 +51,10 @@ export class CreateExpenseReportDto {
   @IsOptional()
   motivo?: string
 
+  @IsString()
+  @IsOptional()
+  gestion?: string
+
   @IsBoolean()
   @IsOptional()
   isDirecta?: boolean

@@ -49,6 +49,9 @@ export type AuditAction =
   | 'cancel_rendicion'
   | 'cancel_advance'
   | 'update_email_notifications'
+  | 'create_linea_negocio'
+  | 'update_linea_negocio'
+  | 'delete_linea_negocio'
 
 @Schema({ timestamps: true })
 export class AuditLog {

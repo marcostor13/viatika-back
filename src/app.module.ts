@@ -23,6 +23,8 @@ import { PettyCashModule } from './modules/petty-cash/petty-cash.module'
 import { CategoryGroupModule } from './modules/category-group/category-group.module'
 import { ScheduleModule } from '@nestjs/schedule'
 import { SchedulerModule } from './modules/scheduler/scheduler.module'
+import { DashboardModule } from './modules/dashboard/dashboard.module'
+import { LineaNegocioModule } from './modules/linea-negocio/linea-negocio.module'
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -49,6 +51,8 @@ import { SchedulerModule } from './modules/scheduler/scheduler.module'
     CategoryGroupModule,
     ScheduleModule.forRoot(),
     SchedulerModule,
+    DashboardModule,
+    LineaNegocioModule,
   ],
   controllers: [AppController],
   providers: [AppService],

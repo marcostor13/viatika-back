@@ -56,6 +56,28 @@ export class ProjectService {
   }
 
   private toResponse(project: ProjectDocument) {
+    const ln: any = project.lineaNegocioId
+    const lineaNegocioId =
+      ln && typeof ln === 'object' && ln._id
+        ? String(ln._id)
+        : ln
+          ? String(ln)
+          : undefined
+    const lineaNegocio =
+      ln && typeof ln === 'object' && ln.name
+        ? { _id: String(ln._id), name: ln.name, code: ln.code }
+        : undefined
+    const pc: any = project.categoryGroupId
+    const categoryGroupId =
+      pc && typeof pc === 'object' && pc._id
+        ? String(pc._id)
+        : pc
+          ? String(pc)
+          : undefined
+    const categoryGroup =
+      pc && typeof pc === 'object' && pc.name
+        ? { _id: String(pc._id), name: pc.name }
+        : undefined
     return {
       _id: project._id,
       name: project.name,
@@ -63,6 +85,10 @@ export class ProjectService {
       isActive: project.isActive,
       client: project.clientId,
       clientName: project.clientName,
+      lineaNegocioId,
+      lineaNegocio,
+      categoryGroupId,
+      categoryGroup,
       committedAdvanceTotal: project.committedAdvanceTotal ?? 0,
     }
   }
@@ -100,12 +126,21 @@ export class ProjectService {
     const code = createProjectDto.code?.trim() || this.generateCode(createProjectDto.name)
     await this.ensureUniqueCode(code, clientId)
 
+    const lineaNegocioId = createProjectDto.lineaNegocioId?.trim()
+      ? new Types.ObjectId(createProjectDto.lineaNegocioId.trim())
+      : undefined
+    const categoryGroupId = createProjectDto.categoryGroupId?.trim()
+      ? new Types.ObjectId(createProjectDto.categoryGroupId.trim())
+      : undefined
+
     let project: ProjectDocument
     try {
       project = await this.projectModel.create({
         ...createProjectDto,
         code,
         clientId,
+        lineaNegocioId,
+        categoryGroupId,
       })
     } catch (error) {
       this.rethrowDuplicateCodeError(error, code)
@@ -116,13 +151,25 @@ export class ProjectService {
 
   async findAll(
     clientId: string,
-    opts?: { page?: number; limit?: number; search?: string; isActive?: boolean }
+    opts?: {
+      page?: number
+      limit?: number
+      search?: string
+      isActive?: boolean
+      categoryGroupIds?: string[]
+    }
   ) {
     const clientIdObject = new Types.ObjectId(clientId)
     const filter: any = { clientId: clientIdObject }
 
     if (opts?.isActive !== undefined) {
       filter.isActive = opts.isActive
+    }
+    // Filtro por perfiles de categoría (para colaboradores: solo sus centros de costo).
+    if (opts?.categoryGroupIds && opts.categoryGroupIds.length > 0) {
+      filter.categoryGroupId = {
+        $in: opts.categoryGroupIds.map((id) => new Types.ObjectId(id)),
+      }
     }
     if (opts?.search) {
       const re = new RegExp(opts.search, 'i')
@@ -135,7 +182,14 @@ export class ProjectService {
     const skip = (page - 1) * limit
 
     const [projects, total] = await Promise.all([
-      this.projectModel.find(filter).skip(skip).limit(limit).populate('clientId').exec(),
+      this.projectModel
+        .find(filter)
+        .skip(skip)
+        .limit(limit)
+        .populate('clientId')
+        .populate('lineaNegocioId', 'name code')
+        .populate('categoryGroupId', 'name')
+        .exec(),
       this.projectModel.countDocuments(filter).exec(),
     ])
 
@@ -152,6 +206,8 @@ export class ProjectService {
     const project = await this.projectModel
       .findOne({ _id: new Types.ObjectId(id), clientId: clientIdObject })
       .populate('clientId')
+      .populate('lineaNegocioId', 'name code')
+      .populate('categoryGroupId', 'name')
       .exec()
     if (!project) {
       throw new NotFoundException('Proyecto no encontrado')
@@ -172,6 +228,22 @@ export class ProjectService {
       if (!updatePayload.code) {
         delete updatePayload.code
       }
+    }
+
+    // Línea de negocio: cadena vacía/null limpia la asignación; valor válido la actualiza.
+    if ('lineaNegocioId' in updatePayload) {
+      const raw = (updatePayload.lineaNegocioId ?? '').toString().trim()
+      ;(updatePayload as Record<string, unknown>).lineaNegocioId = raw
+        ? new Types.ObjectId(raw)
+        : null
+    }
+
+    // Perfil de categoría: cadena vacía/null limpia la asignación; valor válido la actualiza.
+    if ('categoryGroupId' in updatePayload) {
+      const raw = (updatePayload.categoryGroupId ?? '').toString().trim()
+      ;(updatePayload as Record<string, unknown>).categoryGroupId = raw
+        ? new Types.ObjectId(raw)
+        : null
     }
 
     if (updatePayload.code) {
@@ -198,6 +270,7 @@ export class ProjectService {
           { new: true }
         )
         .populate('clientId')
+        .populate('lineaNegocioId', 'name code')
         .exec()
     } catch (error) {
       this.rethrowDuplicateCodeError(error, updatePayload.code ?? updateProjectDto.code ?? '')

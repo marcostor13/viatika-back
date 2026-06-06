@@ -4,6 +4,7 @@ import { Model, Types } from 'mongoose'
 import { Category, CategoryDocument } from './entities/category.entity'
 import { CreateCategoryDto } from './dto/create-category.dto'
 import { UpdateCategoryDto } from './dto/update-category.dto'
+import { CategoryGroupService } from '../category-group/category-group.service'
 
 export interface IPaginatedResult<T> {
   data: T[]
@@ -38,7 +39,8 @@ export class CategoryService {
 
   constructor(
     @InjectModel(Category.name)
-    private categoryModel: Model<CategoryDocument>
+    private categoryModel: Model<CategoryDocument>,
+    private readonly categoryGroupService: CategoryGroupService
   ) {}
 
   async create(createCategoryDto: CreateCategoryDto): Promise<CategoryDocument> {
@@ -107,7 +109,8 @@ export class CategoryService {
     try {
       const filter: Record<string, unknown> = { clientId: clientIdObject }
 
-      if (filterCategoryIds && filterCategoryIds.length > 0) {
+      // undefined => sin filtro (todas). Array (incluso vacío) => solo esas (vacío = ninguna).
+      if (filterCategoryIds !== undefined) {
         filter._id = { $in: filterCategoryIds.map((id) => new Types.ObjectId(id)) }
       }
 
@@ -205,6 +208,7 @@ export class CategoryService {
       description?: string
       observaciones?: string
       limit?: number | null
+      perfil?: string
     }>,
     clientId: string
   ): Promise<IBulkCreateResult> {
@@ -222,7 +226,7 @@ export class CategoryService {
 
       try {
         const key = this.generateKey(row.name)
-        await this.categoryModel.create({
+        const created = await this.categoryModel.create({
           name: row.name.trim(),
           key,
           cuenta: row.cuenta?.trim() || undefined,
@@ -233,6 +237,22 @@ export class CategoryService {
           clientId: clientIdObject,
         })
         result.created++
+
+        // Asignar al perfil de categoría indicado (si existe).
+        const perfil = row.perfil?.trim()
+        if (perfil) {
+          const ok = await this.categoryGroupService.addCategoryToGroupByName(
+            String(created._id),
+            perfil,
+            clientId
+          )
+          if (!ok) {
+            result.errors.push({
+              row: rowNumber,
+              reason: `Categoría creada, pero el perfil "${perfil}" no existe (asígnalo manualmente)`,
+            })
+          }
+        }
       } catch (error) {
         const reason =
           error?.code === 11000

@@ -212,7 +212,7 @@ export class UserController {
   @UseInterceptors(FileInterceptor('file'))
   async bulkImport(
     @UploadedFile() file: Express.Multer.File,
-    @Body() body: { clientId: string; roleId: string },
+    @Body() body: { clientId: string },
     @Request() req: any
   ) {
     if (!file) throw new Error('No se recibió archivo')
@@ -220,9 +220,14 @@ export class UserController {
     const wb = xlsx.read(file.buffer, { type: 'buffer' })
     const ws = wb.Sheets[wb.SheetNames[0]]
     const rows: any[] = xlsx.utils.sheet_to_json(ws)
-    const clientId = body.clientId || req.user?.clientId
-    const roleId = body.roleId
-    const result = await this.userService.bulkImportUsers(rows, clientId, roleId)
+    // El Administrador solo puede importar en su propia empresa; el
+    // Superadministrador puede indicar la empresa destino vía body.clientId.
+    const role: string = req?.user?.roles?.[0] ?? ''
+    const clientId =
+      role === ROLES.SUPER_ADMIN
+        ? body.clientId || req.user?.clientId
+        : req.user?.clientId
+    const result = await this.userService.bulkImportUsers(rows, clientId)
     this.auditLogService.log({
       userId: req.user._id || req.user.sub,
       userName: req.user.name || req.user.email,
@@ -240,11 +245,31 @@ export class UserController {
   async downloadTemplate(@Request() req: any) {
     const xlsx = await import('xlsx')
     const ws = xlsx.utils.aoa_to_sheet([
-      ['name', 'email', 'password', 'roleId', 'coordinatorId'],
-      ['Juan Pérez', 'juan@empresa.com', 'Pass123!', '', ''],
+      [
+        'nombre', 'email', 'dni', 'codigoEmpleado', 'area', 'cargo',
+        'telefono', 'direccion', 'rol', 'emailCoordinador',
+        'banco', 'numeroCuenta', 'cci', 'tipoCuenta',
+      ],
+      [
+        'Juan Pérez', 'juan@empresa.com', '12345678', 'EMP-001',
+        'Operaciones', 'Analista', '999888777', 'Av. Siempre Viva 123',
+        'Colaborador', 'jefe@empresa.com',
+        'BCP', '1912345678901', '00219112345678901234', 'ahorros',
+      ],
+    ])
+    const help = xlsx.utils.aoa_to_sheet([
+      ['Campo', 'Detalle'],
+      ['nombre', 'Obligatorio'],
+      ['email', 'Obligatorio. Único por empresa'],
+      ['rol', 'Colaborador, Coordinador, Contabilidad o Administrador. Por defecto: Colaborador'],
+      ['emailCoordinador', 'Email de un usuario ya existente que aprobará sus viáticos (opcional)'],
+      ['tipoCuenta', 'ahorros o corriente'],
+      ['Contraseña', 'Se genera automáticamente. Se mostrará al finalizar la importación'],
+      ['Permisos', 'Se asignan automáticamente según el rol'],
     ])
     const wb = xlsx.utils.book_new()
     xlsx.utils.book_append_sheet(wb, ws, 'Usuarios')
+    xlsx.utils.book_append_sheet(wb, help, 'Instrucciones')
     const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' })
     return { file: buffer.toString('base64'), filename: 'plantilla_usuarios.xlsx' }
   }

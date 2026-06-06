@@ -156,6 +156,23 @@ export class ExpenseReportService {
     }
   }
 
+  /**
+   * Genera un código autoincremental único por empresa de forma atómica
+   * usando una colección `counters` (a prueba de concurrencia). Ej: RD-0001.
+   */
+  private async generateDirectaCodigo(clientId: string): Promise<string> {
+    const key = `rendicion-directa:${clientId}`
+    const res: any = await this.expenseReportModel.db
+      .collection('counters')
+      .findOneAndUpdate(
+        { _id: key as any },
+        { $inc: { seq: 1 } },
+        { upsert: true, returnDocument: 'after' }
+      )
+    const seq = (res && (res.seq ?? res.value?.seq)) ?? 1
+    return `RD-${String(seq).padStart(4, '0')}`
+  }
+
   async create(
     createExpenseReportDto: CreateExpenseReportDto,
     createdBy: string,
@@ -165,11 +182,17 @@ export class ExpenseReportService {
     const title =
       createExpenseReportDto.title?.trim() ||
       createExpenseReportDto.motivo?.trim() ||
+      createExpenseReportDto.gestion?.trim() ||
       'Rendición'
+
+    const codigo = isDirecta
+      ? await this.generateDirectaCodigo(createExpenseReportDto.clientId)
+      : undefined
 
     const report = new this.expenseReportModel({
       ...createExpenseReportDto,
       title,
+      codigo,
       userId: new Types.ObjectId(createExpenseReportDto.userId),
       clientId: new Types.ObjectId(createExpenseReportDto.clientId),
       createdBy: new Types.ObjectId(createdBy),

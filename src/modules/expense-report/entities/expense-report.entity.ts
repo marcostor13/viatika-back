@@ -89,6 +89,8 @@ export interface ExpenseReportDocument extends Document {
   approvedBy?: Types.ObjectId
   projectId?: Types.ObjectId
   motivo?: string
+  codigo?: string
+  gestion?: string
   isDirecta?: boolean
   // New fields
   accountNumber?: string
@@ -123,6 +125,14 @@ export class ExpenseReport {
 
   @Prop({ required: false })
   motivo?: string
+
+  /** Código autoincremental único por empresa para rendiciones directas (ej. RD-0001). */
+  @Prop({ required: false })
+  codigo?: string
+
+  /** Gestión que el colaborador realizará para estos gastos (rendición directa). */
+  @Prop({ required: false })
+  gestion?: string
 
   @Prop({ required: false, default: false })
   isDirecta?: boolean
@@ -298,3 +308,9 @@ export class ExpenseReport {
 }
 
 export const ExpenseReportSchema = SchemaFactory.createForClass(ExpenseReport)
+
+// Código de rendición directa: único por empresa (sparse: solo aplica a las que lo tienen).
+ExpenseReportSchema.index(
+  { clientId: 1, codigo: 1 },
+  { unique: true, sparse: true }
+)

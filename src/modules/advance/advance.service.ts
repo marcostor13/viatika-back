@@ -369,6 +369,8 @@ export class AdvanceService {
         : undefined,
       projectId: new Types.ObjectId(dto.projectId!),
       place: dto.place!.trim(),
+      ...(dto.lat != null && { lat: dto.lat }),
+      ...(dto.lng != null && { lng: dto.lng }),
       startDate: new Date(dto.startDate!),
       endDate: new Date(dto.endDate!),
       lines: lineDocs,
@@ -1913,6 +1915,8 @@ export class AdvanceService {
 
     const wasEditing = advance.status === 'pending_l1'
     advance.place = dto.place.trim()
+    if (dto.lat != null) advance.lat = dto.lat
+    if (dto.lng != null) advance.lng = dto.lng
     advance.startDate = new Date(dto.startDate)
     advance.endDate = new Date(dto.endDate)
     advance.projectId = new Types.ObjectId(dto.projectId)

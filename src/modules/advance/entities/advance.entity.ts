@@ -95,6 +95,8 @@ export interface AdvanceDocument extends Document {
   expenseReportId?: Types.ObjectId
   projectId?: Types.ObjectId
   place?: string
+  lat?: number
+  lng?: number
   startDate?: Date
   endDate?: Date
   lines?: AdvanceLineItem[]
@@ -155,6 +157,12 @@ export class Advance {
 
   @Prop({ required: false })
   place?: string
+
+  @Prop({ required: false })
+  lat?: number
+
+  @Prop({ required: false })
+  lng?: number
 
   @Prop({ type: Date, required: false })
   startDate?: Date

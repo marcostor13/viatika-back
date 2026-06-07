@@ -4,21 +4,8 @@ on:
   push:
     branches:
       - main
-      - develop
 
 jobs:
-  deploy-dev:
-    if: github.ref == 'refs/heads/develop'
-    name: Deploy to Coolify (Dev)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger deployment via webhook
-        run: |
-          curl -X POST --silent --show-error --fail \
-            --max-time 30 \
-            "${{ secrets.COOLIFY_WEBHOOK_URL }}" \
-            -H "Authorization: Bearer ${{ secrets.COOLIFY_TOKEN }}"
-
   deploy-prod:
     if: github.ref == 'refs/heads/main'
     name: Deploy to EC2 (Prod)

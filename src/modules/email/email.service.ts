@@ -1013,6 +1013,9 @@ export class EmailService {
       reportTitle: string
       budgetFormatted: string
       expenseCount: number
+      expenseTotalFormatted?: string
+      expenseItems?: Array<{ categoryName: string; description: string; totalFormatted: string }>
+      isDirecta?: boolean
       platformUrl?: string
     }
   ) {

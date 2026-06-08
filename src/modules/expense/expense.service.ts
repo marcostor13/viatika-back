@@ -560,6 +560,30 @@ export class ExpenseService {
     data: ExtractedInvoiceData,
     projectName: string
   ) {
+    // Resolver la rendición vinculada (si existe) una sola vez.
+    let report: any = null
+    if (body.expenseReportId) {
+      try {
+        report = await this.expenseReportService.findOne(body.expenseReportId)
+      } catch (err) {
+        this.logger.warn(
+          `No se pudo obtener la rendición ${body.expenseReportId}:`,
+          err
+        )
+      }
+    }
+
+    // Rendiciones directas: NO se notifica por cada factura. Los involucrados
+    // (Contabilidad incluida) reciben un único aviso cuando el colaborador
+    // ENVÍA la rendición (status submitted → sendRendicionSubmitted en
+    // ExpenseReportService). Evita el spam de un correo por comprobante.
+    if (report?.isDirecta === true) {
+      this.logger.debug(
+        `Rendición directa ${body.expenseReportId}: se omite la notificación por factura (se avisa al enviar la rendición).`
+      )
+      return
+    }
+
     const creatorName = await this.getCreatorName(body.userId)
     let categoryName = 'No especificada'
 
@@ -609,24 +633,13 @@ export class ExpenseService {
       }
     }
 
-    // Resolver dueño de la rendición vinculada (si existe).
-    let reportOwnerId: string | undefined
-    if (body.expenseReportId) {
-      try {
-        const report = await this.expenseReportService.findOne(body.expenseReportId)
-        const ownerRef = (report as any)?.userId
-        reportOwnerId = ownerRef?._id
-          ? String(ownerRef._id)
-          : ownerRef
-            ? String(ownerRef)
-            : undefined
-      } catch (err) {
-        this.logger.warn(
-          `No se pudo obtener la rendición ${body.expenseReportId}:`,
-          err
-        )
-      }
-    }
+    // Dueño de la rendición vinculada (reutiliza el report consultado arriba).
+    const ownerRef = (report as any)?.userId
+    const reportOwnerId: string | undefined = ownerRef?._id
+      ? String(ownerRef._id)
+      : ownerRef
+        ? String(ownerRef)
+        : undefined
 
     // 1) Dueño de la rendición (o creador si no hay rendición).
     const ownerCandidate = reportOwnerId || body.userId || undefined

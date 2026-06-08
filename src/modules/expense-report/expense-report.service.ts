@@ -790,6 +790,19 @@ export class ExpenseReportService {
           await this.computeReportBudgetDisplay(fullyUpdatedReport)
         ).toFixed(2)
         const expenseCount = fullyUpdatedReport.expenseIds?.length ?? 0
+        const expenseDocs = Array.isArray(fullyUpdatedReport.expenseIds)
+          ? fullyUpdatedReport.expenseIds
+          : []
+        const expenseTotal = expenseDocs.reduce(
+          (s: number, e: any) => s + (Number(e?.total) || 0),
+          0
+        )
+        const expenseTotalFormatted = expenseTotal.toFixed(2)
+        const expenseItems = expenseDocs.map((e: any) => ({
+          categoryName: e?.categoryId?.name || 'Gasto',
+          description: e?.description || '',
+          totalFormatted: (Number(e?.total) || 0).toFixed(2),
+        }))
         const platformUrl = this.emailService.buildAppUrl(`/mis-rendiciones/${id}/detalle`)
 
         const emailData = {
@@ -798,6 +811,9 @@ export class ExpenseReportService {
           reportTitle: fullyUpdatedReport.title,
           budgetFormatted,
           expenseCount,
+          expenseTotalFormatted,
+          expenseItems,
+          isDirecta,
           platformUrl,
         }
 

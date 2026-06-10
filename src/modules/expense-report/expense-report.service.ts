@@ -24,6 +24,7 @@ import { NotificationsService } from '../notifications/notifications.service'
 import { UserService } from '../user/user.service'
 import { CreateAffidavitDto } from './dto/create-affidavit.dto'
 import { RegisterReimbursementPaymentDto } from './dto/register-reimbursement-payment.dto'
+import { CreateDirectaDepositDto } from './dto/create-directa-deposit.dto'
 import { AdvanceService } from '../advance/advance.service'
 import { ROLES } from '../auth/enums/roles.enum'
 import { applyFechaEmisionDisplayToExpenses } from '../expense/utils/fecha-emision.util'
@@ -236,6 +237,91 @@ export class ExpenseReportService {
     }
 
     return savedReport
+  }
+
+  /**
+   * Crea una rendición directa con depósito inicial, iniciada por Contabilidad.
+   * El usuario destino recibe el saldo disponible (amount = budget). Reutiliza
+   * `create()` (genera el código RD) y luego adjunta el subdocumento `directaDeposit`.
+   */
+  async createDirectaWithDeposit(
+    dto: CreateDirectaDepositDto,
+    createdBy: string,
+    clientId: string
+  ) {
+    const report = await this.create(
+      {
+        isDirecta: true,
+        userId: dto.userId,
+        clientId,
+        gestion: dto.gestion,
+        budget: dto.amount,
+      } as CreateExpenseReportDto,
+      createdBy,
+      false // no es flujo de colaborador → no notifica admins
+    )
+
+    report.directaDeposit = {
+      amount: dto.amount,
+      scannedAmount: dto.scannedAmount,
+      receiptUrl: dto.receiptUrl,
+      receiptFileName: dto.receiptFileName,
+      receiptMimeType: dto.receiptMimeType,
+      receiptSizeBytes: dto.receiptSizeBytes,
+      depositDate: dto.depositDate,
+      createdBy: new Types.ObjectId(createdBy),
+      createdAt: new Date(),
+    }
+    await report.save()
+
+    try {
+      await this.notificationsService.create({
+        userId: String(dto.userId),
+        title: 'Nueva Rendición Directa con saldo',
+        message: `Contabilidad te asignó una rendición directa (${report.codigo}) con saldo disponible de S/ ${dto.amount.toFixed(2)}.`,
+        type: 'info',
+        actionUrl: `/mis-rendiciones/${report._id}/detalle`,
+      })
+    } catch (error) {
+      console.error(
+        'Error notificando rendición directa con depósito',
+        error
+      )
+    }
+
+    return report
+  }
+
+  /**
+   * Lista las rendiciones directas iniciadas por Contabilidad (con depósito)
+   * de un cliente, calculando total gastado y saldo disponible.
+   */
+  async findDirectaDepositReports(clientId: string) {
+    const reports = await this.expenseReportModel
+      .find({
+        clientId: new Types.ObjectId(clientId),
+        isDirecta: true,
+        directaDeposit: { $exists: true, $ne: null },
+      })
+      .populate('userId', 'name email')
+      .populate('expenseIds', 'total')
+      .sort({ createdAt: -1 })
+      .lean()
+      .exec()
+
+    return reports.map(r => {
+      const expenses = (r.expenseIds as any[]) || []
+      const totalGastado = expenses.reduce(
+        (sum, e) => sum + (Number(e?.total) || 0),
+        0
+      )
+      const deposited = Number(r.directaDeposit?.amount ?? r.budget ?? 0)
+      return {
+        ...r,
+        totalGastado,
+        saldoDisponible: deposited - totalGastado,
+      }
+    })
   }
 
   async createAutoFromViatico(advance: {
@@ -805,6 +891,12 @@ export class ExpenseReportService {
         }))
         const platformUrl = this.emailService.buildAppUrl(`/mis-rendiciones/${id}/detalle`)
 
+        // Rendición directa iniciada por Contabilidad: mostrar depósito y saldo en el correo.
+        const directaDepositAmount = Number((fullyUpdatedReport as any).directaDeposit?.amount ?? 0)
+        const hasDirectaDeposit = isDirecta && directaDepositAmount > 0
+        const depositFormatted = directaDepositAmount.toFixed(2)
+        const saldoFormatted = (directaDepositAmount - expenseTotal).toFixed(2)
+
         const emailData = {
           clientId,
           collaboratorName: creatorName,
@@ -814,6 +906,9 @@ export class ExpenseReportService {
           expenseTotalFormatted,
           expenseItems,
           isDirecta,
+          hasDirectaDeposit,
+          depositFormatted,
+          saldoFormatted,
           platformUrl,
         }
 
@@ -919,6 +1014,10 @@ export class ExpenseReportService {
               reportTitle: emailData.reportTitle,
               budgetFormatted: emailData.budgetFormatted,
               expenseCount: emailData.expenseCount,
+              hasDirectaDeposit: emailData.hasDirectaDeposit,
+              depositFormatted: emailData.depositFormatted,
+              expenseTotalFormatted: emailData.expenseTotalFormatted,
+              saldoFormatted: emailData.saldoFormatted,
               platformUrl: emailData.platformUrl,
             })
           }
@@ -1424,8 +1523,10 @@ export class ExpenseReportService {
       )
       const linkedAdvances = await this.advanceService.findByExpenseReportId(reportId, rawAdvanceIds)
       const activeAdvances = linkedAdvances.filter((a: any) => ['approved', 'paid', 'settled'].includes(a.status))
-      // Si no hay anticipos activos, el colaborador gastó de su propio bolsillo (saldo = 0 - gastos)
-      const advanceTotal = activeAdvances.reduce((s: number, a: any) => s + (Number(a.amount) || 0), 0)
+      // Si no hay anticipos activos, el colaborador gastó de su propio bolsillo (saldo = 0 - gastos).
+      // Excepción: en una rendición directa con depósito de Contabilidad, ese depósito funciona como anticipo.
+      const depositTotal = Number((report as any).directaDeposit?.amount ?? 0)
+      const advanceTotal = activeAdvances.reduce((s: number, a: any) => s + (Number(a.amount) || 0), 0) + depositTotal
       const difference = advanceTotal - expenseTotal
       if (Math.abs(difference) >= 0.01) {
         settlementType = difference > 0 ? 'devolucion' : 'reembolso'
@@ -1598,7 +1699,8 @@ export class ExpenseReportService {
         const activeAdvances = linkedAdvances.filter((a: any) =>
           ['approved', 'paid', 'settled'].includes(a.status)
         )
-        const advanceTotal = activeAdvances.reduce((s: number, a: any) => s + (Number(a.amount) || 0), 0)
+        const depositTotal = Number((report as any).directaDeposit?.amount ?? 0)
+        const advanceTotal = activeAdvances.reduce((s: number, a: any) => s + (Number(a.amount) || 0), 0) + depositTotal
         const difference = advanceTotal - expenseTotal
         if (Math.abs(difference) >= 0.01) {
           effectiveSettlementType = difference > 0 ? 'devolucion' : 'reembolso'

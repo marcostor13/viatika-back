@@ -814,6 +814,10 @@ export class EmailService {
       reportTitle: string
       budgetFormatted: string
       expenseCount: number
+      hasDirectaDeposit?: boolean
+      depositFormatted?: string
+      expenseTotalFormatted?: string
+      saldoFormatted?: string
       platformUrl?: string
     }
   ) {
@@ -1016,6 +1020,9 @@ export class EmailService {
       expenseTotalFormatted?: string
       expenseItems?: Array<{ categoryName: string; description: string; totalFormatted: string }>
       isDirecta?: boolean
+      hasDirectaDeposit?: boolean
+      depositFormatted?: string
+      saldoFormatted?: string
       platformUrl?: string
     }
   ) {

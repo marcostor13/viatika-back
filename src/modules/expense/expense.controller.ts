@@ -45,6 +45,17 @@ export class ExpenseController {
     }
   }
 
+  /** Escanea un comprobante de depósito (imagen por URL) y devuelve solo el monto. */
+  @Post('scan-deposit-amount')
+  @Roles(ROLES.CONTABILIDAD, ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  async scanDepositAmount(@Body() body: { url?: string }) {
+    if (!body?.url) {
+      throw new Error('No se proporcionó la URL del comprobante.')
+    }
+    return this.expenseService.extractDepositAmount(body.url)
+  }
+
   @Post('analyze-image')
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
   @UseGuards(JwtAuthGuard, RolesGuard)

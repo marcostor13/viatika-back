@@ -690,6 +690,20 @@ describe('AdvanceService', () => {
       expect(findCall.coordinatorId).toBeDefined()
     })
 
+    it('filters by own userId for collaborator with viaticos module but no canApproveL1', async () => {
+      const advances = [makeMockAdvance()]
+      mockAdvanceModel.find.mockReturnValue(makeQuery(advances))
+      await service.findForViaticosPage({
+        requesterId: userId,
+        requesterRole: 'Colaborador',
+        requesterPermissions: { canApproveL1: false, modules: ['viaticos'] },
+        clientId,
+      })
+      const findCall = mockAdvanceModel.find.mock.calls[0][0]
+      expect(findCall.coordinatorId).toBeUndefined()
+      expect(findCall.userId).toBeDefined()
+    })
+
     it('applies status filter when provided', async () => {
       mockAdvanceModel.find.mockReturnValue(makeQuery([]))
       await service.findForViaticosPage({

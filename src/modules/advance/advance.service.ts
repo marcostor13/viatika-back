@@ -1171,16 +1171,21 @@ export class AdvanceService {
     const isAdminRole = [ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD].includes(
       opts.requesterRole as ROLES
     )
-    const isCoordinator =
-      !isAdminRole &&
-      (opts.requesterPermissions?.canApproveL1 === true || opts.requesterPermissions?.modules?.includes('viaticos') === true)
+    // Aprobador/coordinador real: solo quien puede aprobar nivel 1.
+    const isApprover =
+      !isAdminRole && opts.requesterPermissions?.canApproveL1 === true
 
     const filter: Record<string, unknown> = {
       clientId: new Types.ObjectId(opts.clientId),
     }
 
-    if (isCoordinator) {
+    if (isApprover) {
+      // Coordinador: ve las solicitudes que le toca aprobar.
       filter['coordinatorId'] = new Types.ObjectId(opts.requesterId)
+    } else if (!isAdminRole) {
+      // Colaborador (con módulo «viaticos» pero sin permiso de aprobar):
+      // solo ve sus propios viáticos, a modo informativo.
+      filter['userId'] = new Types.ObjectId(opts.requesterId)
     }
 
     if (opts.status && opts.status !== 'all') {

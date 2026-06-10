@@ -23,6 +23,7 @@ import { Roles } from '../auth/decorators/roles.decorador'
 import { ROLES } from '../auth/enums/roles.enum'
 import { AuditLogService } from '../audit-log/audit-log.service'
 import { RegisterReimbursementPaymentDto } from './dto/register-reimbursement-payment.dto'
+import { CreateDirectaDepositDto } from './dto/create-directa-deposit.dto'
 
 @Controller('expense-report')
 export class ExpenseReportController {
@@ -75,6 +76,46 @@ export class ExpenseReportController {
       clientId: req.user.clientId,
     })
     return result
+  }
+
+  /** Contabilidad crea una rendición directa con depósito inicial para un colaborador/coordinador. */
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.CONTABILIDAD, ROLES.SUPER_ADMIN)
+  @Post('directa-deposit')
+  async createDirectaDeposit(
+    @Body() dto: CreateDirectaDepositDto,
+    @Request() req: any
+  ) {
+    const createdBy = req.user._id || req.user.sub
+    const clientId = this.resolveClientId(req)
+    if (!Types.ObjectId.isValid(clientId)) {
+      throw new BadRequestException(
+        'Cliente no identificado en la sesión; no se puede crear la rendición directa.'
+      )
+    }
+    const result = await this.expenseReportService.createDirectaWithDeposit(
+      dto,
+      String(createdBy),
+      clientId
+    )
+    await this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email || 'Usuario',
+      action: 'create_rendicion_directa_deposito',
+      module: 'rendiciones',
+      entityId: result?._id?.toString(),
+      details: result.title,
+      clientId: req.user.clientId,
+    })
+    return result
+  }
+
+  /** Lista las rendiciones directas iniciadas por Contabilidad (con depósito). */
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.CONTABILIDAD, ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Get('directas-deposito/client/:clientId')
+  findDirectaDepositReports(@Param('clientId') clientId: string) {
+    return this.expenseReportService.findDirectaDepositReports(clientId)
   }
 
   @UseGuards(AuthGuard('jwt'))

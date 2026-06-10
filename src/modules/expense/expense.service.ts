@@ -844,6 +844,47 @@ export class ExpenseService {
     }
   }
 
+  /**
+   * Escanea un comprobante de depósito/transferencia (imagen por URL) y devuelve
+   * solo el monto depositado. Ligero: no persiste Expense ni valida SUNAT.
+   * Usado por Contabilidad al crear una rendición directa con saldo.
+   */
+  async extractDepositAmount(imageUrl: string): Promise<{ amount: number }> {
+    const prompt =
+      'Eres un asistente que extrae el monto de un comprobante de depósito o ' +
+      'transferencia bancaria. Devuelve EXCLUSIVAMENTE un JSON con la forma ' +
+      '{"amount": <número>} donde amount es el monto total depositado/transferido ' +
+      'como número (sin símbolo de moneda ni separadores de miles, usa punto decimal). ' +
+      'Si no puedes determinarlo, devuelve {"amount": 0}.'
+    try {
+      const completion = await this.openai.chat.completions.create({
+        model: this.visionModel,
+        messages: this.buildVisionMessages(prompt, imageUrl),
+        temperature: 0,
+        max_completion_tokens: 256,
+      })
+      const raw = (completion.choices[0]?.message?.content || '')
+        .replace(/^```json\s*/i, '')
+        .replace(/\s*```$/i, '')
+        .trim()
+      let amount = 0
+      try {
+        const parsed = JSON.parse(raw)
+        amount = Number(parsed?.amount) || 0
+      } catch {
+        const match = raw.match(/[\d,]+\.?\d*/)
+        if (match) amount = Number(match[0].replace(/,/g, '')) || 0
+      }
+      return { amount: amount > 0 ? amount : 0 }
+    } catch (error) {
+      this.logger.error('Error al escanear el comprobante de depósito:', error)
+      throw new HttpException(
+        'No se pudo escanear el comprobante de depósito.',
+        HttpStatus.INTERNAL_SERVER_ERROR
+      )
+    }
+  }
+
   async analyzeImageWithUrl(body: CreateExpenseDto): Promise<Expense> {
     const configSunat = await this.sunatConfigService.findOne(body.clientId)
     const prompt = PROMPT1

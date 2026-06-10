@@ -1568,7 +1568,16 @@ export class AdvanceService {
     const settledAdvances = advances.filter(a => a.status === 'settled')
     const approvedAdvances = advances.filter(a => a.status === 'approved')
 
-    if (paidAdvances.length === 0 && settledAdvances.length === 0 && approvedAdvances.length === 0) {
+    // Rendición directa iniciada por Contabilidad: el depósito funciona como anticipo
+    // (el saldo no gastado lo devuelve el colaborador/coordinador).
+    const depositTotal = Number((report as any).directaDeposit?.amount ?? 0)
+
+    if (
+      paidAdvances.length === 0 &&
+      settledAdvances.length === 0 &&
+      approvedAdvances.length === 0 &&
+      depositTotal <= 0
+    ) {
       return
     }
 
@@ -1579,7 +1588,7 @@ export class AdvanceService {
     const advanceTotal = activeAdvances.reduce(
       (s, a) => s + (Number(a.amount) || 0),
       0
-    )
+    ) + depositTotal
 
     const difference = advanceTotal - expenseTotal
     let type: 'reembolso' | 'devolucion' | 'equilibrado'

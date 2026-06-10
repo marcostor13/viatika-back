@@ -41,9 +41,19 @@
           <span class="detail-label">Título:</span> {{reportTitle}}
         </div>
         {{#if isDirecta}}
+        {{#if hasDirectaDeposit}}
+        <div class="detail-item">
+          <span class="detail-label">Total depositado:</span> S/ {{depositFormatted}}
+        </div>
+        {{/if}}
         <div class="detail-item">
           <span class="detail-label">Total gastado:</span> S/ {{expenseTotalFormatted}}
         </div>
+        {{#if hasDirectaDeposit}}
+        <div class="detail-item">
+          <span class="detail-label">Saldo disponible:</span> S/ {{saldoFormatted}}
+        </div>
+        {{/if}}
         {{else}}
         <div class="detail-item">
           <span class="detail-label">Presupuesto:</span> S/ {{budgetFormatted}}
@@ -70,6 +80,12 @@
           <td>Total gastado</td>
           <td class="cat-amount">S/ {{expenseTotalFormatted}}</td>
         </tr>
+        {{#if hasDirectaDeposit}}
+        <tr class="comprobantes-total">
+          <td>Saldo disponible</td>
+          <td class="cat-amount">S/ {{saldoFormatted}}</td>
+        </tr>
+        {{/if}}
       </table>
       {{/if}}
 

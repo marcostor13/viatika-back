@@ -1558,19 +1558,27 @@ export class AdvanceService {
     }
     const advances = [...byId.values()]
 
+    // Rendición directa iniciada por Contabilidad: el depósito funciona como anticipo
+    // (el saldo no gastado lo devuelve el colaborador/coordinador).
+    const depositTotal = Number((report as any).directaDeposit?.amount ?? 0)
+    const hasDeposit = depositTotal > 0
+
     const expenses = (report.expenseIds as any[]) || []
     const expenseTotal = expenses.reduce((sum, e) => {
-      if (String(e?.status || '').toLowerCase() !== 'approved') return sum
+      // En una rendición directa con depósito todo gasto registrado (no rechazado)
+      // cuenta como gastado; en viáticos solo cuentan los gastos aprobados.
+      const status = String(e?.status || '').toLowerCase()
+      if (hasDeposit) {
+        if (status === 'rejected') return sum
+      } else if (status !== 'approved') {
+        return sum
+      }
       return sum + (Number(e.total) || 0)
     }, 0)
 
     const paidAdvances = advances.filter(a => a.status === 'paid')
     const settledAdvances = advances.filter(a => a.status === 'settled')
     const approvedAdvances = advances.filter(a => a.status === 'approved')
-
-    // Rendición directa iniciada por Contabilidad: el depósito funciona como anticipo
-    // (el saldo no gastado lo devuelve el colaborador/coordinador).
-    const depositTotal = Number((report as any).directaDeposit?.amount ?? 0)
 
     if (
       paidAdvances.length === 0 &&

@@ -269,6 +269,10 @@ export class ExpenseReportService {
       receiptMimeType: dto.receiptMimeType,
       receiptSizeBytes: dto.receiptSizeBytes,
       depositDate: dto.depositDate,
+      operationNumber: dto.operationNumber,
+      operationDate: dto.operationDate,
+      operationTime: dto.operationTime,
+      titular: dto.titular,
       createdBy: new Types.ObjectId(createdBy),
       createdAt: new Date(),
     }

@@ -44,4 +44,21 @@ export class CreateDirectaDepositDto {
   @IsString()
   @IsOptional()
   depositDate?: string
+
+  // Datos extraídos del comprobante (OCR/visión)
+  @IsString()
+  @IsOptional()
+  operationNumber?: string
+
+  @IsString()
+  @IsOptional()
+  operationDate?: string
+
+  @IsString()
+  @IsOptional()
+  operationTime?: string
+
+  @IsString()
+  @IsOptional()
+  titular?: string
 }

@@ -117,10 +117,11 @@ export class DashboardService {
     const anticipoSolicitado = advanceAgg.amount
     const anticipoAprobado = sumStatuses(aStatus, [
       'approved',
+      'partially_paid',
       'paid',
       'settled',
     ])
-    const anticipoPagado = sumStatuses(aStatus, ['paid', 'settled'])
+    const anticipoPagado = sumStatuses(aStatus, ['partially_paid', 'paid', 'settled'])
     const anticipoPendienteAprob = sumStatuses(aStatus, [
       'pending_l1',
       'pending_l2',
@@ -511,7 +512,9 @@ export class DashboardService {
       {
         $group: {
           _id: { $ifNull: ['$status', 'pending_l1'] },
-          amount: { $sum: { $ifNull: ['$amount', 0] } },
+          // Monto desembolsado real: usa paidAmount cuando existe (pagos parciales),
+          // sino el monto solicitado.
+          amount: { $sum: { $ifNull: ['$paidAmount', { $ifNull: ['$amount', 0] }] } },
           count: { $sum: 1 },
         },
       },

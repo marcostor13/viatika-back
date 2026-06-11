@@ -366,6 +366,16 @@ export class ExpenseReportService {
       .exec()
   }
 
+  async findAllByCoordinator(coordinatorId: string, clientId: string) {
+    const userIds = await this.userService.findUserIdsByCoordinator(coordinatorId, clientId)
+    return await this.expenseReportModel
+      .find({ userId: { $in: userIds }, clientId: new Types.ObjectId(clientId) })
+      .populate('userId', 'name email signature bankAccount')
+      .populate('createdBy', 'name email')
+      .sort({ createdAt: -1 })
+      .exec()
+  }
+
   async findAllByUser(userId: string, clientId: string) {
     return await this.expenseReportModel
       .find({

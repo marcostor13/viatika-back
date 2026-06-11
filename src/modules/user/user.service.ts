@@ -288,6 +288,27 @@ export class UserService {
     }))
   }
 
+  /** Lista mínima de trabajadores activos del cliente, para selectores. */
+  async findColaboradoresBasic(clientId: Types.ObjectId | string) {
+    // clientId llega como string desde el token JWT pero se almacena como ObjectId:
+    // se convierte explícitamente (igual que findAll vía ParseObjectIdPipe).
+    const idStr = clientId.toString()
+    if (!Types.ObjectId.isValid(idStr)) return []
+    const cid = new Types.ObjectId(idStr)
+    const users = await this.userModel
+      .find({ clientId: cid, isActive: { $ne: false } })
+      .select('_id name email dni')
+      .sort({ name: 1 })
+      .lean()
+      .exec()
+    return users.map((u: any) => ({
+      _id: u._id,
+      name: u.name,
+      email: u.email,
+      dni: u.dni,
+    }))
+  }
+
   async findAllPaginated(
     clientId: Types.ObjectId,
     opts: {

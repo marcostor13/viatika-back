@@ -45,15 +45,15 @@ export class ExpenseController {
     }
   }
 
-  /** Escanea un comprobante de depósito (imagen por URL) y devuelve solo el monto. */
+  /** Escanea un comprobante de depósito (imagen o PDF, por URL) y extrae monto, fecha, hora, n° de operación y titular. */
   @Post('scan-deposit-amount')
   @Roles(ROLES.CONTABILIDAD, ROLES.SUPER_ADMIN, ROLES.ADMIN)
   @UseGuards(JwtAuthGuard, RolesGuard)
-  async scanDepositAmount(@Body() body: { url?: string }) {
+  async scanDepositAmount(@Body() body: { url?: string; mimeType?: string }) {
     if (!body?.url) {
       throw new Error('No se proporcionó la URL del comprobante.')
     }
-    return this.expenseService.extractDepositAmount(body.url)
+    return this.expenseService.extractDepositInfo(body.url, body.mimeType)
   }
 
   @Post('analyze-image')

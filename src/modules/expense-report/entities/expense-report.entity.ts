@@ -72,6 +72,11 @@ export interface DirectaDepositInfo {
   receiptMimeType?: string
   receiptSizeBytes?: number
   depositDate?: string
+  /** Datos extraídos del comprobante por OCR/visión. */
+  operationNumber?: string
+  operationDate?: string
+  operationTime?: string
+  titular?: string
   createdBy: Types.ObjectId
   createdAt: Date
 }
@@ -256,6 +261,10 @@ export class ExpenseReport {
       receiptMimeType: { type: String },
       receiptSizeBytes: { type: Number },
       depositDate: { type: String },
+      operationNumber: { type: String },
+      operationDate: { type: String },
+      operationTime: { type: String },
+      titular: { type: String },
       createdBy: { type: Types.ObjectId, ref: 'User' },
       createdAt: { type: Date },
       _id: false,

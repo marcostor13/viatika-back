@@ -65,6 +65,15 @@ interface SunatValidationMeta {
   message: string
 }
 
+/** Datos extraídos de un comprobante de depósito/transferencia bancaria. */
+export interface DepositScanResult {
+  amount: number
+  fecha?: string
+  hora?: string
+  operationNumber?: string
+  titular?: string
+}
+
 @Injectable()
 export class ExpenseService {
   private readonly logger = new Logger(ExpenseService.name)
@@ -845,43 +854,107 @@ export class ExpenseService {
   }
 
   /**
-   * Escanea un comprobante de depósito/transferencia (imagen por URL) y devuelve
-   * solo el monto depositado. Ligero: no persiste Expense ni valida SUNAT.
-   * Usado por Contabilidad al crear una rendición directa con saldo.
+   * Escanea un comprobante de depósito/transferencia (imagen o PDF, por URL) y
+   * extrae monto, fecha, hora, número de operación y titular/beneficiario.
+   * Ligero: no persiste Expense ni valida SUNAT. Usado por Contabilidad al crear
+   * una rendición directa con saldo. Soporta los formatos BCP, Scotiabank y BBVA.
    */
-  async extractDepositAmount(imageUrl: string): Promise<{ amount: number }> {
+  async extractDepositInfo(
+    url: string,
+    mimeType?: string
+  ): Promise<DepositScanResult> {
+    const isPdf =
+      (mimeType ? mimeType.toLowerCase().includes('pdf') : false) ||
+      /\.pdf(\?|$)/i.test(url)
+
     const prompt =
-      'Eres un asistente que extrae el monto de un comprobante de depósito o ' +
-      'transferencia bancaria. Devuelve EXCLUSIVAMENTE un JSON con la forma ' +
-      '{"amount": <número>} donde amount es el monto total depositado/transferido ' +
-      'como número (sin símbolo de moneda ni separadores de miles, usa punto decimal). ' +
-      'Si no puedes determinarlo, devuelve {"amount": 0}.'
+      'Eres un asistente que extrae datos de un comprobante de depósito o ' +
+      'transferencia bancaria (BCP, Scotiabank, BBVA u otro). Devuelve ' +
+      'EXCLUSIVAMENTE un JSON con la forma {"amount": <número>, "fecha": ' +
+      '"<dd/mm/aaaa>", "hora": "<hh:mm>", "operationNumber": "<texto>", ' +
+      '"titular": "<texto>"}. amount es el monto depositado/transferido como ' +
+      'número (sin símbolo de moneda ni separadores de miles, punto decimal). ' +
+      'fecha es la fecha de la operación; hora la hora de la operación; ' +
+      'operationNumber el número de operación o constancia; titular el nombre ' +
+      'del beneficiario o titular de la cuenta destino que recibe el dinero. ' +
+      'Si un dato no aparece, usa cadena vacía (o 0 para amount).'
+
     try {
-      const completion = await this.openai.chat.completions.create({
-        model: this.visionModel,
-        messages: this.buildVisionMessages(prompt, imageUrl),
-        temperature: 0,
-        max_completion_tokens: 256,
-      })
-      const raw = (completion.choices[0]?.message?.content || '')
-        .replace(/^```json\s*/i, '')
-        .replace(/\s*```$/i, '')
-        .trim()
-      let amount = 0
-      try {
-        const parsed = JSON.parse(raw)
-        amount = Number(parsed?.amount) || 0
-      } catch {
-        const match = raw.match(/[\d,]+\.?\d*/)
-        if (match) amount = Number(match[0].replace(/,/g, '')) || 0
+      let content: string
+      if (isPdf) {
+        const buffer = await this.fetchUrlAsBuffer(url)
+        const pdfModule = await import('pdf-parse')
+        const pdfParse: (data: Buffer) => Promise<{ text: string }> =
+          (pdfModule as any).default ?? (pdfModule as any)
+        const parsed = await pdfParse(buffer)
+        const text = (parsed.text || '').substring(0, 15000)
+        const completion = await this.openai.chat.completions.create({
+          model: this.visionModel,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: prompt },
+                { type: 'text', text },
+              ],
+            },
+          ],
+          temperature: 0,
+          max_completion_tokens: 512,
+        })
+        content = completion.choices[0]?.message?.content || ''
+      } else {
+        const completion = await this.openai.chat.completions.create({
+          model: this.visionModel,
+          messages: this.buildVisionMessages(prompt, url),
+          temperature: 0,
+          max_completion_tokens: 512,
+        })
+        content = completion.choices[0]?.message?.content || ''
       }
-      return { amount: amount > 0 ? amount : 0 }
+      return this.parseDepositScan(content)
     } catch (error) {
       this.logger.error('Error al escanear el comprobante de depósito:', error)
       throw new HttpException(
         'No se pudo escanear el comprobante de depósito.',
         HttpStatus.INTERNAL_SERVER_ERROR
       )
+    }
+  }
+
+  private async fetchUrlAsBuffer(url: string): Promise<Buffer> {
+    const response = await firstValueFrom(
+      this.httpService.get(url, { responseType: 'arraybuffer' })
+    )
+    return Buffer.from(response.data as ArrayBuffer)
+  }
+
+  private parseDepositScan(raw: string): DepositScanResult {
+    const cleaned = (raw || '')
+      .replace(/^```json\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim()
+    let obj: any = {}
+    try {
+      obj = JSON.parse(cleaned)
+    } catch {
+      const m = cleaned.match(/[\d,]+\.?\d*/)
+      if (m) obj.amount = Number(m[0].replace(/,/g, '')) || 0
+    }
+    let amount =
+      typeof obj.amount === 'string'
+        ? Number(String(obj.amount).replace(/,/g, '')) || 0
+        : Number(obj.amount) || 0
+    const str = (v: unknown) => {
+      const s = v == null ? '' : String(v).trim()
+      return s.length ? s : undefined
+    }
+    return {
+      amount: amount > 0 ? amount : 0,
+      fecha: str(obj.fecha),
+      hora: str(obj.hora),
+      operationNumber: str(obj.operationNumber),
+      titular: str(obj.titular),
     }
   }
 

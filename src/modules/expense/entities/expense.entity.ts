@@ -33,6 +33,8 @@ export interface MobilityRowCoords {
 export interface MobilityRow {
   fecha: string
   total: number
+  /** Proyecto / centro de costo propio de la fila (id). Usado en Rendiciones Directas. */
+  proyectId?: string
   clienteProveedor: string
   origen: string
   origenDepartamento?: string
@@ -188,6 +190,7 @@ export class Expense {
       {
         fecha: { type: String },
         total: { type: Number },
+        proyectId: { type: String },
         clienteProveedor: { type: String },
         origen: { type: String },
         origenDepartamento: { type: String },

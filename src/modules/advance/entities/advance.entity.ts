@@ -6,6 +6,7 @@ export type AdvanceStatus =
   | 'pending_l1'
   | 'pending_l2'
   | 'approved'
+  | 'partially_paid'
   | 'paid'
   | 'settled'
   | 'rejected'
@@ -68,6 +69,32 @@ export interface PaymentInfo {
   paymentReceiptSizeBytes?: number
 }
 
+/**
+ * Pago parcial de un viático. Contabilidad puede registrar varios (incluso en
+ * días distintos) y acumular incluso por encima de lo solicitado. Cada pago
+ * guarda su comprobante y los datos extraídos por OCR/visión.
+ */
+export interface AdvancePayment {
+  amount: number
+  method: 'transferencia_bancaria' | 'efectivo' | 'cheque'
+  bankName?: string
+  accountNumber?: string
+  cci?: string
+  transferDate: Date
+  reference?: string
+  paymentReceiptUrl: string
+  paymentReceiptFileName?: string
+  paymentReceiptMimeType?: string
+  paymentReceiptSizeBytes?: number
+  // Datos extraídos del comprobante (OCR/visión)
+  scannedAmount?: number
+  scannedTitular?: string
+  operationNumber?: string
+  operationDate?: string
+  operationTime?: string
+  createdAt: Date
+}
+
 /** Detalle por categoría — Fase 2 (Funcionalidades.md §2.1) */
 export interface AdvanceLineItem {
   categoryId: Types.ObjectId
@@ -109,6 +136,8 @@ export interface AdvanceDocument extends Document {
   requiredLevels: number
   approvalHistory: ApprovalEntry[]
   paymentInfo?: PaymentInfo
+  payments?: AdvancePayment[]
+  paidAmount?: number
   settlement?: {
     expenseTotal: number
     advanceAmount: number
@@ -220,6 +249,7 @@ export class Advance {
       'pending_l1',
       'pending_l2',
       'approved',
+      'partially_paid',
       'paid',
       'settled',
       'rejected',
@@ -271,6 +301,40 @@ export class Advance {
     },
   })
   paymentInfo?: PaymentInfo
+
+  @Prop({
+    type: [
+      {
+        amount: { type: Number, required: true },
+        method: {
+          type: String,
+          enum: ['transferencia_bancaria', 'efectivo', 'cheque'],
+        },
+        bankName: { type: String },
+        accountNumber: { type: String },
+        cci: { type: String },
+        transferDate: { type: Date },
+        reference: { type: String },
+        paymentReceiptUrl: { type: String, required: true },
+        paymentReceiptFileName: { type: String },
+        paymentReceiptMimeType: { type: String },
+        paymentReceiptSizeBytes: { type: Number },
+        scannedAmount: { type: Number },
+        scannedTitular: { type: String },
+        operationNumber: { type: String },
+        operationDate: { type: String },
+        operationTime: { type: String },
+        createdAt: { type: Date },
+        _id: false,
+      },
+    ],
+    default: undefined,
+  })
+  payments?: AdvancePayment[]
+
+  /** Suma acumulada de los pagos parciales registrados. */
+  @Prop({ type: Number, required: false })
+  paidAmount?: number
 
   /**
    * Se define como objeto plano para evitar conflicto de casteo con la clave

@@ -1217,10 +1217,13 @@ export class AdvanceService {
       .find({
         userId: new Types.ObjectId(userId),
         clientId: new Types.ObjectId(clientId),
-        status: { $in: ['paid', 'settled', 'returned'] },
-        'paymentInfo.paymentReceiptUrl': { $exists: true, $nin: [null, ''] },
+        status: { $in: ['partially_paid', 'paid', 'settled', 'returned'] },
+        $or: [
+          { 'paymentInfo.paymentReceiptUrl': { $exists: true, $nin: [null, ''] } },
+          { 'payments.0': { $exists: true } },
+        ],
       })
-      .select('paymentInfo description expenseReportId createdAt')
+      .select('payments paymentInfo description expenseReportId createdAt')
       .populate('expenseReportId', 'title')
       .sort({ createdAt: -1 })
       .lean()
@@ -1430,10 +1433,32 @@ export class AdvanceService {
     const advance = await this.advanceModel.findById(id)
     if (!advance) throw new NotFoundException(`Viático ${id} no encontrado`)
 
-    if (!['approved', 'pending_l2'].includes(advance.status)) {
+    // Se permite registrar pagos cuando está aprobado/en espera, o seguir
+    // sumando pagos parciales (incluso por encima de lo solicitado) mientras no
+    // se haya liquidado/devuelto/cancelado.
+    if (!['approved', 'pending_l2', 'partially_paid', 'paid'].includes(advance.status)) {
       throw new BadRequestException(
-        `Solo se puede registrar pago de viáticos aprobados o en espera de L2 (estado actual: ${advance.status})`
+        `Solo se puede registrar pago de viáticos aprobados o en proceso de pago (estado actual: ${advance.status})`
       )
+    }
+
+    // Candado: si la rendición vinculada ya fue aprobada/reembolsada/cerrada, no se
+    // pueden seguir agregando pagos (evita desincronizar el presupuesto ya liquidado).
+    if (advance.expenseReportId) {
+      try {
+        const linkedReport = await this.expenseReportService.findOne(
+          advance.expenseReportId.toString()
+        )
+        const lockedStates = ['approved', 'reimbursed', 'closed']
+        if (linkedReport && lockedStates.includes((linkedReport as any).status)) {
+          throw new BadRequestException(
+            `No se puede registrar el pago: la rendición vinculada ya fue liquidada/cerrada (estado: ${(linkedReport as any).status}).`
+          )
+        }
+      } catch (err) {
+        if (err instanceof BadRequestException) throw err
+        // Si no se pudo cargar la rendición, no bloqueamos el pago.
+      }
     }
 
     const canPay =
@@ -1451,7 +1476,17 @@ export class AdvanceService {
       throw new BadRequestException(receiptValidation.reason)
     }
 
-    if (advance.budgetCommitmentRecorded && advance.projectId) {
+    const prevPaid = Number(advance.paidAmount ?? 0)
+    const isFirstPayment = !advance.payments || advance.payments.length === 0
+    const paymentAmount = Number(
+      dto.amount ?? Math.max(advance.amount - prevPaid, 0)
+    )
+    if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) {
+      throw new BadRequestException('El monto del pago debe ser mayor a 0.')
+    }
+
+    // Libera el compromiso presupuestal una sola vez (al primer pago).
+    if (isFirstPayment && advance.budgetCommitmentRecorded && advance.projectId) {
       try {
         await this.projectService.adjustCommittedAdvanceTotal(
           advance.projectId.toString(),
@@ -1465,7 +1500,8 @@ export class AdvanceService {
       advance.budgetCommitmentRecorded = false
     }
 
-    advance.paymentInfo = {
+    const paymentRecord = {
+      amount: paymentAmount,
       method: dto.method,
       bankName: dto.bankName,
       accountNumber: dto.accountNumber,
@@ -1476,10 +1512,37 @@ export class AdvanceService {
       paymentReceiptFileName: dto.paymentReceiptFileName,
       paymentReceiptMimeType: dto.paymentReceiptMimeType,
       paymentReceiptSizeBytes: dto.paymentReceiptSizeBytes,
+      scannedAmount: dto.scannedAmount,
+      scannedTitular: dto.scannedTitular,
+      operationNumber: dto.operationNumber,
+      operationDate: dto.operationDate,
+      operationTime: dto.operationTime,
+      createdAt: new Date(),
     }
-    advance.status = 'paid'
+    advance.payments = [...(advance.payments ?? []), paymentRecord]
+    advance.paidAmount = prevPaid + paymentAmount
 
-    // Auto-crear rendición si el viático no tiene una vinculada
+    // Compatibilidad: paymentInfo conserva el primer pago (usado en documentos/correos).
+    if (isFirstPayment) {
+      advance.paymentInfo = {
+        method: dto.method,
+        bankName: dto.bankName,
+        accountNumber: dto.accountNumber,
+        cci: dto.cci,
+        transferDate: new Date(dto.transferDate),
+        reference: dto.reference,
+        paymentReceiptUrl: dto.paymentReceiptUrl,
+        paymentReceiptFileName: dto.paymentReceiptFileName,
+        paymentReceiptMimeType: dto.paymentReceiptMimeType,
+        paymentReceiptSizeBytes: dto.paymentReceiptSizeBytes,
+      }
+    }
+
+    // Con el primer pago ya puede rendir; queda 'paid' cuando el acumulado
+    // alcanza (o supera) lo solicitado, sino 'partially_paid'.
+    advance.status = advance.paidAmount >= advance.amount ? 'paid' : 'partially_paid'
+
+    // Auto-crear rendición en el primer pago si el viático no tiene una vinculada
     let reportId: string | null = null
     if (!advance.expenseReportId) {
       try {
@@ -1504,10 +1567,14 @@ export class AdvanceService {
     const actionUrl = reportId
       ? `/mis-rendiciones/${reportId}/detalle`
       : '/mis-rendiciones'
+    const fullyPaid = saved.status === 'paid'
+    const message = fullyPaid
+      ? `Se registró el pago de tu viático por S/ ${this.formatViaticoMoney(paymentAmount)} (total pagado S/ ${this.formatViaticoMoney(saved.paidAmount ?? paymentAmount)}). Ya puedes registrar tus gastos.`
+      : `Se registró un pago parcial de tu viático por S/ ${this.formatViaticoMoney(paymentAmount)} (total pagado S/ ${this.formatViaticoMoney(saved.paidAmount ?? paymentAmount)} de S/ ${this.formatViaticoMoney(saved.amount)}). Ya puedes registrar tus gastos.`
     this.notificationsService.create({
       userId: saved.userId.toString(),
-      title: 'Pago de viático registrado',
-      message: `Se registró el pago de tu viático por S/ ${this.formatViaticoMoney(saved.amount)}. Ya puedes registrar tus gastos.`,
+      title: fullyPaid ? 'Pago de viático registrado' : 'Pago parcial de viático registrado',
+      message,
       type: 'success',
       actionUrl,
     }).catch(() => { })
@@ -1577,11 +1644,13 @@ export class AdvanceService {
     }, 0)
 
     const paidAdvances = advances.filter(a => a.status === 'paid')
+    const partiallyPaidAdvances = advances.filter(a => a.status === 'partially_paid')
     const settledAdvances = advances.filter(a => a.status === 'settled')
     const approvedAdvances = advances.filter(a => a.status === 'approved')
 
     if (
       paidAdvances.length === 0 &&
+      partiallyPaidAdvances.length === 0 &&
       settledAdvances.length === 0 &&
       approvedAdvances.length === 0 &&
       depositTotal <= 0
@@ -1589,12 +1658,19 @@ export class AdvanceService {
       return
     }
 
-    // Sumar TODOS los anticipos activos (paid + settled + approved). Tras una reapertura
-    // pueden coexistir 'settled' del ciclo anterior y 'paid' del nuevo viático solicitado;
-    // tomar solo un bucket subestima el advanceTotal y produce un settlement incorrecto.
-    const activeAdvances = [...paidAdvances, ...settledAdvances, ...approvedAdvances]
+    // Sumar TODOS los anticipos activos (paid + partially_paid + settled + approved).
+    // Tras una reapertura pueden coexistir 'settled' del ciclo anterior y 'paid' del
+    // nuevo viático; tomar solo un bucket subestima el advanceTotal. Se usa el monto
+    // realmente pagado (paidAmount) para soportar pagos parciales.
+    const activeAdvances = [
+      ...paidAdvances,
+      ...partiallyPaidAdvances,
+      ...settledAdvances,
+      ...approvedAdvances,
+    ]
+    // Un anticipo 'approved' (aún sin pago) aporta 0; el resto aporta lo realmente pagado.
     const advanceTotal = activeAdvances.reduce(
-      (s, a) => s + (Number(a.amount) || 0),
+      (s, a) => s + (a.status === 'approved' ? 0 : Number(a.paidAmount ?? a.amount) || 0),
       0
     ) + depositTotal
 
@@ -1625,12 +1701,14 @@ export class AdvanceService {
       settledAt,
     }
 
-    if (paidAdvances.length > 0) {
-      for (const adv of paidAdvances) {
-        adv.status = 'settled'
-        adv.settlement = settlementPayload
-        await adv.save()
-      }
+    // Liquida los anticipos efectivamente pagados (total o parcialmente). Un
+    // 'partially_paid' también pasa a 'settled' para que no quede colgado ni
+    // siga aceptando pagos tras la liquidación.
+    const toSettle = [...paidAdvances, ...partiallyPaidAdvances]
+    for (const adv of toSettle) {
+      adv.status = 'settled'
+      adv.settlement = settlementPayload
+      await adv.save()
     }
 
     await this.expenseReportService.updateSettlement(reportId, reportSettlement)
@@ -1701,7 +1779,7 @@ export class AdvanceService {
     const advance = await this.advanceModel.findById(id)
     if (!advance) throw new NotFoundException(`Viático ${id} no encontrado`)
 
-    if (advance.status !== 'settled' && advance.status !== 'paid') {
+    if (!['settled', 'paid', 'partially_paid'].includes(advance.status)) {
       throw new BadRequestException(
         `Solo se puede registrar devolución de viáticos pagados o liquidados`
       )
@@ -2119,10 +2197,11 @@ export class AdvanceService {
       {
         $match: {
           clientId: new Types.ObjectId(clientId),
-          status: { $in: ['approved', 'paid', 'settled'] },
+          status: { $in: ['approved', 'partially_paid', 'paid', 'settled'] },
         },
       },
-      { $group: { _id: null, total: { $sum: '$amount' } } },
+      // Desembolsado real: usa el acumulado pagado (paidAmount) cuando existe.
+      { $group: { _id: null, total: { $sum: { $ifNull: ['$paidAmount', '$amount'] } } } },
     ])
 
     return {

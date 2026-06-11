@@ -93,8 +93,8 @@ export class ExpenseReportService {
     )
     const linkedAdvances = await this.advanceService.findByExpenseReportId(reportId, rawAdvanceIds)
     const total = linkedAdvances
-      .filter((a: any) => ['approved', 'paid', 'settled'].includes(a.status))
-      .reduce((s: number, a: any) => s + (Number(a.amount) || 0), 0)
+      .filter((a: any) => ['approved', 'partially_paid', 'paid', 'settled'].includes(a.status))
+      .reduce((s: number, a: any) => s + (a.status === 'approved' ? 0 : Number(a.paidAmount ?? a.amount) || 0), 0)
     return total > 0 ? total : Number(report.budget) || 0
   }
 
@@ -1428,29 +1428,43 @@ export class ExpenseReportService {
       detailUrl: `${this.emailService.buildAppUrl(`/mis-rendiciones/${String(r._id)}/detalle`)}`,
     }))
 
-    const viaticoDocs = (viaticoRows as any[]).map(row => {
+    const viaticoDocs = (viaticoRows as any[]).flatMap(row => {
       const rep = row.expenseReportId
       const reportTitle =
         typeof rep === 'object' && rep?.title ? rep.title : 'Viáticos'
-      return {
-        kind: 'viatico_pago' as const,
-        advanceId: String(row._id),
-        title: row.description || reportTitle,
-        receiptUrl: row.paymentInfo?.paymentReceiptUrl || '',
-        receiptFileName:
-          row.paymentInfo?.paymentReceiptFileName ||
-          'comprobante-pago-viaticos.pdf',
-        date:
-          row.paymentInfo?.transferDate?.toISOString?.() ||
-          row.createdAt?.toString?.() ||
-          '',
-        expenseReportId:
-          typeof rep === 'object' && rep?._id
-            ? String(rep._id)
-            : rep
-              ? String(rep)
-              : undefined,
-      }
+      const expenseReportId =
+        typeof rep === 'object' && rep?._id
+          ? String(rep._id)
+          : rep
+            ? String(rep)
+            : undefined
+      // Un documento por cada pago parcial; fallback a paymentInfo (legado).
+      const list =
+        Array.isArray(row.payments) && row.payments.length
+          ? row.payments
+          : row.paymentInfo
+            ? [row.paymentInfo]
+            : []
+      const multiple = list.length > 1
+      return list
+        .filter((p: any) => p?.paymentReceiptUrl)
+        .map((p: any, i: number) => ({
+          kind: 'viatico_pago' as const,
+          advanceId: String(row._id),
+          title: multiple
+            ? `${row.description || reportTitle} · Pago ${i + 1}`
+            : row.description || reportTitle,
+          receiptUrl: p.paymentReceiptUrl || '',
+          receiptFileName:
+            p.paymentReceiptFileName ||
+            `comprobante-pago-viaticos${multiple ? `-${i + 1}` : ''}.pdf`,
+          date:
+            p.transferDate?.toISOString?.() ||
+            p.createdAt?.toISOString?.() ||
+            row.createdAt?.toString?.() ||
+            '',
+          expenseReportId,
+        }))
     })
 
     return {
@@ -1526,11 +1540,11 @@ export class ExpenseReportService {
         (x && typeof x === 'object' && '_id' in x) ? String((x as any)._id) : String(x)
       )
       const linkedAdvances = await this.advanceService.findByExpenseReportId(reportId, rawAdvanceIds)
-      const activeAdvances = linkedAdvances.filter((a: any) => ['approved', 'paid', 'settled'].includes(a.status))
+      const activeAdvances = linkedAdvances.filter((a: any) => ['approved', 'partially_paid', 'paid', 'settled'].includes(a.status))
       // Si no hay anticipos activos, el colaborador gastó de su propio bolsillo (saldo = 0 - gastos).
       // Excepción: en una rendición directa con depósito de Contabilidad, ese depósito funciona como anticipo.
       const depositTotal = Number((report as any).directaDeposit?.amount ?? 0)
-      const advanceTotal = activeAdvances.reduce((s: number, a: any) => s + (Number(a.amount) || 0), 0) + depositTotal
+      const advanceTotal = activeAdvances.reduce((s: number, a: any) => s + (a.status === 'approved' ? 0 : Number(a.paidAmount ?? a.amount) || 0), 0) + depositTotal
       const difference = advanceTotal - expenseTotal
       if (Math.abs(difference) >= 0.01) {
         settlementType = difference > 0 ? 'devolucion' : 'reembolso'
@@ -1701,10 +1715,10 @@ export class ExpenseReportService {
         )
         const linkedAdvances = await this.advanceService.findByExpenseReportId(id, rawAdvanceIds)
         const activeAdvances = linkedAdvances.filter((a: any) =>
-          ['approved', 'paid', 'settled'].includes(a.status)
+          ['approved', 'partially_paid', 'paid', 'settled'].includes(a.status)
         )
         const depositTotal = Number((report as any).directaDeposit?.amount ?? 0)
-        const advanceTotal = activeAdvances.reduce((s: number, a: any) => s + (Number(a.amount) || 0), 0) + depositTotal
+        const advanceTotal = activeAdvances.reduce((s: number, a: any) => s + (a.status === 'approved' ? 0 : Number(a.paidAmount ?? a.amount) || 0), 0) + depositTotal
         const difference = advanceTotal - expenseTotal
         if (Math.abs(difference) >= 0.01) {
           effectiveSettlementType = difference > 0 ? 'devolucion' : 'reembolso'
@@ -1839,12 +1853,12 @@ export class ExpenseReportService {
     )
     const linkedAdvances = await this.advanceService.findByExpenseReportId(id, rawAdvanceIds)
     const activeAdvances = linkedAdvances.filter(a =>
-      ['approved', 'paid', 'settled'].includes(a.status)
+      ['approved', 'partially_paid', 'paid', 'settled'].includes(a.status)
     )
     const expenses = (report.expenseIds as any[]) || []
     const expenseTotal = expenses.reduce((s, e) => s + (Number(e.total) || 0), 0)
     const advanceTotal = activeAdvances.length > 0
-      ? activeAdvances.reduce((s, a) => s + (Number(a.amount) || 0), 0)
+      ? activeAdvances.reduce((s, a) => s + (a.status === 'approved' ? 0 : Number(a.paidAmount ?? a.amount) || 0), 0)
       : Number((report as any).budget ?? 0)
     const difference = advanceTotal - expenseTotal
     const notifySettlement = { advanceTotal, expenseTotal, difference, type: 'devolucion' as const, settledAt: new Date() }

@@ -260,6 +260,17 @@ export class UserService {
     }
   }
 
+  async findUserIdsByCoordinator(coordinatorId: string, clientId: string): Promise<Types.ObjectId[]> {
+    const users = await this.userModel
+      .find({
+        coordinatorId: new Types.ObjectId(coordinatorId),
+        clientId: new Types.ObjectId(clientId),
+      })
+      .select('_id')
+      .exec()
+    return users.map(u => u._id as Types.ObjectId)
+  }
+
   async findAll(clientId: Types.ObjectId) {
     const users = await this.userModel
       .find({ clientId })

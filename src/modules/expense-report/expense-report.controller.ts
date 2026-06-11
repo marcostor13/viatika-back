@@ -147,6 +147,9 @@ export class ExpenseReportController {
   @Get('client/:clientId')
   findAllByClient(@Param('clientId') clientId: string, @Request() req: any) {
     const role = req.user.roles[0]
+    if (role === ROLES.COORDINADOR) {
+      return this.expenseReportService.findAllByCoordinator(req.user._id, clientId)
+    }
     const hasRendicionesPermission = req.user.permissions?.modules?.includes('rendiciones')
     const isRestrictedUser = role === ROLES.COLABORADOR && !hasRendicionesPermission
     if (isRestrictedUser) {

@@ -106,6 +106,19 @@ export class UserController {
     return await this.userService.findOne(userId.toString())
   }
 
+  /**
+   * Lista mínima de colaboradores (trabajadores activos) de la empresa del usuario.
+   * Pensada para selectores (p. ej. colaborador por fila en planilla de movilidad):
+   * accesible a cualquier usuario autenticado y acotada a su propio clientId.
+   */
+  @UseGuards(AuthGuard('jwt'))
+  @Get('colaboradores')
+  async findColaboradores(@Req() req: any) {
+    const clientId = req.user?.clientId
+    if (!clientId) return []
+    return this.userService.findColaboradoresBasic(clientId.toString())
+  }
+
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   @Get('details/:id')

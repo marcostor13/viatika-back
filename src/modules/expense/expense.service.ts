@@ -1421,6 +1421,18 @@ export class ExpenseService {
     return expense
   }
 
+  /**
+   * Castea un id (proyectId/categoryId) a ObjectId si viene como string hex de
+   * 24 chars. Evita guardar la referencia como string, que rompe los $lookup /
+   * match estrictos del backend (consola de rendiciones directas, dashboard,
+   * conteo de gastos por proyecto, etc.).
+   */
+  private toObjectIdOrRaw(value: unknown): unknown {
+    return typeof value === 'string' && /^[0-9a-fA-F]{24}$/.test(value)
+      ? new Types.ObjectId(value)
+      : value
+  }
+
   async create(createExpenseDto: CreateExpenseDto): Promise<Expense> {
     const dto = { ...createExpenseDto }
     this.sanitizeFechaEmisionOnWrite(dto)
@@ -1439,6 +1451,11 @@ export class ExpenseService {
 
     const createdExpense = new this.expenseRepository({
       ...dto,
+      // Forzar ObjectId: en este flujo el modelo no castea estos ids por sí solo
+      // (a diferencia de los create tipados), y guardarlos como string rompe los
+      // $lookup/match estrictos del backend.
+      proyectId: this.toObjectIdOrRaw(dto.proyectId),
+      categoryId: this.toObjectIdOrRaw(dto.categoryId),
       clientId: new Types.ObjectId(createExpenseDto.clientId),
       createdBy: createExpenseDto.userId,
     })
@@ -1850,8 +1867,16 @@ export class ExpenseService {
       })
     }
 
+    // Mismo criterio que create(): si la edición trae proyectId/categoryId como
+    // string, forzarlos a ObjectId para no "ensuciar" el tipo al re-guardar.
+    const updateDoc: any = { ...dto }
+    if (updateDoc.proyectId !== undefined)
+      updateDoc.proyectId = this.toObjectIdOrRaw(updateDoc.proyectId)
+    if (updateDoc.categoryId !== undefined)
+      updateDoc.categoryId = this.toObjectIdOrRaw(updateDoc.categoryId)
+
     const updated = await this.expenseRepository
-      .findOneAndUpdate({ _id: expenseIdObject }, dto, {
+      .findOneAndUpdate({ _id: expenseIdObject }, updateDoc, {
         new: true,
       })
       .populate('clientId')

@@ -174,6 +174,21 @@ export class ExpenseReportController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Get('directas/reports/:clientId')
+  findDirectRendicionReports(
+    @Param('clientId') clientId: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('userId') userId?: string,
+  ) {
+    return this.expenseReportService.findDirectRendicionReports(clientId, {
+      dateFrom,
+      dateTo,
+      userId,
+    })
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Get('client/:clientId')
   findAllByClient(@Param('clientId') clientId: string, @Request() req: any) {
     const role = req.user.roles[0]

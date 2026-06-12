@@ -114,6 +114,8 @@ export interface ExpenseReportDocument extends Document {
   codigo?: string
   gestion?: string
   isDirecta?: boolean
+  /** ID del anticipo que consumió el saldo pendiente de esta rendición. */
+  pendingBalanceUsedInAdvanceId?: Types.ObjectId
   // New fields
   accountNumber?: string
   idDocument?: string
@@ -349,6 +351,9 @@ export class ExpenseReport {
     default: [],
   })
   reopenHistory?: ReopenRecord[]
+
+  @Prop({ type: Types.ObjectId, ref: 'Advance', required: false })
+  pendingBalanceUsedInAdvanceId?: Types.ObjectId
 }
 
 export const ExpenseReportSchema = SchemaFactory.createForClass(ExpenseReport)

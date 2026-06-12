@@ -1154,6 +1154,7 @@ export class ExpenseReportService {
       categoryId?: string
       docNumber?: string
       tipo?: string
+      userId?: string
     } = {}
   ) {
     const page = Math.max(1, filters.page ?? 1)
@@ -1161,8 +1162,12 @@ export class ExpenseReportService {
     const skip = (page - 1) * limit
 
     // 1. Obtener IDs de todas las rendiciones directas del cliente
+    const reportQuery: any = { clientId: new Types.ObjectId(clientId), isDirecta: true }
+    if (filters.userId && /^[0-9a-fA-F]{24}$/.test(filters.userId)) {
+      reportQuery.userId = new Types.ObjectId(filters.userId)
+    }
     const directReports = await this.expenseReportModel
-      .find({ clientId: new Types.ObjectId(clientId), isDirecta: true })
+      .find(reportQuery)
       .select('_id userId title motivo')
       .populate('userId', 'name email')
       .lean()
@@ -1314,6 +1319,16 @@ export class ExpenseReportService {
       .findByIdAndUpdate(
         reportId,
         { $addToSet: { advanceIds: new Types.ObjectId(advanceId) } },
+        { new: true }
+      )
+      .exec()
+  }
+
+  async markPendingBalanceUsed(reportId: string, advanceId: string) {
+    return await this.expenseReportModel
+      .findByIdAndUpdate(
+        reportId,
+        { $set: { pendingBalanceUsedInAdvanceId: new Types.ObjectId(advanceId) } },
         { new: true }
       )
       .exec()

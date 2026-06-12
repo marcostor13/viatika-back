@@ -130,6 +130,7 @@ export class ExpenseReportController {
     @Query('categoryId') categoryId?: string,
     @Query('docNumber') docNumber?: string,
     @Query('tipo') tipo?: string,
+    @Query('userId') userId?: string,
   ) {
     return this.expenseReportService.findDirectRendicionExpenses(clientId, {
       page: page ? Number(page) : undefined,
@@ -140,6 +141,7 @@ export class ExpenseReportController {
       categoryId,
       docNumber,
       tipo,
+      userId,
     })
   }
 

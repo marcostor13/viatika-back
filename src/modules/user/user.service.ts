@@ -260,6 +260,17 @@ export class UserService {
     }
   }
 
+  async findUserIdsByCoordinator(coordinatorId: string, clientId: string): Promise<Types.ObjectId[]> {
+    const users = await this.userModel
+      .find({
+        coordinatorId: new Types.ObjectId(coordinatorId),
+        clientId: new Types.ObjectId(clientId),
+      })
+      .select('_id')
+      .exec()
+    return users.map(u => u._id as Types.ObjectId)
+  }
+
   async findAll(clientId: Types.ObjectId) {
     const users = await this.userModel
       .find({ clientId })
@@ -274,6 +285,27 @@ export class UserService {
       client: user.clientId,
       isActive: user.isActive,
       isCompanyAdmin: (user as any).isCompanyAdmin ?? false,
+    }))
+  }
+
+  /** Lista mínima de trabajadores activos del cliente, para selectores. */
+  async findColaboradoresBasic(clientId: Types.ObjectId | string) {
+    // clientId llega como string desde el token JWT pero se almacena como ObjectId:
+    // se convierte explícitamente (igual que findAll vía ParseObjectIdPipe).
+    const idStr = clientId.toString()
+    if (!Types.ObjectId.isValid(idStr)) return []
+    const cid = new Types.ObjectId(idStr)
+    const users = await this.userModel
+      .find({ clientId: cid, isActive: { $ne: false } })
+      .select('_id name email dni')
+      .sort({ name: 1 })
+      .lean()
+      .exec()
+    return users.map((u: any) => ({
+      _id: u._id,
+      name: u.name,
+      email: u.email,
+      dni: u.dni,
     }))
   }
 

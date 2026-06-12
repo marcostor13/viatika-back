@@ -24,6 +24,7 @@ import { NotificationsService } from '../notifications/notifications.service'
 import { UserService } from '../user/user.service'
 import { CreateAffidavitDto } from './dto/create-affidavit.dto'
 import { RegisterReimbursementPaymentDto } from './dto/register-reimbursement-payment.dto'
+import { CreateDirectaDepositDto } from './dto/create-directa-deposit.dto'
 import { AdvanceService } from '../advance/advance.service'
 import { ROLES } from '../auth/enums/roles.enum'
 import { applyFechaEmisionDisplayToExpenses } from '../expense/utils/fecha-emision.util'
@@ -92,8 +93,8 @@ export class ExpenseReportService {
     )
     const linkedAdvances = await this.advanceService.findByExpenseReportId(reportId, rawAdvanceIds)
     const total = linkedAdvances
-      .filter((a: any) => ['approved', 'paid', 'settled'].includes(a.status))
-      .reduce((s: number, a: any) => s + (Number(a.amount) || 0), 0)
+      .filter((a: any) => ['approved', 'partially_paid', 'paid', 'settled'].includes(a.status))
+      .reduce((s: number, a: any) => s + (a.status === 'approved' ? 0 : Number(a.paidAmount ?? a.amount) || 0), 0)
     return total > 0 ? total : Number(report.budget) || 0
   }
 
@@ -238,6 +239,95 @@ export class ExpenseReportService {
     return savedReport
   }
 
+  /**
+   * Crea una rendición directa con depósito inicial, iniciada por Contabilidad.
+   * El usuario destino recibe el saldo disponible (amount = budget). Reutiliza
+   * `create()` (genera el código RD) y luego adjunta el subdocumento `directaDeposit`.
+   */
+  async createDirectaWithDeposit(
+    dto: CreateDirectaDepositDto,
+    createdBy: string,
+    clientId: string
+  ) {
+    const report = await this.create(
+      {
+        isDirecta: true,
+        userId: dto.userId,
+        clientId,
+        gestion: dto.gestion,
+        budget: dto.amount,
+      } as CreateExpenseReportDto,
+      createdBy,
+      false // no es flujo de colaborador → no notifica admins
+    )
+
+    report.directaDeposit = {
+      amount: dto.amount,
+      scannedAmount: dto.scannedAmount,
+      receiptUrl: dto.receiptUrl,
+      receiptFileName: dto.receiptFileName,
+      receiptMimeType: dto.receiptMimeType,
+      receiptSizeBytes: dto.receiptSizeBytes,
+      depositDate: dto.depositDate,
+      operationNumber: dto.operationNumber,
+      operationDate: dto.operationDate,
+      operationTime: dto.operationTime,
+      titular: dto.titular,
+      createdBy: new Types.ObjectId(createdBy),
+      createdAt: new Date(),
+    }
+    await report.save()
+
+    try {
+      await this.notificationsService.create({
+        userId: String(dto.userId),
+        title: 'Nueva Rendición Directa con saldo',
+        message: `Contabilidad te asignó una rendición directa (${report.codigo}) con saldo disponible de S/ ${dto.amount.toFixed(2)}.`,
+        type: 'info',
+        actionUrl: `/mis-rendiciones/${report._id}/detalle`,
+      })
+    } catch (error) {
+      console.error(
+        'Error notificando rendición directa con depósito',
+        error
+      )
+    }
+
+    return report
+  }
+
+  /**
+   * Lista las rendiciones directas iniciadas por Contabilidad (con depósito)
+   * de un cliente, calculando total gastado y saldo disponible.
+   */
+  async findDirectaDepositReports(clientId: string) {
+    const reports = await this.expenseReportModel
+      .find({
+        clientId: new Types.ObjectId(clientId),
+        isDirecta: true,
+        directaDeposit: { $exists: true, $ne: null },
+      })
+      .populate('userId', 'name email')
+      .populate('expenseIds', 'total')
+      .sort({ createdAt: -1 })
+      .lean()
+      .exec()
+
+    return reports.map(r => {
+      const expenses = (r.expenseIds as any[]) || []
+      const totalGastado = expenses.reduce(
+        (sum, e) => sum + (Number(e?.total) || 0),
+        0
+      )
+      const deposited = Number(r.directaDeposit?.amount ?? r.budget ?? 0)
+      return {
+        ...r,
+        totalGastado,
+        saldoDisponible: deposited - totalGastado,
+      }
+    })
+  }
+
   async createAutoFromViatico(advance: {
     _id: unknown
     userId: Types.ObjectId
@@ -270,6 +360,16 @@ export class ExpenseReportService {
   async findAllByClient(clientId: string) {
     return await this.expenseReportModel
       .find({ clientId: new Types.ObjectId(clientId) })
+      .populate('userId', 'name email signature bankAccount')
+      .populate('createdBy', 'name email')
+      .sort({ createdAt: -1 })
+      .exec()
+  }
+
+  async findAllByCoordinator(coordinatorId: string, clientId: string) {
+    const userIds = await this.userService.findUserIdsByCoordinator(coordinatorId, clientId)
+    return await this.expenseReportModel
+      .find({ userId: { $in: userIds }, clientId: new Types.ObjectId(clientId) })
       .populate('userId', 'name email signature bankAccount')
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 })
@@ -790,7 +890,26 @@ export class ExpenseReportService {
           await this.computeReportBudgetDisplay(fullyUpdatedReport)
         ).toFixed(2)
         const expenseCount = fullyUpdatedReport.expenseIds?.length ?? 0
+        const expenseDocs = Array.isArray(fullyUpdatedReport.expenseIds)
+          ? fullyUpdatedReport.expenseIds
+          : []
+        const expenseTotal = expenseDocs.reduce(
+          (s: number, e: any) => s + (Number(e?.total) || 0),
+          0
+        )
+        const expenseTotalFormatted = expenseTotal.toFixed(2)
+        const expenseItems = expenseDocs.map((e: any) => ({
+          categoryName: e?.categoryId?.name || 'Gasto',
+          description: e?.description || '',
+          totalFormatted: (Number(e?.total) || 0).toFixed(2),
+        }))
         const platformUrl = this.emailService.buildAppUrl(`/mis-rendiciones/${id}/detalle`)
+
+        // Rendición directa iniciada por Contabilidad: mostrar depósito y saldo en el correo.
+        const directaDepositAmount = Number((fullyUpdatedReport as any).directaDeposit?.amount ?? 0)
+        const hasDirectaDeposit = isDirecta && directaDepositAmount > 0
+        const depositFormatted = directaDepositAmount.toFixed(2)
+        const saldoFormatted = (directaDepositAmount - expenseTotal).toFixed(2)
 
         const emailData = {
           clientId,
@@ -798,6 +917,12 @@ export class ExpenseReportService {
           reportTitle: fullyUpdatedReport.title,
           budgetFormatted,
           expenseCount,
+          expenseTotalFormatted,
+          expenseItems,
+          isDirecta,
+          hasDirectaDeposit,
+          depositFormatted,
+          saldoFormatted,
           platformUrl,
         }
 
@@ -903,6 +1028,10 @@ export class ExpenseReportService {
               reportTitle: emailData.reportTitle,
               budgetFormatted: emailData.budgetFormatted,
               expenseCount: emailData.expenseCount,
+              hasDirectaDeposit: emailData.hasDirectaDeposit,
+              depositFormatted: emailData.depositFormatted,
+              expenseTotalFormatted: emailData.expenseTotalFormatted,
+              saldoFormatted: emailData.saldoFormatted,
               platformUrl: emailData.platformUrl,
             })
           }
@@ -1025,6 +1154,7 @@ export class ExpenseReportService {
       categoryId?: string
       docNumber?: string
       tipo?: string
+      userId?: string
     } = {}
   ) {
     const page = Math.max(1, filters.page ?? 1)
@@ -1032,8 +1162,12 @@ export class ExpenseReportService {
     const skip = (page - 1) * limit
 
     // 1. Obtener IDs de todas las rendiciones directas del cliente
+    const reportQuery: any = { clientId: new Types.ObjectId(clientId), isDirecta: true }
+    if (filters.userId && /^[0-9a-fA-F]{24}$/.test(filters.userId)) {
+      reportQuery.userId = new Types.ObjectId(filters.userId)
+    }
     const directReports = await this.expenseReportModel
-      .find({ clientId: new Types.ObjectId(clientId), isDirecta: true })
+      .find(reportQuery)
       .select('_id userId title motivo')
       .populate('userId', 'name email')
       .lean()
@@ -1069,14 +1203,19 @@ export class ExpenseReportService {
       matchStage.expenseType = filters.tipo
     }
 
-    // Filtro proyecto
+    // Filtro proyecto — el id puede estar guardado como ObjectId (PM, CC, otros)
+    // o como string (facturas), así que se filtra por ambas representaciones.
     if (filters.projectId && /^[0-9a-fA-F]{24}$/.test(filters.projectId)) {
-      matchStage.proyectId = new Types.ObjectId(filters.projectId)
+      matchStage.proyectId = {
+        $in: [filters.projectId, new Types.ObjectId(filters.projectId)],
+      }
     }
 
-    // Filtro categoría
+    // Filtro categoría — idem (ObjectId o string)
     if (filters.categoryId && /^[0-9a-fA-F]{24}$/.test(filters.categoryId)) {
-      matchStage.categoryId = new Types.ObjectId(filters.categoryId)
+      matchStage.categoryId = {
+        $in: [filters.categoryId, new Types.ObjectId(filters.categoryId)],
+      }
     }
 
     pipeline.push({ $match: matchStage })
@@ -1120,10 +1259,21 @@ export class ExpenseReportService {
     const countResult = await this.expenseModel.aggregate(countPipeline).exec()
     const total = countResult[0]?.total ?? 0
 
-    // Lookup proyecto y categoría
+    // Lookup proyecto y categoría.
+    // proyectId/categoryId pueden venir guardados como ObjectId (PM, CC, otros)
+    // o como string (facturas creadas por el flujo de invoices). El $lookup es
+    // estricto en tipos, así que primero se normaliza a ObjectId con $convert:
+    // un ObjectId pasa intacto, un string hex válido se castea, y cualquier otro
+    // caso queda en null (el lookup no resuelve, igual que antes).
     pipeline.push(
-      { $lookup: { from: 'projects', localField: 'proyectId', foreignField: '_id', as: '_project' } },
-      { $lookup: { from: 'categories', localField: 'categoryId', foreignField: '_id', as: '_category' } },
+      {
+        $addFields: {
+          _proyectOid: { $convert: { input: '$proyectId', to: 'objectId', onError: null, onNull: null } },
+          _categoryOid: { $convert: { input: '$categoryId', to: 'objectId', onError: null, onNull: null } },
+        },
+      },
+      { $lookup: { from: 'projects', localField: '_proyectOid', foreignField: '_id', as: '_project' } },
+      { $lookup: { from: 'categories', localField: '_categoryOid', foreignField: '_id', as: '_category' } },
       { $addFields: { _projectDoc: { $arrayElemAt: ['$_project', 0] }, _categoryDoc: { $arrayElemAt: ['$_category', 0] } } },
       { $sort: { createdAt: -1 } },
       { $skip: skip },
@@ -1169,6 +1319,16 @@ export class ExpenseReportService {
       .findByIdAndUpdate(
         reportId,
         { $addToSet: { advanceIds: new Types.ObjectId(advanceId) } },
+        { new: true }
+      )
+      .exec()
+  }
+
+  async markPendingBalanceUsed(reportId: string, advanceId: string) {
+    return await this.expenseReportModel
+      .findByIdAndUpdate(
+        reportId,
+        { $set: { pendingBalanceUsedInAdvanceId: new Types.ObjectId(advanceId) } },
         { new: true }
       )
       .exec()
@@ -1309,29 +1469,43 @@ export class ExpenseReportService {
       detailUrl: `${this.emailService.buildAppUrl(`/mis-rendiciones/${String(r._id)}/detalle`)}`,
     }))
 
-    const viaticoDocs = (viaticoRows as any[]).map(row => {
+    const viaticoDocs = (viaticoRows as any[]).flatMap(row => {
       const rep = row.expenseReportId
       const reportTitle =
         typeof rep === 'object' && rep?.title ? rep.title : 'Viáticos'
-      return {
-        kind: 'viatico_pago' as const,
-        advanceId: String(row._id),
-        title: row.description || reportTitle,
-        receiptUrl: row.paymentInfo?.paymentReceiptUrl || '',
-        receiptFileName:
-          row.paymentInfo?.paymentReceiptFileName ||
-          'comprobante-pago-viaticos.pdf',
-        date:
-          row.paymentInfo?.transferDate?.toISOString?.() ||
-          row.createdAt?.toString?.() ||
-          '',
-        expenseReportId:
-          typeof rep === 'object' && rep?._id
-            ? String(rep._id)
-            : rep
-              ? String(rep)
-              : undefined,
-      }
+      const expenseReportId =
+        typeof rep === 'object' && rep?._id
+          ? String(rep._id)
+          : rep
+            ? String(rep)
+            : undefined
+      // Un documento por cada pago parcial; fallback a paymentInfo (legado).
+      const list =
+        Array.isArray(row.payments) && row.payments.length
+          ? row.payments
+          : row.paymentInfo
+            ? [row.paymentInfo]
+            : []
+      const multiple = list.length > 1
+      return list
+        .filter((p: any) => p?.paymentReceiptUrl)
+        .map((p: any, i: number) => ({
+          kind: 'viatico_pago' as const,
+          advanceId: String(row._id),
+          title: multiple
+            ? `${row.description || reportTitle} · Pago ${i + 1}`
+            : row.description || reportTitle,
+          receiptUrl: p.paymentReceiptUrl || '',
+          receiptFileName:
+            p.paymentReceiptFileName ||
+            `comprobante-pago-viaticos${multiple ? `-${i + 1}` : ''}.pdf`,
+          date:
+            p.transferDate?.toISOString?.() ||
+            p.createdAt?.toISOString?.() ||
+            row.createdAt?.toString?.() ||
+            '',
+          expenseReportId,
+        }))
     })
 
     return {
@@ -1407,9 +1581,11 @@ export class ExpenseReportService {
         (x && typeof x === 'object' && '_id' in x) ? String((x as any)._id) : String(x)
       )
       const linkedAdvances = await this.advanceService.findByExpenseReportId(reportId, rawAdvanceIds)
-      const activeAdvances = linkedAdvances.filter((a: any) => ['approved', 'paid', 'settled'].includes(a.status))
-      // Si no hay anticipos activos, el colaborador gastó de su propio bolsillo (saldo = 0 - gastos)
-      const advanceTotal = activeAdvances.reduce((s: number, a: any) => s + (Number(a.amount) || 0), 0)
+      const activeAdvances = linkedAdvances.filter((a: any) => ['approved', 'partially_paid', 'paid', 'settled'].includes(a.status))
+      // Si no hay anticipos activos, el colaborador gastó de su propio bolsillo (saldo = 0 - gastos).
+      // Excepción: en una rendición directa con depósito de Contabilidad, ese depósito funciona como anticipo.
+      const depositTotal = Number((report as any).directaDeposit?.amount ?? 0)
+      const advanceTotal = activeAdvances.reduce((s: number, a: any) => s + (a.status === 'approved' ? 0 : Number(a.paidAmount ?? a.amount) || 0), 0) + depositTotal
       const difference = advanceTotal - expenseTotal
       if (Math.abs(difference) >= 0.01) {
         settlementType = difference > 0 ? 'devolucion' : 'reembolso'
@@ -1580,9 +1756,10 @@ export class ExpenseReportService {
         )
         const linkedAdvances = await this.advanceService.findByExpenseReportId(id, rawAdvanceIds)
         const activeAdvances = linkedAdvances.filter((a: any) =>
-          ['approved', 'paid', 'settled'].includes(a.status)
+          ['approved', 'partially_paid', 'paid', 'settled'].includes(a.status)
         )
-        const advanceTotal = activeAdvances.reduce((s: number, a: any) => s + (Number(a.amount) || 0), 0)
+        const depositTotal = Number((report as any).directaDeposit?.amount ?? 0)
+        const advanceTotal = activeAdvances.reduce((s: number, a: any) => s + (a.status === 'approved' ? 0 : Number(a.paidAmount ?? a.amount) || 0), 0) + depositTotal
         const difference = advanceTotal - expenseTotal
         if (Math.abs(difference) >= 0.01) {
           effectiveSettlementType = difference > 0 ? 'devolucion' : 'reembolso'
@@ -1717,12 +1894,12 @@ export class ExpenseReportService {
     )
     const linkedAdvances = await this.advanceService.findByExpenseReportId(id, rawAdvanceIds)
     const activeAdvances = linkedAdvances.filter(a =>
-      ['approved', 'paid', 'settled'].includes(a.status)
+      ['approved', 'partially_paid', 'paid', 'settled'].includes(a.status)
     )
     const expenses = (report.expenseIds as any[]) || []
     const expenseTotal = expenses.reduce((s, e) => s + (Number(e.total) || 0), 0)
     const advanceTotal = activeAdvances.length > 0
-      ? activeAdvances.reduce((s, a) => s + (Number(a.amount) || 0), 0)
+      ? activeAdvances.reduce((s, a) => s + (a.status === 'approved' ? 0 : Number(a.paidAmount ?? a.amount) || 0), 0)
       : Number((report as any).budget ?? 0)
     const difference = advanceTotal - expenseTotal
     const notifySettlement = { advanceTotal, expenseTotal, difference, type: 'devolucion' as const, settledAt: new Date() }

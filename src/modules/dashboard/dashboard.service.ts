@@ -45,6 +45,7 @@ export class DashboardService {
       advanceMonthly,
       pendingReturns,
       reportByStatus,
+      topLocations,
     ] = await Promise.all([
       this.aggregateExpenseTotals(clientOid, query, range.from, range.to),
       this.aggregateExpenseTotals(
@@ -64,6 +65,7 @@ export class DashboardService {
       this.aggregateAdvanceMonthly(clientOid, query, range),
       this.aggregatePendingReturns(clientOid, query, range),
       this.aggregateReportByStatus(clientOid, query, range),
+      this.aggregateTopLocations(clientOid, query, range),
     ])
 
     const totalGasto = expenseAgg.amount
@@ -115,10 +117,11 @@ export class DashboardService {
     const anticipoSolicitado = advanceAgg.amount
     const anticipoAprobado = sumStatuses(aStatus, [
       'approved',
+      'partially_paid',
       'paid',
       'settled',
     ])
-    const anticipoPagado = sumStatuses(aStatus, ['paid', 'settled'])
+    const anticipoPagado = sumStatuses(aStatus, ['partially_paid', 'paid', 'settled'])
     const anticipoPendienteAprob = sumStatuses(aStatus, [
       'pending_l1',
       'pending_l2',
@@ -176,6 +179,7 @@ export class DashboardService {
       topCategories,
       topProjects,
       topCollaborators,
+      topLocations,
       monthlySeries: this.mergeMonthly(expenseMonthly, advanceMonthly),
     }
   }
@@ -508,7 +512,9 @@ export class DashboardService {
       {
         $group: {
           _id: { $ifNull: ['$status', 'pending_l1'] },
-          amount: { $sum: { $ifNull: ['$amount', 0] } },
+          // Monto desembolsado real: usa paidAmount cuando existe (pagos parciales),
+          // sino el monto solicitado.
+          amount: { $sum: { $ifNull: ['$paidAmount', { $ifNull: ['$amount', 0] }] } },
           count: { $sum: 1 },
         },
       },
@@ -575,6 +581,45 @@ export class DashboardService {
       },
       { $project: { _id: 0, status: '$_id', count: 1, budget: 1 } },
       { $sort: { count: -1 } },
+    ])
+    return res
+  }
+
+  // ─── Location aggregations ────────────────────────────────────────────────
+
+  private async aggregateTopLocations(
+    clientId: Types.ObjectId,
+    query: DashboardQueryDto,
+    range: ResolvedRange
+  ): Promise<
+    { place: string; count: number; amount: number; lat?: number; lng?: number }[]
+  > {
+    const baseMatch = this.advanceMatch(clientId, query, range.from, range.to)
+    const match = { ...baseMatch, place: { $exists: true, $nin: [null, ''] } }
+    const res = await this.advanceModel.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: { $toLower: { $trim: { input: '$place' } } },
+          place: { $first: '$place' },
+          count: { $sum: 1 },
+          amount: { $sum: { $ifNull: ['$amount', 0] } },
+          lat: { $first: '$lat' },
+          lng: { $first: '$lng' },
+        },
+      },
+      { $sort: { amount: -1 } },
+      { $limit: 20 },
+      {
+        $project: {
+          _id: 0,
+          place: 1,
+          count: 1,
+          amount: 1,
+          lat: 1,
+          lng: 1,
+        },
+      },
     ])
     return res
   }

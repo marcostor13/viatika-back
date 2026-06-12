@@ -43,7 +43,7 @@ export class UserController {
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   @Post()
   async create(@Body() createdUserDto: CreateUserDto, @Request() req: any) {
     const result = await this.userService.create(createdUserDto)
@@ -104,6 +104,19 @@ export class UserController {
   async getMe(@Request() req: any) {
     const userId = req.user._id || req.user.sub
     return await this.userService.findOne(userId.toString())
+  }
+
+  /**
+   * Lista mínima de colaboradores (trabajadores activos) de la empresa del usuario.
+   * Pensada para selectores (p. ej. colaborador por fila en planilla de movilidad):
+   * accesible a cualquier usuario autenticado y acotada a su propio clientId.
+   */
+  @UseGuards(AuthGuard('jwt'))
+  @Get('colaboradores')
+  async findColaboradores(@Req() req: any) {
+    const clientId = req.user?.clientId
+    if (!clientId) return []
+    return this.userService.findColaboradoresBasic(clientId.toString())
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
@@ -181,14 +194,14 @@ export class UserController {
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   @Delete(':id')
   async delete(@Param('id', ParseObjectIdPipe) id: Types.ObjectId) {
     return await this.userService.delete(id.toString())
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   @Post(':id/reset-password')
   async resetPassword(
     @Param('id', ParseObjectIdPipe) id: Types.ObjectId,
@@ -207,7 +220,7 @@ export class UserController {
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   @Post('bulk-import')
   @UseInterceptors(FileInterceptor('file'))
   async bulkImport(
@@ -240,7 +253,7 @@ export class UserController {
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   @Get('bulk-import/template')
   async downloadTemplate(@Request() req: any) {
     const xlsx = await import('xlsx')

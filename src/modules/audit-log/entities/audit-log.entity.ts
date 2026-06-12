@@ -12,6 +12,7 @@ export type AuditAction =
   | 'create_mobility_sheet'
   | 'create_other_expense'
   | 'create_rendicion'
+  | 'create_rendicion_directa_deposito'
   | 'delete_rendicion'
   | 'update_rendicion_status'
   | 'reopen_rendicion'

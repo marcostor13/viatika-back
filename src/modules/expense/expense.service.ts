@@ -65,6 +65,15 @@ interface SunatValidationMeta {
   message: string
 }
 
+/** Datos extraídos de un comprobante de depósito/transferencia bancaria. */
+export interface DepositScanResult {
+  amount: number
+  fecha?: string
+  hora?: string
+  operationNumber?: string
+  titular?: string
+}
+
 @Injectable()
 export class ExpenseService {
   private readonly logger = new Logger(ExpenseService.name)
@@ -560,6 +569,30 @@ export class ExpenseService {
     data: ExtractedInvoiceData,
     projectName: string
   ) {
+    // Resolver la rendición vinculada (si existe) una sola vez.
+    let report: any = null
+    if (body.expenseReportId) {
+      try {
+        report = await this.expenseReportService.findOne(body.expenseReportId)
+      } catch (err) {
+        this.logger.warn(
+          `No se pudo obtener la rendición ${body.expenseReportId}:`,
+          err
+        )
+      }
+    }
+
+    // Rendiciones directas: NO se notifica por cada factura. Los involucrados
+    // (Contabilidad incluida) reciben un único aviso cuando el colaborador
+    // ENVÍA la rendición (status submitted → sendRendicionSubmitted en
+    // ExpenseReportService). Evita el spam de un correo por comprobante.
+    if (report?.isDirecta === true) {
+      this.logger.debug(
+        `Rendición directa ${body.expenseReportId}: se omite la notificación por factura (se avisa al enviar la rendición).`
+      )
+      return
+    }
+
     const creatorName = await this.getCreatorName(body.userId)
     let categoryName = 'No especificada'
 
@@ -609,24 +642,13 @@ export class ExpenseService {
       }
     }
 
-    // Resolver dueño de la rendición vinculada (si existe).
-    let reportOwnerId: string | undefined
-    if (body.expenseReportId) {
-      try {
-        const report = await this.expenseReportService.findOne(body.expenseReportId)
-        const ownerRef = (report as any)?.userId
-        reportOwnerId = ownerRef?._id
-          ? String(ownerRef._id)
-          : ownerRef
-            ? String(ownerRef)
-            : undefined
-      } catch (err) {
-        this.logger.warn(
-          `No se pudo obtener la rendición ${body.expenseReportId}:`,
-          err
-        )
-      }
-    }
+    // Dueño de la rendición vinculada (reutiliza el report consultado arriba).
+    const ownerRef = (report as any)?.userId
+    const reportOwnerId: string | undefined = ownerRef?._id
+      ? String(ownerRef._id)
+      : ownerRef
+        ? String(ownerRef)
+        : undefined
 
     // 1) Dueño de la rendición (o creador si no hay rendición).
     const ownerCandidate = reportOwnerId || body.userId || undefined
@@ -828,6 +850,111 @@ export class ExpenseService {
         details: sunatData,
         message: 'Error al validar el comprobante.',
       }
+    }
+  }
+
+  /**
+   * Escanea un comprobante de depósito/transferencia (imagen o PDF, por URL) y
+   * extrae monto, fecha, hora, número de operación y titular/beneficiario.
+   * Ligero: no persiste Expense ni valida SUNAT. Usado por Contabilidad al crear
+   * una rendición directa con saldo. Soporta los formatos BCP, Scotiabank y BBVA.
+   */
+  async extractDepositInfo(
+    url: string,
+    mimeType?: string
+  ): Promise<DepositScanResult> {
+    const isPdf =
+      (mimeType ? mimeType.toLowerCase().includes('pdf') : false) ||
+      /\.pdf(\?|$)/i.test(url)
+
+    const prompt =
+      'Eres un asistente que extrae datos de un comprobante de depósito o ' +
+      'transferencia bancaria (BCP, Scotiabank, BBVA u otro). Devuelve ' +
+      'EXCLUSIVAMENTE un JSON con la forma {"amount": <número>, "fecha": ' +
+      '"<dd/mm/aaaa>", "hora": "<hh:mm>", "operationNumber": "<texto>", ' +
+      '"titular": "<texto>"}. amount es el monto depositado/transferido como ' +
+      'número (sin símbolo de moneda ni separadores de miles, punto decimal). ' +
+      'fecha es la fecha de la operación; hora la hora de la operación; ' +
+      'operationNumber el número de operación o constancia; titular el nombre ' +
+      'del beneficiario o titular de la cuenta destino que recibe el dinero. ' +
+      'Si un dato no aparece, usa cadena vacía (o 0 para amount).'
+
+    try {
+      let content: string
+      if (isPdf) {
+        const buffer = await this.fetchUrlAsBuffer(url)
+        const pdfModule = await import('pdf-parse')
+        const pdfParse: (data: Buffer) => Promise<{ text: string }> =
+          (pdfModule as any).default ?? (pdfModule as any)
+        const parsed = await pdfParse(buffer)
+        const text = (parsed.text || '').substring(0, 15000)
+        const completion = await this.openai.chat.completions.create({
+          model: this.visionModel,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: prompt },
+                { type: 'text', text },
+              ],
+            },
+          ],
+          temperature: 0,
+          max_completion_tokens: 512,
+        })
+        content = completion.choices[0]?.message?.content || ''
+      } else {
+        const completion = await this.openai.chat.completions.create({
+          model: this.visionModel,
+          messages: this.buildVisionMessages(prompt, url),
+          temperature: 0,
+          max_completion_tokens: 512,
+        })
+        content = completion.choices[0]?.message?.content || ''
+      }
+      return this.parseDepositScan(content)
+    } catch (error) {
+      this.logger.error('Error al escanear el comprobante de depósito:', error)
+      throw new HttpException(
+        'No se pudo escanear el comprobante de depósito.',
+        HttpStatus.INTERNAL_SERVER_ERROR
+      )
+    }
+  }
+
+  private async fetchUrlAsBuffer(url: string): Promise<Buffer> {
+    const response = await firstValueFrom(
+      this.httpService.get(url, { responseType: 'arraybuffer' })
+    )
+    return Buffer.from(response.data as ArrayBuffer)
+  }
+
+  private parseDepositScan(raw: string): DepositScanResult {
+    const cleaned = (raw || '')
+      .replace(/^```json\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim()
+    let obj: any = {}
+    try {
+      obj = JSON.parse(cleaned)
+    } catch {
+      const m = cleaned.match(/[\d,]+\.?\d*/)
+      if (m) obj.amount = Number(m[0].replace(/,/g, '')) || 0
+    }
+    let amount =
+      typeof obj.amount === 'string'
+        ? Number(String(obj.amount).replace(/,/g, '')) || 0
+        : Number(obj.amount) || 0
+    const str = (v: unknown) => {
+      const s = v == null ? '' : String(v).trim()
+      return s.length ? s : undefined
+    }
+    return {
+      amount: amount > 0 ? amount : 0,
+      fecha: str(obj.fecha),
+      hora: str(obj.hora),
+      operationNumber: str(obj.operationNumber),
+      titular: str(obj.titular),
     }
   }
 
@@ -1294,6 +1421,18 @@ export class ExpenseService {
     return expense
   }
 
+  /**
+   * Castea un id (proyectId/categoryId) a ObjectId si viene como string hex de
+   * 24 chars. Evita guardar la referencia como string, que rompe los $lookup /
+   * match estrictos del backend (consola de rendiciones directas, dashboard,
+   * conteo de gastos por proyecto, etc.).
+   */
+  private toObjectIdOrRaw(value: unknown): unknown {
+    return typeof value === 'string' && /^[0-9a-fA-F]{24}$/.test(value)
+      ? new Types.ObjectId(value)
+      : value
+  }
+
   async create(createExpenseDto: CreateExpenseDto): Promise<Expense> {
     const dto = { ...createExpenseDto }
     this.sanitizeFechaEmisionOnWrite(dto)
@@ -1312,6 +1451,11 @@ export class ExpenseService {
 
     const createdExpense = new this.expenseRepository({
       ...dto,
+      // Forzar ObjectId: en este flujo el modelo no castea estos ids por sí solo
+      // (a diferencia de los create tipados), y guardarlos como string rompe los
+      // $lookup/match estrictos del backend.
+      proyectId: this.toObjectIdOrRaw(dto.proyectId),
+      categoryId: this.toObjectIdOrRaw(dto.categoryId),
       clientId: new Types.ObjectId(createExpenseDto.clientId),
       createdBy: createExpenseDto.userId,
     })
@@ -1723,8 +1867,16 @@ export class ExpenseService {
       })
     }
 
+    // Mismo criterio que create(): si la edición trae proyectId/categoryId como
+    // string, forzarlos a ObjectId para no "ensuciar" el tipo al re-guardar.
+    const updateDoc: any = { ...dto }
+    if (updateDoc.proyectId !== undefined)
+      updateDoc.proyectId = this.toObjectIdOrRaw(updateDoc.proyectId)
+    if (updateDoc.categoryId !== undefined)
+      updateDoc.categoryId = this.toObjectIdOrRaw(updateDoc.categoryId)
+
     const updated = await this.expenseRepository
-      .findOneAndUpdate({ _id: expenseIdObject }, dto, {
+      .findOneAndUpdate({ _id: expenseIdObject }, updateDoc, {
         new: true,
       })
       .populate('clientId')

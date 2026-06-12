@@ -45,7 +45,7 @@ export class SchedulerService {
       const advances = await this.advanceModel
         .find({
           clientId: client._id,
-          status: { $in: ['approved', 'paid'] },
+          status: { $in: ['approved', 'partially_paid', 'paid'] },
           startDate: { $exists: true, $ne: null },
           endDate: { $exists: true, $gte: todayStart },
         })

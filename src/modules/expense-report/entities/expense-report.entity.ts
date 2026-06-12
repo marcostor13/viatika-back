@@ -59,6 +59,28 @@ export interface ExpenseReportAffidavit {
   generatedAt: Date
 }
 
+/**
+ * Depósito inicial de una rendición directa iniciada por Contabilidad.
+ * Su presencia marca el origen "contabilidad" y habilita el saldo disponible.
+ * El `amount` confirmado se replica en `budget` para reutilizar el cálculo de saldo.
+ */
+export interface DirectaDepositInfo {
+  amount: number
+  scannedAmount?: number
+  receiptUrl: string
+  receiptFileName?: string
+  receiptMimeType?: string
+  receiptSizeBytes?: number
+  depositDate?: string
+  /** Datos extraídos del comprobante por OCR/visión. */
+  operationNumber?: string
+  operationDate?: string
+  operationTime?: string
+  titular?: string
+  createdBy: Types.ObjectId
+  createdAt: Date
+}
+
 /** Comprobante del pago de reembolso al colaborador (Fase 6) — mismo criterio que pago de anticipo */
 export interface ReimbursementPaymentInfo {
   method: 'transferencia_bancaria' | 'efectivo' | 'cheque'
@@ -92,6 +114,8 @@ export interface ExpenseReportDocument extends Document {
   codigo?: string
   gestion?: string
   isDirecta?: boolean
+  /** ID del anticipo que consumió el saldo pendiente de esta rendición. */
+  pendingBalanceUsedInAdvanceId?: Types.ObjectId
   // New fields
   accountNumber?: string
   idDocument?: string
@@ -101,6 +125,7 @@ export interface ExpenseReportDocument extends Document {
   endDate?: Date
   items?: ExpenseReportBudgetItem[]
   affidavits?: ExpenseReportAffidavit[]
+  directaDeposit?: DirectaDepositInfo
   reimbursementPaymentInfo?: ReimbursementPaymentInfo
   reimbursedAt?: Date
   reimbursementAccountingNotifiedAt?: Date
@@ -231,6 +256,27 @@ export class ExpenseReport {
 
   @Prop({
     type: {
+      amount: { type: Number, required: true },
+      scannedAmount: { type: Number },
+      receiptUrl: { type: String, required: true },
+      receiptFileName: { type: String },
+      receiptMimeType: { type: String },
+      receiptSizeBytes: { type: Number },
+      depositDate: { type: String },
+      operationNumber: { type: String },
+      operationDate: { type: String },
+      operationTime: { type: String },
+      titular: { type: String },
+      createdBy: { type: Types.ObjectId, ref: 'User' },
+      createdAt: { type: Date },
+      _id: false,
+    },
+    required: false,
+  })
+  directaDeposit?: DirectaDepositInfo
+
+  @Prop({
+    type: {
       method: {
         type: String,
         enum: ['transferencia_bancaria', 'efectivo', 'cheque'],
@@ -305,6 +351,9 @@ export class ExpenseReport {
     default: [],
   })
   reopenHistory?: ReopenRecord[]
+
+  @Prop({ type: Types.ObjectId, ref: 'Advance', required: false })
+  pendingBalanceUsedInAdvanceId?: Types.ObjectId
 }
 
 export const ExpenseReportSchema = SchemaFactory.createForClass(ExpenseReport)

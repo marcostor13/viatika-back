@@ -114,8 +114,15 @@ export interface ExpenseReportDocument extends Document {
   codigo?: string
   gestion?: string
   isDirecta?: boolean
+  isCajaChica?: boolean
   /** ID del anticipo que consumió el saldo pendiente de esta rendición. */
   pendingBalanceUsedInAdvanceId?: Types.ObjectId
+  /** ID de la rendición directa que consumió el saldo pendiente de esta rendición directa. */
+  pendingBalanceUsedInRendicionId?: Types.ObjectId
+  /** ID de la rendición directa de origen (cuando esta fue creada usando el saldo de otra). */
+  pendingBalanceFromReportId?: Types.ObjectId
+  /** Monto heredado desde la rendición de origen. */
+  pendingBalanceAmount?: number
   // New fields
   accountNumber?: string
   idDocument?: string
@@ -161,6 +168,9 @@ export class ExpenseReport {
 
   @Prop({ required: false, default: false })
   isDirecta?: boolean
+
+  @Prop({ required: false, default: false })
+  isCajaChica?: boolean
 
   @Prop({ required: true, type: Types.ObjectId, ref: 'User' })
   userId: Types.ObjectId
@@ -354,6 +364,15 @@ export class ExpenseReport {
 
   @Prop({ type: Types.ObjectId, ref: 'Advance', required: false })
   pendingBalanceUsedInAdvanceId?: Types.ObjectId
+
+  @Prop({ type: Types.ObjectId, ref: 'ExpenseReport', required: false })
+  pendingBalanceUsedInRendicionId?: Types.ObjectId
+
+  @Prop({ type: Types.ObjectId, ref: 'ExpenseReport', required: false })
+  pendingBalanceFromReportId?: Types.ObjectId
+
+  @Prop({ required: false })
+  pendingBalanceAmount?: number
 }
 
 export const ExpenseReportSchema = SchemaFactory.createForClass(ExpenseReport)

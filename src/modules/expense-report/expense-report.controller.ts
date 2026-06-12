@@ -61,6 +61,16 @@ export class ExpenseReportController {
       }
     }
 
+    // Rendición caja chica: requiere permiso 'caja-chica' si quien crea es colaborador
+    if (createExpenseReportDto.isCajaChica && isCollaborator) {
+      const hasPermission = req.user.permissions?.modules?.includes('caja-chica')
+      if (!hasPermission) {
+        throw new ForbiddenException(
+          'No tienes permiso para crear rendiciones de caja chica.'
+        )
+      }
+    }
+
     const result = await this.expenseReportService.create(
       createExpenseReportDto,
       createdBy,
@@ -76,6 +86,24 @@ export class ExpenseReportController {
       clientId: req.user.clientId,
     })
     return result
+  }
+
+  /** Colaborador: sus propias rendiciones de caja chica. */
+  @UseGuards(AuthGuard('jwt'))
+  @Get('my/caja-chica')
+  findMyCajaChica(@Request() req: any) {
+    const userId = String(req.user._id || req.user.sub)
+    const clientId = this.resolveClientId(req)
+    return this.expenseReportService.findMyCajaChica(userId, clientId)
+  }
+
+  /** Contabilidad: todas las rendiciones de caja chica disponibles del cliente. */
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.CONTABILIDAD, ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Get('caja-chica/available')
+  findAllCajaChicaAvailable(@Request() req: any) {
+    const clientId = this.resolveClientId(req)
+    return this.expenseReportService.findAllCajaChicaAvailable(clientId)
   }
 
   /** Contabilidad crea una rendición directa con depósito inicial para un colaborador/coordinador. */

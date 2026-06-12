@@ -180,6 +180,7 @@ export class ExpenseReportService {
     isCollaborator = false
   ) {
     const isDirecta = createExpenseReportDto.isDirecta === true
+    const isCajaChica = createExpenseReportDto.isCajaChica === true
     const title =
       createExpenseReportDto.title?.trim() ||
       createExpenseReportDto.motivo?.trim() ||
@@ -200,11 +201,26 @@ export class ExpenseReportService {
       projectId: createExpenseReportDto.projectId
         ? new Types.ObjectId(createExpenseReportDto.projectId)
         : undefined,
-      // Rendición directa: siempre open desde el inicio, sin paso de solicitud
-      status: isDirecta ? 'open' : isCollaborator ? 'solicited' : 'open',
+      pendingBalanceFromReportId: createExpenseReportDto.pendingBalanceFromReportId
+        ? new Types.ObjectId(createExpenseReportDto.pendingBalanceFromReportId)
+        : undefined,
+      // Rendición directa creada desde saldo: el presupuesto es el saldo heredado
+      budget: createExpenseReportDto.pendingBalanceFromReportId
+        ? (createExpenseReportDto.pendingBalanceAmount ?? 0)
+        : (createExpenseReportDto.budget ?? 0),
+      // Caja chica y rendición directa: siempre open desde el inicio
+      status: isDirecta || isCajaChica ? 'open' : isCollaborator ? 'solicited' : 'open',
       expenseIds: [],
     })
     const savedReport = await report.save()
+
+    // Si se creó desde saldo de otra rendición directa, marcar la rendición fuente
+    if (createExpenseReportDto.pendingBalanceFromReportId) {
+      await this.expenseReportModel.findByIdAndUpdate(
+        createExpenseReportDto.pendingBalanceFromReportId,
+        { pendingBalanceUsedInRendicionId: savedReport._id }
+      ).exec()
+    }
 
     console.log(
       `[ExpenseReportService] Created report: ${savedReport._id}. isCollaborator: ${isCollaborator}, isDirecta: ${isDirecta}`
@@ -359,7 +375,7 @@ export class ExpenseReportService {
 
   async findAllByClient(clientId: string) {
     return await this.expenseReportModel
-      .find({ clientId: new Types.ObjectId(clientId) })
+      .find({ clientId: new Types.ObjectId(clientId), isCajaChica: { $ne: true } })
       .populate('userId', 'name email signature bankAccount')
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 })
@@ -369,7 +385,7 @@ export class ExpenseReportService {
   async findAllByCoordinator(coordinatorId: string, clientId: string) {
     const userIds = await this.userService.findUserIdsByCoordinator(coordinatorId, clientId)
     return await this.expenseReportModel
-      .find({ userId: { $in: userIds }, clientId: new Types.ObjectId(clientId) })
+      .find({ userId: { $in: userIds }, clientId: new Types.ObjectId(clientId), isCajaChica: { $ne: true } })
       .populate('userId', 'name email signature bankAccount')
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 })
@@ -381,9 +397,34 @@ export class ExpenseReportService {
       .find({
         userId: new Types.ObjectId(userId),
         clientId: new Types.ObjectId(clientId),
+        isCajaChica: { $ne: true },
       })
       .populate('expenseIds', 'total')
       .populate('createdBy', 'name email')
+      .sort({ createdAt: -1 })
+      .exec()
+  }
+
+  async findMyCajaChica(userId: string, clientId: string) {
+    return await this.expenseReportModel
+      .find({
+        userId: new Types.ObjectId(userId),
+        clientId: new Types.ObjectId(clientId),
+        isCajaChica: true,
+      })
+      .populate('expenseIds', 'total expenseType fechaEmision proveedor')
+      .sort({ createdAt: -1 })
+      .exec()
+  }
+
+  async findAllCajaChicaAvailable(clientId: string) {
+    return await this.expenseReportModel
+      .find({
+        clientId: new Types.ObjectId(clientId),
+        isCajaChica: true,
+      })
+      .populate('userId', 'name email')
+      .populate('expenseIds', 'total expenseType fechaEmision proveedor')
       .sort({ createdAt: -1 })
       .exec()
   }
@@ -1132,11 +1173,13 @@ export class ExpenseReportService {
   }
 
   async remove(id: string) {
-    const deleted = await this.expenseReportModel.findByIdAndDelete(id).exec()
-    if (!deleted) {
-      throw new NotFoundException(`Expense report with ID ${id} not found`)
+    const report = await this.expenseReportModel.findById(id).lean().exec()
+    if (!report) throw new NotFoundException(`Expense report with ID ${id} not found`)
+    if (report.expenseIds && report.expenseIds.length > 0) {
+      throw new BadRequestException('No se puede eliminar una rendición que ya tiene documentos adjuntos')
     }
-    return deleted
+    await this.expenseReportModel.findByIdAndDelete(id).exec()
+    return report
   }
 
   /**

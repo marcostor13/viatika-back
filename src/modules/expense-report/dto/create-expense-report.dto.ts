@@ -59,6 +59,10 @@ export class CreateExpenseReportDto {
   @IsOptional()
   isDirecta?: boolean
 
+  @IsBoolean()
+  @IsOptional()
+  isCajaChica?: boolean
+
   @IsMongoId()
   userId: string // The collaborator assigned
 
@@ -103,4 +107,12 @@ export class CreateExpenseReportDto {
   @ValidateNested({ each: true })
   @Type(() => BudgetItemDto)
   items?: BudgetItemDto[]
+
+  @IsMongoId()
+  @IsOptional()
+  pendingBalanceFromReportId?: string
+
+  @IsNumber()
+  @IsOptional()
+  pendingBalanceAmount?: number
 }

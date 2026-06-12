@@ -254,6 +254,7 @@ export class DashboardService {
     const effectiveDate = { $ifNull: ['$createdAt', { $toDate: '$_id' }] }
     const match: Record<string, any> = {
       clientId,
+      isCajaChica: { $ne: true },
       $expr: {
         $and: [
           { $gte: [effectiveDate, from] },

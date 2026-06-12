@@ -1198,14 +1198,19 @@ export class ExpenseReportService {
       matchStage.expenseType = filters.tipo
     }
 
-    // Filtro proyecto
+    // Filtro proyecto — el id puede estar guardado como ObjectId (PM, CC, otros)
+    // o como string (facturas), así que se filtra por ambas representaciones.
     if (filters.projectId && /^[0-9a-fA-F]{24}$/.test(filters.projectId)) {
-      matchStage.proyectId = new Types.ObjectId(filters.projectId)
+      matchStage.proyectId = {
+        $in: [filters.projectId, new Types.ObjectId(filters.projectId)],
+      }
     }
 
-    // Filtro categoría
+    // Filtro categoría — idem (ObjectId o string)
     if (filters.categoryId && /^[0-9a-fA-F]{24}$/.test(filters.categoryId)) {
-      matchStage.categoryId = new Types.ObjectId(filters.categoryId)
+      matchStage.categoryId = {
+        $in: [filters.categoryId, new Types.ObjectId(filters.categoryId)],
+      }
     }
 
     pipeline.push({ $match: matchStage })
@@ -1249,10 +1254,21 @@ export class ExpenseReportService {
     const countResult = await this.expenseModel.aggregate(countPipeline).exec()
     const total = countResult[0]?.total ?? 0
 
-    // Lookup proyecto y categoría
+    // Lookup proyecto y categoría.
+    // proyectId/categoryId pueden venir guardados como ObjectId (PM, CC, otros)
+    // o como string (facturas creadas por el flujo de invoices). El $lookup es
+    // estricto en tipos, así que primero se normaliza a ObjectId con $convert:
+    // un ObjectId pasa intacto, un string hex válido se castea, y cualquier otro
+    // caso queda en null (el lookup no resuelve, igual que antes).
     pipeline.push(
-      { $lookup: { from: 'projects', localField: 'proyectId', foreignField: '_id', as: '_project' } },
-      { $lookup: { from: 'categories', localField: 'categoryId', foreignField: '_id', as: '_category' } },
+      {
+        $addFields: {
+          _proyectOid: { $convert: { input: '$proyectId', to: 'objectId', onError: null, onNull: null } },
+          _categoryOid: { $convert: { input: '$categoryId', to: 'objectId', onError: null, onNull: null } },
+        },
+      },
+      { $lookup: { from: 'projects', localField: '_proyectOid', foreignField: '_id', as: '_project' } },
+      { $lookup: { from: 'categories', localField: '_categoryOid', foreignField: '_id', as: '_category' } },
       { $addFields: { _projectDoc: { $arrayElemAt: ['$_project', 0] }, _categoryDoc: { $arrayElemAt: ['$_category', 0] } } },
       { $sort: { createdAt: -1 } },
       { $skip: skip },

@@ -225,6 +225,13 @@ export class AdvanceService {
       )
     }
 
+    if (hasPendingBalance && dto.pendingBalanceFromReportId) {
+      await this.expenseReportService.markPendingBalanceUsed(
+        dto.pendingBalanceFromReportId,
+        (advance as any)._id.toString()
+      )
+    }
+
     return advance
   }
 
@@ -393,6 +400,13 @@ export class AdvanceService {
     if (dto.expenseReportId) {
       await this.expenseReportService.addAdvanceToReport(
         dto.expenseReportId,
+        (advance as any)._id.toString()
+      )
+    }
+
+    if (pendingAmt > 0 && dto.pendingBalanceFromReportId) {
+      await this.expenseReportService.markPendingBalanceUsed(
+        dto.pendingBalanceFromReportId,
         (advance as any)._id.toString()
       )
     }

@@ -1168,8 +1168,9 @@ export class ExpenseReportService {
     }
     const directReports = await this.expenseReportModel
       .find(reportQuery)
-      .select('_id userId title motivo')
+      .select('_id userId title motivo gestion budget createdAt createdBy directaDeposit')
       .populate('userId', 'name email')
+      .populate({ path: 'createdBy', select: 'name email roleId', populate: { path: 'roleId', select: 'name' } })
       .lean()
       .exec()
 
@@ -1177,8 +1178,31 @@ export class ExpenseReportService {
       return { data: [], total: 0, page, limit, pages: 0 }
     }
 
-    const reportIds = directReports.map(r => r._id)
-    const reportMap = new Map(directReports.map(r => [String(r._id), r]))
+    // Determina quién generó la rendición directa y de qué tipo (origen):
+    // - Contabilidad: iniciada desde Tesorería/Pagos (lleva depósito) o creada
+    //   por un usuario con rol Contabilidad/Administrador.
+    // - Coordinador / Colaborador: creada por el propio usuario según su rol.
+    const enrichedReports = directReports.map(r => {
+      const creator: any = r.createdBy
+      const roleName = String(creator?.roleId?.name ?? '').toLowerCase()
+      let origin: 'contabilidad' | 'coordinador' | 'colaborador'
+      if (r.directaDeposit || /contabilidad|administrador/.test(roleName)) {
+        origin = 'contabilidad'
+      } else if (/coordinador/.test(roleName)) {
+        origin = 'coordinador'
+      } else {
+        origin = 'colaborador'
+      }
+      return {
+        ...r,
+        _generatedByName: creator?.name || creator?.email || null,
+        _generatedByRole: creator?.roleId?.name || null,
+        _origin: origin,
+      }
+    })
+
+    const reportIds = enrichedReports.map(r => r._id)
+    const reportMap = new Map(enrichedReports.map(r => [String(r._id), r]))
 
     // 2. Construir el pipeline de agregación sobre Expense
     const pipeline: any[] = []
@@ -1291,6 +1315,74 @@ export class ExpenseReportService {
     }))
 
     return { data, total, page, limit, pages: Math.ceil(total / limit) }
+  }
+
+  /**
+   * Lista las rendiciones directas de un cliente a nivel de REPORTE (una fila por
+   * rendición), con su total gastado, depósito/saldo y quién la generó. Alimenta
+   * la pestaña "Rendiciones directas" (vista por rendición), separada de la
+   * pestaña "Gastos" (vista por comprobante, ver findDirectRendicionExpenses).
+   */
+  async findDirectRendicionReports(
+    clientId: string,
+    filters: { dateFrom?: string; dateTo?: string; userId?: string } = {}
+  ) {
+    const query: any = { clientId: new Types.ObjectId(clientId), isDirecta: true }
+    if (filters.userId && /^[0-9a-fA-F]{24}$/.test(filters.userId)) {
+      query.userId = new Types.ObjectId(filters.userId)
+    }
+    if (filters.dateFrom || filters.dateTo) {
+      query.createdAt = {}
+      if (filters.dateFrom) query.createdAt.$gte = new Date(filters.dateFrom)
+      if (filters.dateTo) {
+        const to = new Date(filters.dateTo)
+        to.setHours(23, 59, 59, 999)
+        query.createdAt.$lte = to
+      }
+    }
+
+    const reports = await this.expenseReportModel
+      .find(query)
+      .select('_id codigo userId title motivo gestion budget status createdAt createdBy directaDeposit expenseIds')
+      .populate('userId', 'name email')
+      .populate({ path: 'createdBy', select: 'name email roleId', populate: { path: 'roleId', select: 'name' } })
+      .populate('expenseIds', 'total')
+      .sort({ createdAt: -1 })
+      .lean()
+      .exec()
+
+    return reports.map((r: any) => {
+      const creator: any = r.createdBy
+      const roleName = String(creator?.roleId?.name ?? '').toLowerCase()
+      let origin: 'contabilidad' | 'coordinador' | 'colaborador'
+      if (r.directaDeposit || /contabilidad|administrador/.test(roleName)) {
+        origin = 'contabilidad'
+      } else if (/coordinador/.test(roleName)) {
+        origin = 'coordinador'
+      } else {
+        origin = 'colaborador'
+      }
+      const expenses = (r.expenseIds as any[]) || []
+      const totalGastado = expenses.reduce((s, e) => s + (Number(e?.total) || 0), 0)
+      const deposited = Number(r.directaDeposit?.amount ?? r.budget ?? 0)
+      return {
+        _id: String(r._id),
+        codigo: r.codigo ?? null,
+        userId: r.userId,
+        title: r.title ?? null,
+        motivo: r.motivo ?? null,
+        status: r.status ?? null,
+        createdAt: r.createdAt,
+        hasDeposit: !!r.directaDeposit,
+        deposited,
+        totalGastado,
+        saldo: r.directaDeposit ? deposited - totalGastado : null,
+        expenseCount: expenses.length,
+        generatedByName: creator?.name || creator?.email || null,
+        generatedByRole: creator?.roleId?.name || null,
+        origin,
+      }
+    })
   }
 
   async addExpenseToReport(reportId: string, expenseId: string) {

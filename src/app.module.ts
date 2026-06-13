@@ -25,6 +25,7 @@ import { ScheduleModule } from '@nestjs/schedule'
 import { SchedulerModule } from './modules/scheduler/scheduler.module'
 import { DashboardModule } from './modules/dashboard/dashboard.module'
 import { LineaNegocioModule } from './modules/linea-negocio/linea-negocio.module'
+import { CajaChicaReportModule } from './modules/caja-chica-report/caja-chica-report.module'
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -53,6 +54,7 @@ import { LineaNegocioModule } from './modules/linea-negocio/linea-negocio.module
     SchedulerModule,
     DashboardModule,
     LineaNegocioModule,
+    CajaChicaReportModule,
   ],
   controllers: [AppController],
   providers: [AppService],

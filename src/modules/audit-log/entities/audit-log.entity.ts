@@ -53,6 +53,10 @@ export type AuditAction =
   | 'create_linea_negocio'
   | 'update_linea_negocio'
   | 'delete_linea_negocio'
+  | 'create_caja_chica_report'
+  | 'add_reports_caja_chica'
+  | 'remove_report_caja_chica'
+  | 'finalize_caja_chica_report'
 
 @Schema({ timestamps: true })
 export class AuditLog {

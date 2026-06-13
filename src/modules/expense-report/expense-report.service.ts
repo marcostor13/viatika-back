@@ -505,6 +505,7 @@ export class ExpenseReportService {
     const all = await this.expenseModel
       .find(filter)
       .populate('categoryId', 'name')
+      .populate('proyectId', 'name code')
       .exec()
 
     const sorted = (all as unknown as Record<string, unknown>[]).sort((a, b) => {

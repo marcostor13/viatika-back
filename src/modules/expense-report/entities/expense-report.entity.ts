@@ -93,6 +93,12 @@ export interface ReimbursementPaymentInfo {
   paymentReceiptFileName?: string
   paymentReceiptMimeType?: string
   paymentReceiptSizeBytes?: number
+  /** Datos extraídos del comprobante por OCR/visión (informativos). */
+  scannedAmount?: number
+  operationNumber?: string
+  operationDate?: string
+  operationTime?: string
+  titular?: string
 }
 
 export interface ExpenseReportDocument extends Document {
@@ -300,6 +306,11 @@ export class ExpenseReport {
       paymentReceiptFileName: { type: String },
       paymentReceiptMimeType: { type: String },
       paymentReceiptSizeBytes: { type: Number },
+      scannedAmount: { type: Number },
+      operationNumber: { type: String },
+      operationDate: { type: String },
+      operationTime: { type: String },
+      titular: { type: String },
       _id: false,
     },
     required: false,
@@ -319,6 +330,10 @@ export class ExpenseReport {
       depositDate: { type: String, required: true },
       bankOrigin: { type: String },
       operationNumber: { type: String },
+      scannedAmount: { type: Number },
+      operationDate: { type: String },
+      operationTime: { type: String },
+      titular: { type: String },
       uploadedAt: { type: Date, required: true },
       _id: false,
     },
@@ -330,6 +345,11 @@ export class ExpenseReport {
     depositDate: string
     bankOrigin?: string
     operationNumber?: string
+    /** Datos extraídos del comprobante por OCR/visión (informativos). */
+    scannedAmount?: number
+    operationDate?: string
+    operationTime?: string
+    titular?: string
     uploadedAt: Date
   }
 

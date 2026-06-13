@@ -45,9 +45,19 @@ export class ExpenseController {
     }
   }
 
-  /** Escanea un comprobante de depósito (imagen o PDF, por URL) y extrae monto, fecha, hora, n° de operación y titular. */
+  /**
+   * Escanea un comprobante de depósito (imagen o PDF, por URL) y extrae monto, fecha,
+   * hora, n° de operación y titular. Lo usan tanto Contabilidad (depósito de rendición
+   * directa, reembolso) como el Colaborador/Coordinador (comprobante de devolución de saldo).
+   */
   @Post('scan-deposit-amount')
-  @Roles(ROLES.CONTABILIDAD, ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Roles(
+    ROLES.CONTABILIDAD,
+    ROLES.SUPER_ADMIN,
+    ROLES.ADMIN,
+    ROLES.COLABORADOR,
+    ROLES.COORDINADOR
+  )
   @UseGuards(JwtAuthGuard, RolesGuard)
   async scanDepositAmount(@Body() body: { url?: string; mimeType?: string }) {
     if (!body?.url) {

@@ -533,7 +533,17 @@ export class ExpenseReportController {
   @Post(':id/return-voucher')
   async registerReturnVoucher(
     @Param('id') id: string,
-    @Body() body: { depositDate: string; bankOrigin?: string; operationNumber?: string; fileUrl: string; fileName?: string },
+    @Body() body: {
+      depositDate: string
+      bankOrigin?: string
+      operationNumber?: string
+      fileUrl: string
+      fileName?: string
+      scannedAmount?: number
+      operationDate?: string
+      operationTime?: string
+      titular?: string
+    },
     @Request() req: any
   ) {
     const userId = String(req.user._id || req.user.sub)

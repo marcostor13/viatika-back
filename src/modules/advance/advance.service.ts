@@ -1858,6 +1858,10 @@ export class AdvanceService {
       fileUrl: string
       fileKey?: string
       note?: string
+      scannedAmount?: number
+      operationDate?: string
+      operationTime?: string
+      titular?: string
     }
   ): Promise<Advance> {
     const advance = await this.advanceModel.findById(id)

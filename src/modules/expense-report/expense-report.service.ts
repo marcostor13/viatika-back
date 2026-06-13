@@ -1751,6 +1751,11 @@ export class ExpenseReportService {
         paymentReceiptFileName: dto.paymentReceiptFileName,
         paymentReceiptMimeType: dto.paymentReceiptMimeType,
         paymentReceiptSizeBytes: dto.paymentReceiptSizeBytes,
+        scannedAmount: dto.scannedAmount,
+        operationNumber: dto.operationNumber,
+        operationDate: dto.operationDate,
+        operationTime: dto.operationTime,
+        titular: dto.titular,
       },
       reimbursedAt: new Date(),
     }
@@ -2006,7 +2011,17 @@ export class ExpenseReportService {
 
   async registerReturnVoucher(
     id: string,
-    dto: { depositDate: string; bankOrigin?: string; operationNumber?: string; fileUrl: string; fileName?: string },
+    dto: {
+      depositDate: string
+      bankOrigin?: string
+      operationNumber?: string
+      fileUrl: string
+      fileName?: string
+      scannedAmount?: number
+      operationDate?: string
+      operationTime?: string
+      titular?: string
+    },
     userId: string
   ): Promise<ExpenseReportDocument> {
     const report = await this.expenseReportModel
@@ -2051,6 +2066,10 @@ export class ExpenseReportService {
       depositDate: dto.depositDate,
       bankOrigin: dto.bankOrigin,
       operationNumber: dto.operationNumber,
+      scannedAmount: dto.scannedAmount,
+      operationDate: dto.operationDate,
+      operationTime: dto.operationTime,
+      titular: dto.titular,
       uploadedAt: new Date(),
     }
     await this.expenseReportModel.findByIdAndUpdate(id, { $set: { returnVoucher: voucher } }).exec()

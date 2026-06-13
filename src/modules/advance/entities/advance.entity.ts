@@ -28,6 +28,11 @@ export interface ReturnProof {
   fileKey?: string
   uploadedAt: Date
   note?: string
+  /** Datos extraídos del comprobante por OCR/visión (informativos). */
+  scannedAmount?: number
+  operationDate?: string
+  operationTime?: string
+  titular?: string
 }
 
 export interface ReturnValidation {

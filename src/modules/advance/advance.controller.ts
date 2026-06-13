@@ -304,6 +304,10 @@ export class AdvanceController {
       fileUrl: string
       fileKey?: string
       note?: string
+      scannedAmount?: number
+      operationDate?: string
+      operationTime?: string
+      titular?: string
     }
   ) {
     return this.advanceService.uploadReturnProof(id, {

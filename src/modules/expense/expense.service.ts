@@ -171,6 +171,13 @@ export class ExpenseService {
           'Solo puedes editar o eliminar gastos en rendiciones abiertas o rechazadas.'
         )
       }
+      // Caja chica finalizada: el total quedó congelado, el colaborador ya no
+      // puede modificar/eliminar gastos (mismo criterio que para agregarlos).
+      if ((report as unknown as { lockedByCajaChica?: boolean }).lockedByCajaChica) {
+        throw new ForbiddenException(
+          'La caja chica de esta rendición fue finalizada por Contabilidad. No se pueden modificar más gastos.'
+        )
+      }
     }
   }
 
@@ -959,6 +966,12 @@ export class ExpenseService {
   }
 
   async analyzeImageWithUrl(body: CreateExpenseDto): Promise<Expense> {
+    // Si la caja chica de la rendición ya fue finalizada por Contabilidad, no se
+    // permiten más gastos. Se valida antes del análisis para no gastar la llamada
+    // a OpenAI en un comprobante que será rechazado.
+    await this.expenseReportService.assertReportNotLockedByCajaChica(
+      body.expenseReportId
+    )
     const configSunat = await this.sunatConfigService.findOne(body.clientId)
     const prompt = PROMPT1
     try {
@@ -1032,6 +1045,10 @@ export class ExpenseService {
     if (!file || !file.buffer) {
       throw new HttpException('Archivo PDF no provisto', HttpStatus.BAD_REQUEST)
     }
+    // Caja chica finalizada: no se permiten más gastos.
+    await this.expenseReportService.assertReportNotLockedByCajaChica(
+      body.expenseReportId
+    )
 
     try {
       const pdfModule = await import('pdf-parse')
@@ -1123,6 +1140,10 @@ export class ExpenseService {
     if (!body.clientId) {
       throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
     }
+    // Caja chica finalizada: no se permiten más gastos.
+    await this.expenseReportService.assertReportNotLockedByCajaChica(
+      body.expenseReportId
+    )
     if (!body.mobilityRows || body.mobilityRows.length === 0) {
       throw new HttpException(
         'Se requiere al menos una fila en la planilla',
@@ -1204,6 +1225,10 @@ export class ExpenseService {
     if (!body.clientId) {
       throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
     }
+    // Caja chica finalizada: no se permiten más gastos.
+    await this.expenseReportService.assertReportNotLockedByCajaChica(
+      body.expenseReportId
+    )
     if (!body.total || body.total <= 0) {
       throw new HttpException(
         'Se requiere un monto válido',
@@ -1284,6 +1309,10 @@ export class ExpenseService {
     if (!body.clientId) {
       throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
     }
+    // Caja chica finalizada: no se permiten más gastos.
+    await this.expenseReportService.assertReportNotLockedByCajaChica(
+      body.expenseReportId
+    )
     if (!body.imageUrl) {
       throw new HttpException(
         'Debe adjuntar la foto/archivo del recibo de caja',
@@ -1363,6 +1392,10 @@ export class ExpenseService {
     if (!body.clientId) {
       throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
     }
+    // Caja chica finalizada: no se permiten más gastos.
+    await this.expenseReportService.assertReportNotLockedByCajaChica(
+      body.expenseReportId
+    )
     if (!body.total || body.total <= 0) {
       throw new HttpException(
         'Se requiere un monto válido',
@@ -1434,6 +1467,10 @@ export class ExpenseService {
   }
 
   async create(createExpenseDto: CreateExpenseDto): Promise<Expense> {
+    // Caja chica finalizada: no se permiten más gastos.
+    await this.expenseReportService.assertReportNotLockedByCajaChica(
+      createExpenseDto.expenseReportId
+    )
     const dto = { ...createExpenseDto }
     this.sanitizeFechaEmisionOnWrite(dto)
     this.syncComentarioPlacaFromData(dto)

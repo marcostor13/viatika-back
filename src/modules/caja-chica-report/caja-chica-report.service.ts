@@ -56,12 +56,68 @@ export class CajaChicaReportService {
   }
 
   async findAllByClient(clientId: string) {
-    return this.model
+    const reports = await this.model
       .find({ clientId: new Types.ObjectId(clientId) })
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 })
       .lean()
       .exec()
+
+    // `totalAmount` es un valor denormalizado que puede quedar obsoleto, así que
+    // lo recalculamos en vivo también para la lista. Para no caer en N+1, se
+    // traen todas las rendiciones referenciadas en una sola consulta y se arma
+    // un mapa expenseReportId -> suma de montos.
+    const expReportIds = [
+      ...new Set(
+        reports.flatMap((r: any) =>
+          (r.selectedReports ?? []).map((sr: any) => String(sr.expenseReportId)),
+        ),
+      ),
+    ]
+
+    const totalsByExpReport = new Map<string, number>()
+    if (expReportIds.length) {
+      const expReports = await this.expenseReportModel
+        .find({ _id: { $in: expReportIds } })
+        .populate('expenseIds', 'total')
+        .lean()
+        .exec()
+      for (const er of expReports as any[]) {
+        const sum = (er.expenseIds ?? []).reduce(
+          (s: number, e: any) => s + (Number(e?.total) || 0),
+          0,
+        )
+        totalsByExpReport.set(String(er._id), sum)
+      }
+    }
+
+    const drifted: { _id: any; totalAmount: number }[] = []
+    const result = reports.map((r: any) => {
+      const totalAmount = (r.selectedReports ?? []).reduce(
+        (sum: number, sr: any) =>
+          sum + (totalsByExpReport.get(String(sr.expenseReportId)) ?? 0),
+        0,
+      )
+      if (totalAmount !== r.totalAmount) {
+        drifted.push({ _id: r._id, totalAmount })
+      }
+      return { ...r, totalAmount }
+    })
+
+    // Persistir los que difieran para que exportaciones y futuras lecturas
+    // queden corregidas.
+    if (drifted.length) {
+      await this.model.bulkWrite(
+        drifted.map((d) => ({
+          updateOne: {
+            filter: { _id: d._id },
+            update: { $set: { totalAmount: d.totalAmount } },
+          },
+        })),
+      )
+    }
+
+    return result
   }
 
   async findOne(id: string) {
@@ -87,7 +143,24 @@ export class CajaChicaReportService {
       }),
     )
 
-    return { ...report, selectedReports: enriched }
+    // Recalcular el total desde los gastos ya poblados (mismo cálculo que el
+    // front muestra por subtotal). `totalAmount` es un valor denormalizado que
+    // solo se actualizaba al agregar/quitar rendiciones, por lo que podía
+    // quedar obsoleto (p. ej. en 0) si los montos se ajustaban después. Lo
+    // recalculamos en cada lectura y, si difiere, lo persistimos para que la
+    // lista y las exportaciones también queden corregidas.
+    const totalAmount = enriched.reduce((sum: number, sr: any) => {
+      const expenses = (sr.expenseReport?.expenseIds ?? []) as any[]
+      return (
+        sum + expenses.reduce((s, e) => s + (Number(e?.total) || 0), 0)
+      )
+    }, 0)
+
+    if (totalAmount !== report.totalAmount) {
+      await this.model.updateOne({ _id: id }, { $set: { totalAmount } }).exec()
+    }
+
+    return { ...report, selectedReports: enriched, totalAmount }
   }
 
   async addReports(id: string, reportIds: string[], clientId: string) {
@@ -159,6 +232,9 @@ export class CajaChicaReportService {
         'Debe incluir al menos una rendición antes de finalizar.',
       )
     }
+    // Congelar el total correcto al finalizar (los montos pudieron ajustarse
+    // después de agregar las rendiciones).
+    report.totalAmount = await this.recalculateTotal(report)
     report.status = 'finalized'
     return report.save()
   }
@@ -173,7 +249,7 @@ export class CajaChicaReportService {
         .exec()
       if (!expReport) continue
       for (const exp of expReport.expenseIds as any[]) {
-        total += Number(exp?.total ?? 0)
+        total += Number(exp?.total) || 0
       }
     }
     return total

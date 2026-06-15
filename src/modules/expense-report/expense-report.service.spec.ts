@@ -5,6 +5,7 @@ import { Types } from 'mongoose'
 import { ExpenseReportService } from './expense-report.service'
 import { ExpenseReport } from './entities/expense-report.entity'
 import { Expense } from '../expense/entities/expense.entity'
+import { CajaChicaReport } from '../caja-chica-report/entities/caja-chica-report.entity'
 import { EmailService } from '../email/email.service'
 import { NotificationsService } from '../notifications/notifications.service'
 import { UserService } from '../user/user.service'
@@ -70,6 +71,14 @@ describe('ExpenseReportService — Fase 5 (envío y aprobación final)', () => {
         ExpenseReportService,
         { provide: getModelToken(ExpenseReport.name), useValue: mockExpenseReportModel },
         { provide: getModelToken(Expense.name), useValue: {} },
+        {
+          provide: getModelToken(CajaChicaReport.name),
+          useValue: {
+            countDocuments: jest
+              .fn()
+              .mockReturnValue({ exec: jest.fn().mockResolvedValue(0) }),
+          },
+        },
         { provide: EmailService, useValue: mockEmailService },
         { provide: NotificationsService, useValue: mockNotificationsService },
         { provide: UserService, useValue: mockUserService },
@@ -331,6 +340,14 @@ describe('ExpenseReportService — Fase 8 (cierre definitivo)', () => {
         ExpenseReportService,
         { provide: getModelToken(ExpenseReport.name), useValue: mockExpenseReportModel },
         { provide: getModelToken(Expense.name), useValue: {} },
+        {
+          provide: getModelToken(CajaChicaReport.name),
+          useValue: {
+            countDocuments: jest
+              .fn()
+              .mockReturnValue({ exec: jest.fn().mockResolvedValue(0) }),
+          },
+        },
         { provide: EmailService, useValue: mockEmailServicePhase8 },
         { provide: NotificationsService, useValue: mockNotificationsService },
         { provide: UserService, useValue: mockUserServicePhase8 },
@@ -622,6 +639,14 @@ describe('ExpenseReportService — Fase 6 (reembolso: tenant y registro)', () =>
         ExpenseReportService,
         { provide: getModelToken(ExpenseReport.name), useValue: mockExpenseReportModel },
         { provide: getModelToken(Expense.name), useValue: {} },
+        {
+          provide: getModelToken(CajaChicaReport.name),
+          useValue: {
+            countDocuments: jest
+              .fn()
+              .mockReturnValue({ exec: jest.fn().mockResolvedValue(0) }),
+          },
+        },
         { provide: EmailService, useValue: mockEmailService },
         { provide: NotificationsService, useValue: mockNotificationsService },
         { provide: UserService, useValue: mockUserService },

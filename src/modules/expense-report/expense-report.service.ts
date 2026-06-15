@@ -16,6 +16,10 @@ import {
 } from './entities/expense-report.entity'
 import { Expense, ExpenseDocument } from '../expense/entities/expense.entity'
 import {
+  CajaChicaReport,
+  CajaChicaReportDocument,
+} from '../caja-chica-report/entities/caja-chica-report.entity'
+import {
   parseFechaEmisionInput,
   applyFechaEmisionDisplayToExpense,
 } from '../expense/utils/fecha-emision.util'
@@ -36,6 +40,8 @@ export class ExpenseReportService {
     private readonly expenseReportModel: Model<ExpenseReportDocument>,
     @InjectModel(Expense.name)
     private readonly expenseModel: Model<ExpenseDocument>,
+    @InjectModel(CajaChicaReport.name)
+    private readonly cajaChicaReportModel: Model<CajaChicaReportDocument>,
     private readonly emailService: EmailService,
     private readonly notificationsService: NotificationsService,
     private readonly userService: UserService,
@@ -525,6 +531,32 @@ export class ExpenseReportService {
     return { data, total, page: opts.page, limit: opts.limit, pages: Math.ceil(total / opts.limit) }
   }
 
+  /**
+   * ¿La rendición está incluida en un reporte de caja chica ya finalizado por
+   * Contabilidad? Al finalizar, el total queda congelado, por lo que el
+   * colaborador no debe poder agregar ni modificar gastos en esa rendición.
+   */
+  async isLockedByFinalizedCajaChica(reportId: string): Promise<boolean> {
+    if (!reportId || !Types.ObjectId.isValid(reportId)) return false
+    const count = await this.cajaChicaReportModel
+      .countDocuments({
+        status: 'finalized',
+        'selectedReports.expenseReportId': new Types.ObjectId(reportId),
+      })
+      .exec()
+    return count > 0
+  }
+
+  /** Lanza 403 si la rendición pertenece a una caja chica ya finalizada. */
+  async assertReportNotLockedByCajaChica(reportId?: string): Promise<void> {
+    if (!reportId) return
+    if (await this.isLockedByFinalizedCajaChica(reportId)) {
+      throw new ForbiddenException(
+        'La caja chica de esta rendición fue finalizada por Contabilidad. No se pueden agregar ni modificar más gastos.'
+      )
+    }
+  }
+
   async findOne(id: string) {
     const report = await this.expenseReportModel
       .findById(id)
@@ -538,7 +570,14 @@ export class ExpenseReportService {
     if (!report) {
       throw new NotFoundException(`Expense report with ID ${id} not found`)
     }
-    return this.normalizeReportExpenseDates(report)
+    const normalized = this.normalizeReportExpenseDates(report)
+    // Flag derivado para el front: si la caja chica fue finalizada, el
+    // colaborador ya no puede subir gastos (botón "Añadir Gasto" oculto).
+    ;(normalized as unknown as { lockedByCajaChica?: boolean }).lockedByCajaChica =
+      (normalized as unknown as { isCajaChica?: boolean }).isCajaChica === true
+        ? await this.isLockedByFinalizedCajaChica(id)
+        : false
+    return normalized
   }
 
   private normalizeReportExpenseDates(report: ExpenseReportDocument) {

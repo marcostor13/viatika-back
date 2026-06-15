@@ -56,10 +56,15 @@ describe('CajaChicaReportService', () => {
       exec: jest.fn().mockResolvedValue([]),
     })
     mockCajaChicaModel.findById = jest.fn()
+    mockCajaChicaModel.updateOne = jest.fn().mockReturnValue({
+      exec: jest.fn().mockResolvedValue({ modifiedCount: 1 }),
+    })
+    mockCajaChicaModel.bulkWrite = jest.fn().mockResolvedValue({ modifiedCount: 1 })
     mockCajaChicaModel.db = mockDb
 
     const mockExpenseReportModel: any = {}
     mockExpenseReportModel.findById = jest.fn()
+    mockExpenseReportModel.find = jest.fn()
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -93,6 +98,33 @@ describe('CajaChicaReportService', () => {
       const result = await service.findAllByClient(clientId)
       expect(Array.isArray(result)).toBe(true)
     })
+
+    it('recalculates and self-heals stale totals in the list', async () => {
+      cajaChicaModel.find.mockReturnValue({
+        populate: jest.fn().mockReturnThis(),
+        sort: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockReturnThis(),
+        exec: jest.fn().mockResolvedValue([
+          {
+            _id: new Types.ObjectId(reportId),
+            codigo: 'CC-0001',
+            title: 'Test',
+            totalAmount: 0,
+            selectedReports: [
+              { expenseReportId: new Types.ObjectId(expReportId), colaboradorId: new Types.ObjectId(), colaboradorName: 'Juan' },
+            ],
+          },
+        ]),
+      })
+      expenseReportModel.find.mockReturnValue({
+        populate: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockReturnThis(),
+        exec: jest.fn().mockResolvedValue([makeMockExpReport()]),
+      })
+      const result = await service.findAllByClient(clientId)
+      expect(result[0].totalAmount).toBe(150)
+      expect(cajaChicaModel.bulkWrite).toHaveBeenCalled()
+    })
   })
 
   describe('findOne', () => {
@@ -114,10 +146,39 @@ describe('CajaChicaReportService', () => {
           codigo: 'CC-0001',
           title: 'Test',
           selectedReports: [],
+          totalAmount: 0,
         }),
       })
       const result = await service.findOne(reportId)
       expect(result.selectedReports).toEqual([])
+    })
+
+    it('recalculates and self-heals a stale totalAmount on read', async () => {
+      cajaChicaModel.findById.mockReturnValue({
+        populate: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockReturnThis(),
+        exec: jest.fn().mockResolvedValue({
+          _id: new Types.ObjectId(reportId),
+          codigo: 'CC-0001',
+          title: 'Test',
+          totalAmount: 0,
+          selectedReports: [
+            { expenseReportId: new Types.ObjectId(expReportId), colaboradorId: new Types.ObjectId(), colaboradorName: 'Juan' },
+          ],
+        }),
+      })
+      expenseReportModel.findById = jest.fn().mockReturnValue({
+        populate: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockReturnThis(),
+        exec: jest.fn().mockResolvedValue(makeMockExpReport()),
+      })
+      const result = await service.findOne(reportId)
+      // makeMockExpReport totals: '100' + '50' = 150
+      expect(result.totalAmount).toBe(150)
+      expect(cajaChicaModel.updateOne).toHaveBeenCalledWith(
+        { _id: reportId },
+        { $set: { totalAmount: 150 } },
+      )
     })
   })
 
@@ -214,13 +275,21 @@ describe('CajaChicaReportService', () => {
       await expect(service.finalize(reportId)).rejects.toThrow(BadRequestException)
     })
 
-    it('finalizes a draft report with selected reports', async () => {
+    it('finalizes a draft report with selected reports and recalculates total', async () => {
       const doc = makeMockCajaChicaDoc({
-        selectedReports: [{ expenseReportId: new Types.ObjectId(), colaboradorId: new Types.ObjectId(), colaboradorName: 'Juan' }],
+        selectedReports: [{ expenseReportId: new Types.ObjectId(expReportId), colaboradorId: new Types.ObjectId(), colaboradorName: 'Juan' }],
       })
       cajaChicaModel.findById.mockReturnValue({ exec: jest.fn().mockResolvedValue(doc) })
+      expenseReportModel.findById = jest.fn().mockReturnValue({
+        populate: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockReturnThis(),
+        exec: jest.fn().mockResolvedValue(makeMockExpReport()),
+      })
       const result = await service.finalize(reportId)
       expect(result).toBeDefined()
+      // total frozen from expense totals '100' + '50'
+      expect(doc.totalAmount).toBe(150)
+      expect(doc.status).toBe('finalized')
     })
   })
 })

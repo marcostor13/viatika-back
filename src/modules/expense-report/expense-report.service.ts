@@ -430,7 +430,14 @@ export class ExpenseReportService {
         isCajaChica: true,
       })
       .populate('userId', 'name email')
-      .populate('expenseIds', 'total expenseType fechaEmision proveedor')
+      .populate({
+        path: 'expenseIds',
+        select: 'total expenseType fechaEmision proveedor data mobilityRows description categoryId proyectId',
+        populate: [
+          { path: 'categoryId', select: 'name' },
+          { path: 'proyectId', select: 'name code' },
+        ],
+      })
       .sort({ createdAt: -1 })
       .exec()
   }

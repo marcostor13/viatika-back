@@ -95,16 +95,145 @@ export const CONTANET_COLUMNS: ContanetColumn[] = [
   { key: 'ca15', h7: 'CA 15', h8: 'CA15' },
 ]
 
+/**
+ * Metadatos de cabecera por columna, tomados del template real de Contanet.
+ * Se usan para reproducir las filas 3 (obligatorio), 4 (tipo de dato),
+ * 5 (cantidad de caracteres) y 6 (grupos) idénticas al archivo original.
+ */
+
+/** Fila 6 — etiqueta de grupo, solo en la columna donde inicia cada grupo. */
+export const COL_GRUPO: Record<string, string> = {
+  correlativo: 'Codigo Correlativo cabecera',
+  relacionado: 'INFORMACIÓN GENERAL',
+  fechaEmision: 'Fechas',
+  codTipDocIdentClt: 'Auxiliares',
+  montoDebe: 'Cantidades',
+  esCancelado: 'Indicadores',
+  docRefFechaEmision: 'Documento Referencia',
+  ca1: 'INFORMACIÓN DE CAMPOS ADICIONALES',
+}
+
+/** Fila 3 — columnas con información obligatoria (marca «(*)»). */
+export const COL_OBLIGATORIO = new Set<string>([
+  'correlativo',
+  'relacionado',
+  'ejercicio',
+  'periodo',
+  'codModulo',
+  'modulo',
+  'fuente',
+  'nroCuenta',
+  'mdaOrigen',
+  'mdaRegistro',
+  'centroCosto',
+  'subCentroCosto',
+  'subSubCentroCosto',
+  'area',
+  'montoDebe',
+  'montoHaber',
+  'montoDebeME',
+  'montoHaberME',
+  'cambioMoneda',
+])
+
+/** Fila 4 — tipo de dato. Por defecto «Texto»; aquí solo las excepciones. */
+export const COL_TIPO_DATO: Record<string, string> = {
+  correlativo: 'Entero',
+  relacionado: 'Entero',
+  conceptoFec: 'Entero',
+  fechaEmision: 'Fecha',
+  fechaVencimiento: 'Fecha',
+  fechaMovimiento: 'Fecha',
+  fechaCbr: 'Fecha',
+  fechaRegistro: 'Fecha',
+  fechaConc: 'Fecha',
+  fechaDif: 'Fecha',
+  montoDebe: 'Decimal',
+  montoHaber: 'Decimal',
+  montoDebeME: 'Decimal',
+  montoHaberME: 'Decimal',
+  cambioMoneda: 'Decimal',
+  esCancelado: 'V/F (1/0)',
+  esConciliado: 'V/F (1/0)',
+  esProvision: 'V/F (1/0)',
+  esAnulado: 'V/F (1/0)',
+  esDestino: 'V/F (1/0)',
+  docRefFechaEmision: 'Fecha',
+}
+
+/** Fila 5 — cantidad de caracteres. Por defecto vacío; aquí las definidas. */
+export const COL_CARACTERES: Record<string, string> = {
+  correlativo: '-',
+  relacionado: '-',
+  codMedioPago: '3',
+  ejercicio: '4',
+  periodo: '2',
+  codModulo: '2',
+  modulo: '4',
+  fuente: '2',
+  nroCuenta: '50',
+  codTipDoc: '2',
+  nroSerie: '20',
+  nroDoc: '20',
+  glosa: '500',
+  mdaOrigen: '2',
+  mdaRegistro: '2',
+  centroCosto: '8',
+  subCentroCosto: '8',
+  subSubCentroCosto: '8',
+  formaProvision: '2',
+  formaPagoCobro: '2',
+  area: '6',
+  identCtrMda: '1',
+  identTipAfecto: '1',
+  nroCheque: '30',
+  grdo: '100',
+  codTipDocIdentClt: '2',
+  nroDocClt: '10',
+  razonSocialClt: '800',
+  codTipDocIdentProv: '2',
+  nroDocProv: '10',
+  razonSocialProv: '800',
+  codTipDocIdentTrab: '2',
+  nroDocTrab: '10',
+  razonSocialTrab: '800',
+  montoDebe: '13,2',
+  montoHaber: '13,2',
+  montoDebeME: '13,2',
+  montoHaberME: '13,2',
+  cambioMoneda: '13,2',
+  docRefCodTipDoc: '2',
+  docRefNroSerie: '4',
+  docRefNroDoc: '8',
+  nroDetraccion: '8',
+  fechaPagoDetraccion: '8',
+  ca1: '0  -  4000',
+  ca2: '0  -  4000',
+  ca3: '0  -  4000',
+  ca4: '0  -  4000',
+  ca5: '0  -  4000',
+  ca6: '0  -  4000',
+  ca7: '0  -  4000',
+  ca8: '0  -  4000',
+  ca9: '0  -  4000',
+  ca10: '0  -  4000',
+  ca11: '0  -  4000',
+  ca12: '0  -  4000',
+  ca13: '0  -  4000',
+  ca14: '0  -  4000',
+  ca15: '0  -  4000',
+}
+
 /** Tipo de una línea de asiento: valores por columna (key → valor). */
 export type ContanetLine = Record<string, string | number | undefined>
 
-/** Convierte una fecha a número de serie de Excel (base 1899-12-30). */
+/** Convierte una fecha a número de serie de Excel (base 1899-12-30, en UTC). */
 export function toExcelSerial(date: Date): number {
   const epoch = Date.UTC(1899, 11, 30)
   const utc = Date.UTC(
-    date.getFullYear(),
-    date.getMonth(),
-    date.getDate()
+    date.getUTCFullYear(),
+    date.getUTCMonth(),
+    date.getUTCDate()
   )
   return Math.round((utc - epoch) / 86400000)
 }

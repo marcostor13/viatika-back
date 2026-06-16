@@ -6,6 +6,8 @@ import { Expense } from '../expense/entities/expense.entity'
 import { Advance } from '../advance/entities/advance.entity'
 import { Project } from '../project/entities/project.entity'
 import { User } from '../user/schemas/user.schema'
+import { Category } from '../category/entities/category.entity'
+import { ExchangeRateService } from '../exchange-rate/exchange-rate.service'
 import { AccountingConfigService } from '../accounting-config/accounting-config.service'
 import { AccountingConfigDocument } from '../accounting-config/entities/accounting-config.entity'
 import {
@@ -25,6 +27,8 @@ interface AnalyticPortion {
   proyectId?: string
   condicion: 'afecto' | 'inafecto'
   monto: number
+  /** Etiqueta opcional (ej. "RECARGO DE CONSUMO") para la glosa de la línea. */
+  etiqueta?: string
 }
 
 @Injectable()
@@ -42,7 +46,10 @@ export class AccountingEntriesService {
     private projectModel: Model<any>,
     @InjectModel(User.name)
     private userModel: Model<any>,
-    private accountingConfigService: AccountingConfigService
+    @InjectModel(Category.name)
+    private categoryModel: Model<any>,
+    private accountingConfigService: AccountingConfigService,
+    private exchangeRateService: ExchangeRateService
   ) {}
 
   // ----------------------------------------------------------------------
@@ -86,16 +93,28 @@ export class AccountingEntriesService {
       .exec()) as any
 
     const projectMap = await this.buildProjectMap(expenses, report, clientId)
+    const categoryMap = await this.buildCategoryMap(expenses, clientId)
+
+    // Ejercicio/periodo: de la fecha de inicio de la solicitud (anticipo) o, en su
+    // defecto, de la rendición. Es constante para todas las líneas del lote.
+    const periodDate = this.resolvePeriodDate(report, advances)
+
+    // Prefetch del tipo de cambio de todas las fechas involucradas, para que TODAS
+    // las filas (no solo el primer comprobante) tengan ME y cambio de moneda.
+    const rateMap = await this.prefetchRates(report, expenses, advances, config)
 
     const files: GeneratedFile[] = []
     for (const tipo of tipos) {
-      const lines = this.buildLinesForTipo(tipo, {
+      const lines = await this.buildLinesForTipo(tipo, {
         report,
         config,
         expenses,
         advances,
         colaborador,
         projectMap,
+        categoryMap,
+        periodDate,
+        rateMap,
       })
       if (!lines.length) continue
       const cuadreErrors = this.validateCuadre(lines)
@@ -116,7 +135,58 @@ export class AccountingEntriesService {
     return `asientos_${tipo}_${code}.xlsx`
   }
 
-  private buildLinesForTipo(
+  /** Fecha de referencia para ejercicio/periodo: inicio de la solicitud. */
+  private resolvePeriodDate(report: any, advances: any[]): Date {
+    const advStarts = (advances ?? [])
+      .map((a) => a?.startDate || a?.createdAt)
+      .filter(Boolean)
+      .map((d) => new Date(d))
+      .filter((d) => !Number.isNaN(d.getTime()))
+    if (advStarts.length) {
+      return advStarts.sort((a, b) => a.getTime() - b.getTime())[0]
+    }
+    const raw = report?.startDate || report?.createdAt
+    const d = raw ? new Date(raw) : new Date()
+    return Number.isNaN(d.getTime()) ? new Date() : d
+  }
+
+  /** Prefetch del tipo de cambio (PEN/USD) de todas las fechas del lote. */
+  private async prefetchRates(
+    report: any,
+    expenses: any[],
+    advances: any[],
+    config: AccountingConfigDocument
+  ): Promise<Map<string, number>> {
+    const dates = new Set<string>()
+    const add = (d: Date) => dates.add(d.toISOString().slice(0, 10))
+    for (const e of expenses) add(this.asientoDate(e, report))
+    for (const a of advances) {
+      const d = a?.payment?.transferDate || a?.startDate || a?.createdAt
+      if (d) add(new Date(d))
+    }
+    if (report?.updatedAt) add(new Date(report.updatedAt))
+    add(this.resolvePeriodDate(report, advances))
+
+    const fallback = Number(config.tipoCambio) || 1
+    const map = new Map<string, number>()
+    for (const iso of dates) {
+      const rate = await this.exchangeRateService.getRate(iso)
+      map.set(iso, rate ?? fallback)
+    }
+    return map
+  }
+
+  /** Tipo de cambio (PEN/USD) de una fecha, desde el mapa prefetcheado. */
+  private tcFor(
+    date: Date,
+    rateMap: Map<string, number>,
+    config: AccountingConfigDocument
+  ): number {
+    const iso = date.toISOString().slice(0, 10)
+    return rateMap.get(iso) ?? (Number(config.tipoCambio) || 1)
+  }
+
+  private async buildLinesForTipo(
     tipo: AsientoTipo,
     ctx: {
       report: any
@@ -125,8 +195,11 @@ export class AccountingEntriesService {
       advances: any[]
       colaborador: any
       projectMap: Map<string, any>
+      categoryMap: Map<string, any>
+      periodDate: Date
+      rateMap: Map<string, number>
     }
-  ): ContanetLine[] {
+  ): Promise<ContanetLine[]> {
     switch (tipo) {
       case 'compra':
         return this.buildCompraLines(ctx)
@@ -141,6 +214,28 @@ export class AccountingEntriesService {
       default:
         return []
     }
+  }
+
+  /** Mapa categoryId → categoría (para resolver cuentas 9X/6X). */
+  private async buildCategoryMap(
+    expenses: any[],
+    clientId: string
+  ): Promise<Map<string, any>> {
+    const ids = new Set<string>()
+    for (const e of expenses) {
+      if (e.categoryId) ids.add(e.categoryId.toString())
+    }
+    const categories = (
+      ids.size
+        ? await this.categoryModel
+            .find({ _id: { $in: Array.from(ids) }, clientId })
+            .lean()
+            .exec()
+        : []
+    ) as any[]
+    const map = new Map<string, any>()
+    for (const c of categories) map.set(c._id.toString(), c)
+    return map
   }
 
   // ----------------------------------------------------------------------
@@ -191,30 +286,65 @@ export class AccountingEntriesService {
     return Number.isNaN(d.getTime()) ? new Date() : d
   }
 
-  /** Resuelve las porciones analíticas de un comprobante (multiproyecto/afecto-inafecto). */
+  /**
+   * Resuelve las porciones analíticas de un comprobante.
+   * Prioridad: (1) detalleAnalitico explícito, (2) totales de `comprobanteDetallado`
+   * (gravada/exonerada/inafecta + recargo al consumo), (3) base/IGV/inafecto sueltos.
+   */
   private resolvePortions(expense: any): AnalyticPortion[] {
+    const proyectId = expense.proyectId?.toString()
+
+    // (1) Detalle explícito (corregido por Contabilidad)
     const detalle: AnalyticPortion[] = (expense.detalleAnalitico ?? []).map(
       (d: any) => ({
-        proyectId: d.proyectId?.toString(),
+        proyectId: d.proyectId?.toString() || proyectId,
         condicion: d.condicion === 'inafecto' ? 'inafecto' : 'afecto',
-        monto: Number(d.monto) || 0,
+        monto: this.round2(Number(d.monto) || 0),
+        etiqueta: undefined,
       })
     )
     if (detalle.length) return detalle
 
-    // Sin detalle explícito: derivar de base/inafecto/total.
+    // (2) Totales del objeto detallado de la factura
+    const tot = expense.comprobanteDetallado?.totales ?? {}
+    const num = (v: unknown) => (typeof v === 'number' ? v : Number(v) || 0)
+    const gravada = num(tot.operacionGravada)
+    const exonerada = num(tot.operacionExonerada)
+    const inafectaOp = num(tot.operacionInafecta)
+    const gratuita = num(tot.operacionGratuita)
+    const recargo =
+      num(expense.comprobanteDetallado?.recargoConsumo) ||
+      num(expense.inafecto)
+
+    const portions: AnalyticPortion[] = []
+    if (gravada > 0)
+      portions.push({ proyectId, condicion: 'afecto', monto: this.round2(gravada) })
+    if (exonerada > 0)
+      portions.push({ proyectId, condicion: 'inafecto', monto: this.round2(exonerada) })
+    if (inafectaOp > 0)
+      portions.push({ proyectId, condicion: 'inafecto', monto: this.round2(inafectaOp) })
+    if (gratuita > 0)
+      portions.push({ proyectId, condicion: 'inafecto', monto: this.round2(gratuita) })
+    if (recargo > 0)
+      portions.push({
+        proyectId,
+        condicion: 'inafecto',
+        monto: this.round2(recargo),
+        etiqueta: 'RECARGO DE CONSUMO',
+      })
+    if (portions.length) return portions
+
+    // (3) Respaldo: base/IGV/inafecto sueltos o solo el total
     const total = Number(expense.total) || 0
     const igv = Number(expense.igv) || 0
     const inafecto = Number(expense.inafecto) || 0
     const base =
       Number(expense.baseAfecta) || Math.max(total - igv - inafecto, 0)
-    const portions: AnalyticPortion[] = []
-    const proyectId = expense.proyectId?.toString()
-    if (base > 0) portions.push({ proyectId, condicion: 'afecto', monto: base })
+    if (base > 0) portions.push({ proyectId, condicion: 'afecto', monto: this.round2(base) })
     if (inafecto > 0)
-      portions.push({ proyectId, condicion: 'inafecto', monto: inafecto })
+      portions.push({ proyectId, condicion: 'inafecto', monto: this.round2(inafecto) })
     if (!portions.length && total > 0)
-      portions.push({ proyectId, condicion: 'afecto', monto: total })
+      portions.push({ proyectId, condicion: 'afecto', monto: this.round2(total) })
     return portions
   }
 
@@ -222,18 +352,25 @@ export class AccountingEntriesService {
     return Math.round((n + Number.EPSILON) * 100) / 100
   }
 
-  /** Línea base con los campos comunes a todo asiento. */
+  /**
+   * Línea base con los campos comunes a todo asiento.
+   * `date` = fecha del comprobante (para las columnas de fechas y el tipo de cambio).
+   * `periodDate` = fecha de inicio de la solicitud (para ejercicio/periodo).
+   * `tc` = tipo de cambio PEN/USD del día.
+   */
   private baseLine(
     config: AccountingConfigDocument,
     date: Date,
     fuente: string,
     glosa: string,
+    tc: number,
+    periodDate: Date,
     extra: ContanetLine = {}
   ): ContanetLine {
     const serial = toExcelSerial(date)
     return {
-      ejercicio: date.getFullYear(),
-      periodo: String(date.getMonth() + 1).padStart(2, '0'),
+      ejercicio: periodDate.getUTCFullYear(),
+      periodo: String(periodDate.getUTCMonth() + 1).padStart(2, '0'),
       codModulo: config.codModulo,
       modulo: config.modulo,
       fuente,
@@ -250,7 +387,7 @@ export class AccountingEntriesService {
       fechaVencimiento: serial,
       fechaMovimiento: serial,
       fechaRegistro: serial,
-      cambioMoneda: config.tipoCambio ?? 1,
+      cambioMoneda: tc,
       esCancelado: 0,
       esConciliado: 0,
       esProvision: 0,
@@ -264,16 +401,23 @@ export class AccountingEntriesService {
     }
   }
 
-  /** Aplica centro de costo/área del proyecto a una línea (si está parametrizado). */
+  /**
+   * Aplica el centro de costo del proyecto a una línea. El "Codigo Centro Costo"
+   * y el "Codigo Sub Centro Costo" reciben el código del centro de costo
+   * (proyecto). Prioriza los campos contables explícitos del proyecto y, si no,
+   * usa el `code` del centro de costo.
+   */
   private applyProjectCostCenter(
     line: ContanetLine,
     project: any | undefined
   ): void {
     if (!project) return
-    if (project.centroCosto) line.centroCosto = project.centroCosto
-    if (project.subCentroCosto) {
-      line.subCentroCosto = project.subCentroCosto
-      line.subSubCentroCosto = project.subCentroCosto
+    const cc = project.centroCosto || project.code || ''
+    const sub = project.subCentroCosto || project.centroCosto || project.code || ''
+    if (cc) line.centroCosto = cc
+    if (sub) {
+      line.subCentroCosto = sub
+      line.subSubCentroCosto = sub
     }
     if (project.area) line.area = project.area
   }
@@ -288,39 +432,69 @@ export class AccountingEntriesService {
   // C2 — Builder COMPRA (registro de la compra, por comprobante)
   // ----------------------------------------------------------------------
 
-  private buildCompraLines(ctx: {
+  private async buildCompraLines(ctx: {
     report: any
     config: AccountingConfigDocument
     expenses: any[]
     projectMap: Map<string, any>
-  }): ContanetLine[] {
-    const { config, expenses, report, projectMap } = ctx
+    categoryMap: Map<string, any>
+    periodDate: Date
+    rateMap: Map<string, number>
+  }): Promise<ContanetLine[]> {
+    const { config, expenses, report, projectMap, categoryMap, periodDate, rateMap } = ctx
     const lines: ContanetLine[] = []
     let relacionado = 1
     let correlativo = 1
 
     for (const expense of expenses) {
       const data = this.parseData(expense)
+      const det = expense.comprobanteDetallado ?? {}
       const date = this.asientoDate(expense, report)
-      const igv = this.round2(Number(expense.igv) || 0)
-      const inafecto = this.round2(Number(expense.inafecto) || 0)
+      const tc = this.tcFor(date, rateMap, config)
+
+      // Cuentas resueltas por la CATEGORÍA del gasto (9X analítica, 6X destino).
+      const category = expense.categoryId
+        ? categoryMap.get(expense.categoryId.toString())
+        : undefined
+      const cuenta9x = category?.cuenta || config.cuenta42 // 9X analítica
+      const cuenta6xCat = category?.cuentaDestino6x || config.cuenta79
+
+      // Centro de costo del proyecto del gasto (aplica a todas las líneas).
+      const expenseProject = expense.proyectId
+        ? projectMap.get(expense.proyectId.toString())
+        : undefined
+
+      const igv = this.round2(
+        Number(expense.igv) || Number(det?.totales?.igv) || 0
+      )
       const portions = this.resolvePortions(expense)
-      const baseTotal = this.round2(
-        portions.reduce((s, p) => s + p.monto, 0)
-      )
+      const baseTotal = this.round2(portions.reduce((s, p) => s + p.monto, 0))
       const total = this.round2(
-        Number(expense.total) || baseTotal + igv
+        Number(expense.total) ||
+          Number(det?.totales?.importeTotal) ||
+          baseTotal + igv
       )
-      const serie = data.serie || ''
-      const nroDoc = data.correlativo || expense.internalCode || ''
-      const ruc = data.rucEmisor || ''
-      const razonSocial = data.razonSocial || expense.providerName || ''
-      const glosa = (expense.comentario || data.comentario || 'GASTO')
+
+      const serie = det?.comprobante?.serie || data.serie || ''
+      const nroDoc =
+        det?.comprobante?.correlativo ||
+        data.correlativo ||
+        expense.internalCode ||
+        ''
+      const ruc = det?.emisor?.ruc || data.rucEmisor || ''
+      const razonSocial =
+        det?.emisor?.razonSocial ||
+        data.razonSocial ||
+        expense.providerName ||
+        ''
+      const glosaBase = (expense.comentario || data.comentario || 'GASTO')
         .toString()
         .slice(0, 100)
         .toUpperCase()
 
       const push = (line: ContanetLine) => {
+        // Centro de costo en todas las líneas del comprobante.
+        this.applyProjectCostCenter(line, expenseProject)
         line.relacionado = relacionado
         line.correlativo = correlativo++
         lines.push(line)
@@ -328,13 +502,13 @@ export class AccountingEntriesService {
 
       // (1) Cuenta 42 — total del comprobante (Haber), provisión + proveedor
       push(
-        this.baseLine(config, date, config.fuenteCompra, glosa, {
+        this.baseLine(config, date, config.fuenteCompra, glosaBase, tc, periodDate, {
           nroCuenta: config.cuenta42,
           codTipDoc: '01',
           nroSerie: serie,
           nroDoc,
           montoHaber: total,
-          montoHaberME: this.toME(total, config),
+          montoHaberME: this.toME(total, tc),
           esProvision: 1,
           codTipDocIdentProv: ruc ? '06' : '',
           nroDocProv: ruc,
@@ -346,47 +520,43 @@ export class AccountingEntriesService {
       if (igv > 0) {
         const cuenta40 = this.resolveCuenta40(config, expense.tasaIgv)
         push(
-          this.baseLine(config, date, config.fuenteCompra, glosa, {
+          this.baseLine(config, date, config.fuenteCompra, glosaBase, tc, periodDate, {
             nroCuenta: cuenta40,
             montoDebe: igv,
-            montoDebeME: this.toME(igv, config),
+            montoDebeME: this.toME(igv, tc),
           })
         )
       }
 
       // (3) Cuentas 9X — analítica por porción (Debe)
       for (const p of portions) {
-        const project = p.proyectId ? projectMap.get(p.proyectId) : undefined
-        const cuenta9x =
-          project?.cuentaAnalitica9x || `91.${expense.proyectId ?? ''}`
-        const line = this.baseLine(config, date, config.fuenteCompra, glosa, {
-          nroCuenta: cuenta9x,
-          identTipAfecto: p.condicion === 'afecto' ? 'S' : 'N',
-          montoDebe: this.round2(p.monto),
-          montoDebeME: this.toME(p.monto, config),
-        })
-        this.applyProjectCostCenter(line, project)
-        push(line)
+        const glosa = p.etiqueta ? `${glosaBase} (${p.etiqueta})` : glosaBase
+        push(
+          this.baseLine(config, date, config.fuenteCompra, glosa, tc, periodDate, {
+            nroCuenta: cuenta9x,
+            identTipAfecto: p.condicion === 'afecto' ? 'S' : 'N',
+            montoDebe: this.round2(p.monto),
+            montoDebeME: this.toME(p.monto, tc),
+          })
+        )
       }
 
       // (4) Destino — par 6X (Debe) / 79 (Haber) por porción
       for (const p of portions) {
-        const project = p.proyectId ? projectMap.get(p.proyectId) : undefined
-        const cuenta6x = project?.cuentaDestino6x || config.cuenta79
-        const line6 = this.baseLine(config, date, config.fuenteCompra, glosa, {
-          nroCuenta: cuenta6x,
-          montoDebe: this.round2(p.monto),
-          montoDebeME: this.toME(p.monto, config),
-          esDestino: 1,
-        })
-        this.applyProjectCostCenter(line6, project)
-        push(line6)
-
+        const glosa = p.etiqueta ? `${glosaBase} (${p.etiqueta})` : glosaBase
         push(
-          this.baseLine(config, date, config.fuenteCompra, glosa, {
+          this.baseLine(config, date, config.fuenteCompra, glosa, tc, periodDate, {
+            nroCuenta: cuenta6xCat,
+            montoDebe: this.round2(p.monto),
+            montoDebeME: this.toME(p.monto, tc),
+            esDestino: 1,
+          })
+        )
+        push(
+          this.baseLine(config, date, config.fuenteCompra, glosa, tc, periodDate, {
             nroCuenta: config.cuenta79,
             montoHaber: this.round2(p.monto),
-            montoHaberME: this.toME(p.monto, config),
+            montoHaberME: this.toME(p.monto, tc),
             esDestino: 1,
           })
         )
@@ -410,23 +580,26 @@ export class AccountingEntriesService {
     return rates[0]?.cuenta40 || '40.1.1.100'
   }
 
-  private toME(amount: number, config: AccountingConfigDocument): number {
-    const tc = Number(config.tipoCambio) || 1
-    if (tc === 1) return 0
-    return this.round2(amount / tc)
+  /** Equivalente en USD: monto en soles / tipo de cambio del día. */
+  private toME(amount: number, tc: number): number {
+    const rate = Number(tc) || 0
+    if (rate <= 0) return 0
+    return this.round2(amount / rate)
   }
 
   // ----------------------------------------------------------------------
   // C3 — Builders SOLICITUD / APLICACIÓN / DEVOLUCIÓN-REEMBOLSO
   // ----------------------------------------------------------------------
 
-  private buildSolicitudLines(ctx: {
+  private async buildSolicitudLines(ctx: {
     report: any
     config: AccountingConfigDocument
     advances: any[]
     colaborador: any
-  }): ContanetLine[] {
-    const { config, advances, colaborador, report } = ctx
+    periodDate: Date
+    rateMap: Map<string, number>
+  }): Promise<ContanetLine[]> {
+    const { config, advances, colaborador, report, periodDate, rateMap } = ctx
     const lines: ContanetLine[] = []
     let relacionado = 1
     let correlativo = 1
@@ -437,9 +610,10 @@ export class AccountingEntriesService {
     for (const adv of advances) {
       const amount = this.round2(Number(adv.amount) || 0)
       if (amount <= 0) continue
-      const date = adv.payment?.transferDate
-        ? new Date(adv.payment.transferDate)
-        : new Date(adv.createdAt || Date.now())
+      const rawDate =
+        adv.payment?.transferDate || adv.startDate || adv.createdAt
+      const date = rawDate ? new Date(rawDate) : new Date()
+      const tc = this.tcFor(date, rateMap, config)
       const banco = this.resolveBankAccount(config, adv.payment?.accountNumber)
       const glosa = (adv.description || 'SOLICITUD VIATICO')
         .toString()
@@ -448,10 +622,10 @@ export class AccountingEntriesService {
 
       // 14 (Debe) — nace la obligación del colaborador
       lines.push({
-        ...this.baseLine(config, date, config.fuenteCajaBancos, glosa, {
+        ...this.baseLine(config, date, config.fuenteCajaBancos, glosa, tc, periodDate, {
           nroCuenta: cuenta14,
           montoDebe: amount,
-          montoDebeME: this.toME(amount, config),
+          montoDebeME: this.toME(amount, tc),
           codTipDocIdentTrab: trabDni ? '01' : '',
           nroDocTrab: trabDni,
           razonSocialTrab: trabNombre,
@@ -462,10 +636,10 @@ export class AccountingEntriesService {
 
       // 104 (Haber) — sale el dinero del banco
       lines.push({
-        ...this.baseLine(config, date, config.fuenteCajaBancos, glosa, {
+        ...this.baseLine(config, date, config.fuenteCajaBancos, glosa, tc, periodDate, {
           nroCuenta: banco,
           montoHaber: amount,
-          montoHaberME: this.toME(amount, config),
+          montoHaberME: this.toME(amount, tc),
         }),
         relacionado,
         correlativo: correlativo++,
@@ -478,13 +652,15 @@ export class AccountingEntriesService {
     return lines
   }
 
-  private buildAplicacionLines(ctx: {
+  private async buildAplicacionLines(ctx: {
     report: any
     config: AccountingConfigDocument
     expenses: any[]
     colaborador: any
-  }): ContanetLine[] {
-    const { config, expenses, colaborador, report } = ctx
+    periodDate: Date
+    rateMap: Map<string, number>
+  }): Promise<ContanetLine[]> {
+    const { config, expenses, colaborador, report, periodDate, rateMap } = ctx
     const lines: ContanetLine[] = []
     let relacionado = 1
     let correlativo = 1
@@ -494,22 +670,30 @@ export class AccountingEntriesService {
 
     for (const expense of expenses) {
       const data = this.parseData(expense)
+      const det = expense.comprobanteDetallado ?? {}
       const date = this.asientoDate(expense, report)
-      const total = this.round2(Number(expense.total) || 0)
+      const tc = this.tcFor(date, rateMap, config)
+      const total = this.round2(
+        Number(expense.total) || Number(det?.totales?.importeTotal) || 0
+      )
       if (total <= 0) continue
-      const ruc = data.rucEmisor || ''
-      const razonSocial = data.razonSocial || expense.providerName || ''
+      const ruc = det?.emisor?.ruc || data.rucEmisor || ''
+      const razonSocial =
+        det?.emisor?.razonSocial ||
+        data.razonSocial ||
+        expense.providerName ||
+        ''
       const glosa = 'APLICACION'
 
       // 42 (Debe) — cancela la provisión del proveedor
       lines.push({
-        ...this.baseLine(config, date, config.fuenteAplicacion, glosa, {
+        ...this.baseLine(config, date, config.fuenteAplicacion, glosa, tc, periodDate, {
           nroCuenta: config.cuenta42,
           codTipDoc: '01',
-          nroSerie: data.serie || '',
-          nroDoc: data.correlativo || '',
+          nroSerie: det?.comprobante?.serie || data.serie || '',
+          nroDoc: det?.comprobante?.correlativo || data.correlativo || '',
           montoDebe: total,
-          montoDebeME: this.toME(total, config),
+          montoDebeME: this.toME(total, tc),
           codTipDocIdentProv: ruc ? '06' : '',
           nroDocProv: ruc,
           razonSocialProv: razonSocial,
@@ -520,10 +704,10 @@ export class AccountingEntriesService {
 
       // 14 (Haber) — reduce la cuenta por cobrar del colaborador
       lines.push({
-        ...this.baseLine(config, date, config.fuenteAplicacion, glosa, {
+        ...this.baseLine(config, date, config.fuenteAplicacion, glosa, tc, periodDate, {
           nroCuenta: cuenta14,
           montoHaber: total,
-          montoHaberME: this.toME(total, config),
+          montoHaberME: this.toME(total, tc),
           codTipDocIdentTrab: trabDni ? '01' : '',
           nroDocTrab: trabDni,
           razonSocialTrab: trabNombre,
@@ -538,16 +722,18 @@ export class AccountingEntriesService {
     return lines
   }
 
-  private buildDevolucionReembolsoLines(
+  private async buildDevolucionReembolsoLines(
     ctx: {
       report: any
       config: AccountingConfigDocument
       advances: any[]
       colaborador: any
+      periodDate: Date
+      rateMap: Map<string, number>
     },
     modo: 'devolucion' | 'reembolso'
-  ): ContanetLine[] {
-    const { config, colaborador, report, advances } = ctx
+  ): Promise<ContanetLine[]> {
+    const { config, colaborador, report, advances, periodDate, rateMap } = ctx
     const settlement = report.settlement
     const diff = this.round2(Math.abs(Number(settlement?.difference) || 0))
     if (diff <= 0) return []
@@ -556,6 +742,7 @@ export class AccountingEntriesService {
     if (settlement?.type && settlement.type !== modo) return []
 
     const date = new Date(report.updatedAt || Date.now())
+    const tc = this.tcFor(date, rateMap, config)
     const trabDni = colaborador?.dni || ''
     const trabNombre = colaborador?.name || ''
     const cuenta14 = this.cuenta14(config, colaborador)
@@ -574,19 +761,19 @@ export class AccountingEntriesService {
     if (modo === 'devolucion') {
       // 104 (Debe) entra al banco / 14 (Haber) reduce la CxC
       lines.push({
-        ...this.baseLine(config, date, config.fuenteCajaBancos, glosa, {
+        ...this.baseLine(config, date, config.fuenteCajaBancos, glosa, tc, periodDate, {
           nroCuenta: banco,
           montoDebe: diff,
-          montoDebeME: this.toME(diff, config),
+          montoDebeME: this.toME(diff, tc),
         }),
         relacionado: 1,
         correlativo: 1,
       })
       lines.push({
-        ...this.baseLine(config, date, config.fuenteCajaBancos, glosa, {
+        ...this.baseLine(config, date, config.fuenteCajaBancos, glosa, tc, periodDate, {
           nroCuenta: cuenta14,
           montoHaber: diff,
-          montoHaberME: this.toME(diff, config),
+          montoHaberME: this.toME(diff, tc),
           codTipDocIdentTrab: trabDni ? '01' : '',
           nroDocTrab: trabDni,
           razonSocialTrab: trabNombre,
@@ -597,10 +784,10 @@ export class AccountingEntriesService {
     } else {
       // Reembolso: 14/46 (Debe) / 104 (Haber) sale del banco
       lines.push({
-        ...this.baseLine(config, date, config.fuenteCajaBancos, glosa, {
+        ...this.baseLine(config, date, config.fuenteCajaBancos, glosa, tc, periodDate, {
           nroCuenta: cuentaColab,
           montoDebe: diff,
-          montoDebeME: this.toME(diff, config),
+          montoDebeME: this.toME(diff, tc),
           codTipDocIdentTrab: trabDni ? '01' : '',
           nroDocTrab: trabDni,
           razonSocialTrab: trabNombre,
@@ -609,10 +796,10 @@ export class AccountingEntriesService {
         correlativo: 1,
       })
       lines.push({
-        ...this.baseLine(config, date, config.fuenteCajaBancos, glosa, {
+        ...this.baseLine(config, date, config.fuenteCajaBancos, glosa, tc, periodDate, {
           nroCuenta: banco,
           montoHaber: diff,
-          montoHaberME: this.toME(diff, config),
+          montoHaberME: this.toME(diff, tc),
         }),
         relacionado: 1,
         correlativo: 2,

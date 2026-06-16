@@ -28,6 +28,7 @@ import { LineaNegocioModule } from './modules/linea-negocio/linea-negocio.module
 import { CajaChicaReportModule } from './modules/caja-chica-report/caja-chica-report.module'
 import { AccountingConfigModule } from './modules/accounting-config/accounting-config.module'
 import { AccountingEntriesModule } from './modules/accounting-entries/accounting-entries.module'
+import { ExchangeRateModule } from './modules/exchange-rate/exchange-rate.module'
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -59,6 +60,7 @@ import { AccountingEntriesModule } from './modules/accounting-entries/accounting
     CajaChicaReportModule,
     AccountingConfigModule,
     AccountingEntriesModule,
+    ExchangeRateModule,
   ],
   controllers: [AppController],
   providers: [AppService],

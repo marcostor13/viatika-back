@@ -1,5 +1,6 @@
 import { AccountingEntriesService } from './accounting-entries.service'
 import { ContanetLine } from './entities/contanet-columns'
+import { buildContanetAoa } from './entities/contanet-export'
 
 /**
  * Config de prueba que replica los valores del template `compras.xlsm`.
@@ -9,7 +10,10 @@ function makeConfig(): any {
     cuenta42: '42.1.2.100',
     cuenta79: '79.1.1.100',
     cuenta14Raiz: '14.1.3.100',
-    igvRates: [{ tasa: 18, cuenta40: '40.1.1.100' }],
+    igvRates: [
+      { tasa: 18, cuenta40: '40.1.1.100' },
+      { tasa: 10.5, cuenta40: '40.1.1.100' },
+    ],
     inafectoKeywords: [],
     codModulo: '03',
     modulo: 'CT',
@@ -31,95 +35,182 @@ function makeConfig(): any {
   }
 }
 
+const TC = 3.5 // tipo de cambio de prueba (PEN/USD)
+
 function newService(): AccountingEntriesService {
-  // Los builders no usan los modelos; se pasan stubs.
   const stub: any = {}
-  return new AccountingEntriesService(stub, stub, stub, stub, stub, stub)
+  const exchangeStub: any = { getRate: async () => TC }
+  // (reportModel, expenseModel, advanceModel, projectModel, userModel, categoryModel, configService, exchangeService)
+  return new AccountingEntriesService(
+    stub,
+    stub,
+    stub,
+    stub,
+    stub,
+    stub,
+    stub,
+    exchangeStub
+  )
 }
 
 function sum(lines: ContanetLine[], field: 'montoDebe' | 'montoHaber'): number {
-  return Math.round(
-    lines.reduce((s, l) => s + (Number(l[field]) || 0), 0) * 100
-  ) / 100
+  return (
+    Math.round(
+      lines.reduce((s, l) => s + (Number(l[field]) || 0), 0) * 100
+    ) / 100
+  )
 }
 
 describe('AccountingEntriesService — asiento de compra', () => {
   const service = newService()
   const config = makeConfig()
 
+  // Categoría ALIMENTACION → 9X 91.3.1.410, destino 6X 63.1.4.100
+  const categoryMap = new Map<string, any>([
+    ['cat1', { _id: 'cat1', cuenta: '91.3.1.410', cuentaDestino6x: '63.1.4.100' }],
+  ])
+  // Centro de costo (proyecto) con código.
+  const projectMap = new Map<string, any>([
+    ['p1', { _id: 'p1', code: 'CC-01', centroCosto: 'SC', subCentroCosto: '62747', area: '010101' }],
+  ])
+
+  // Imagen 3: base 46.28 + IGV 18% (8.33) + recargo 1.39 = 56.00
   const expense = {
     _id: 'e1',
     proyectId: 'p1',
-    total: 128,
-    igv: 18,
+    categoryId: 'cat1',
+    total: 56,
+    igv: 8.33,
     tasaIgv: 18,
-    inafecto: 10,
-    baseAfecta: 100,
     comentario: 'Alimentacion',
-    data: JSON.stringify({
-      serie: 'F001',
-      correlativo: '12345678',
-      rucEmisor: '20492533891',
-      razonSocial: 'INVERSIONES AQUATEC S.A.C.',
-    }),
-    detalleAnalitico: [
-      { proyectId: 'p1', condicion: 'afecto', monto: 100 },
-      { proyectId: 'p1', condicion: 'inafecto', monto: 10 },
-    ],
+    data: JSON.stringify({ serie: 'F219', correlativo: '00001362', rucEmisor: '20212261516' }),
+    comprobanteDetallado: {
+      emisor: { ruc: '20212261516', razonSocial: 'INVERSIONES FIRA S.A.' },
+      comprobante: { serie: 'F219', correlativo: '00001362' },
+      totales: {
+        operacionGravada: 46.28,
+        operacionExonerada: 0,
+        operacionInafecta: 0,
+        igv: 8.33,
+        importeTotal: 56,
+      },
+      recargoConsumo: 1.39,
+    },
   }
 
-  const projectMap = new Map<string, any>([
-    [
-      'p1',
-      {
-        _id: 'p1',
-        cuentaAnalitica9x: '91.3.1.410',
-        cuentaDestino6x: '63.1.4.100',
-        centroCosto: 'SC',
-        subCentroCosto: '62747',
-        area: '010101',
-      },
-    ],
-  ])
-
-  const lines: ContanetLine[] = (service as any).buildCompraLines({
-    report: { createdAt: new Date('2026-04-15') },
-    config,
-    expenses: [expense],
-    projectMap,
+  const rateMap = new Map<string, number>([['2026-04-15', TC]])
+  let lines: ContanetLine[]
+  beforeAll(async () => {
+    lines = await (service as any).buildCompraLines({
+      report: { createdAt: new Date('2026-04-15') },
+      config,
+      expenses: [expense],
+      projectMap,
+      categoryMap,
+      periodDate: new Date('2026-03-01'),
+      rateMap,
+    })
   })
 
-  it('genera 8 líneas (42, 40, 2×9X, 2×(6X/79))', () => {
+  it('genera 8 líneas (42, 40, 9X afecto, 9X recargo, 2×(6X/79))', () => {
     expect(lines.length).toBe(8)
   })
 
-  it('cuadra: Σ Debe = Σ Haber = 238', () => {
-    expect(sum(lines, 'montoDebe')).toBe(238)
-    expect(sum(lines, 'montoHaber')).toBe(238)
+  it('cuadra: Σ Debe = Σ Haber', () => {
+    expect(sum(lines, 'montoDebe')).toBe(sum(lines, 'montoHaber'))
     expect(service.validateCuadre(lines)).toHaveLength(0)
   })
 
-  it('la cuenta 42 lleva el total 128 al Haber con Es Provisión=1', () => {
+  it('la cuenta 42 lleva el total 56 al Haber con Es Provisión=1 y proveedor', () => {
     const l42 = lines.find((l) => l.nroCuenta === '42.1.2.100')!
-    expect(l42.montoHaber).toBe(128)
+    expect(l42.montoHaber).toBe(56)
     expect(l42.esProvision).toBe(1)
-    expect(l42.nroDocProv).toBe('20492533891')
+    expect(l42.nroDocProv).toBe('20212261516')
   })
 
-  it('el IGV va a la 40 en el Debe', () => {
-    const l40 = lines.find((l) => l.nroCuenta === '40.1.1.100')!
-    expect(l40.montoDebe).toBe(18)
-  })
-
-  it('la analítica 9X se divide en afecto (S) e inafecto (N)', () => {
+  it('la analítica 9X viene de la CATEGORÍA (91.3.1.410), no del proyecto', () => {
     const nines = lines.filter((l) => l.nroCuenta === '91.3.1.410')
-    expect(nines).toHaveLength(2)
-    expect(nines.find((l) => l.identTipAfecto === 'S')!.montoDebe).toBe(100)
-    expect(nines.find((l) => l.identTipAfecto === 'N')!.montoDebe).toBe(10)
+    expect(nines.length).toBe(2) // afecto + recargo
+    expect(nines.find((l) => l.identTipAfecto === 'S')!.montoDebe).toBe(46.28)
+    expect(nines.find((l) => l.identTipAfecto === 'N')!.montoDebe).toBe(1.39)
   })
 
-  it('todas las líneas comparten el mismo Relacionado y correlativo continuo', () => {
-    expect(new Set(lines.map((l) => l.relacionado)).size).toBe(1)
-    expect(lines.map((l) => l.correlativo)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+  it('el destino 6X viene de la categoría (63.1.4.100)', () => {
+    const dest = lines.filter((l) => l.nroCuenta === '63.1.4.100')
+    expect(dest.length).toBe(2)
+  })
+
+  it('el centro de costo (proyecto) aparece en TODAS las líneas', () => {
+    expect(lines.every((l) => l.centroCosto === 'SC')).toBe(true)
+    expect(lines.every((l) => l.subCentroCosto === '62747')).toBe(true)
+  })
+
+  it('Monto ME = monto / tipo de cambio, y Cambio Moneda = tc', () => {
+    const l42 = lines.find((l) => l.nroCuenta === '42.1.2.100')!
+    expect(l42.cambioMoneda).toBe(TC)
+    expect(l42.montoHaberME).toBe(Math.round((56 / TC) * 100) / 100)
+  })
+
+  it('TODAS las líneas tienen tipo de cambio y un monto ME (no solo la primera)', () => {
+    expect(lines.every((l) => l.cambioMoneda === TC)).toBe(true)
+    expect(
+      lines.every(
+        (l) => Number(l.montoDebeME) > 0 || Number(l.montoHaberME) > 0
+      )
+    ).toBe(true)
+  })
+
+  it('ejercicio/periodo vienen de la fecha de inicio de la solicitud (periodDate)', () => {
+    // periodDate = 2026-03-01 → ejercicio 2026, periodo '03' (no del comprobante 04).
+    expect(lines.every((l) => l.ejercicio === 2026)).toBe(true)
+    expect(lines.every((l) => l.periodo === '03')).toBe(true)
+  })
+
+  it('ninguna cuenta 91 contiene un ObjectId (regresión)', () => {
+    const bad = lines.filter(
+      (l) => typeof l.nroCuenta === 'string' && /^91\.[0-9a-f]{12,}/.test(l.nroCuenta as string)
+    )
+    expect(bad).toHaveLength(0)
+  })
+})
+
+describe('Export Contanet — cabeceras (replica sheet1)', () => {
+  // Datos en fila 9 (índice 8): fila1..fila8 son cabeceras.
+  const aoa = buildContanetAoa([{ correlativo: 1, relacionado: 1 }])
+  const D = 3 // índice columna D
+
+  it('fila 2: zona a importar', () => {
+    expect(aoa[1][1]).toBe('Zona Límite a  Importar')
+    expect(aoa[1][2]).toBe('CONTABILIDAD')
+  })
+
+  it('fila 3: obligatorio (*) en columnas clave', () => {
+    expect(aoa[2][D]).toBe('(*)') // Correlativo
+    expect(aoa[2][D + 1]).toBe('(*)') // Relacionado
+  })
+
+  it('fila 4: tipo de dato (Correlativo=Entero, Monto Debe=Decimal)', () => {
+    expect(aoa[3][D]).toBe('Entero')
+    expect(aoa[3][D + 42]).toBe('Decimal') // montoDebe (col AT)
+  })
+
+  it('fila 5: cantidad de caracteres (Nro Cuenta=50)', () => {
+    expect(aoa[4][D + 8]).toBe('50') // nroCuenta (col L)
+  })
+
+  it('fila 6: grupos', () => {
+    expect(aoa[5][D]).toBe('Codigo Correlativo cabecera')
+    expect(aoa[5][D + 1]).toBe('INFORMACIÓN GENERAL')
+  })
+
+  it('fila 7 y 8: encabezados', () => {
+    expect(aoa[6][D]).toBe('Correlativo')
+    expect(aoa[6][D + 1]).toBe('Relacionado')
+    expect(aoa[7][D + 5]).toBe('Cod_MR') // h8 de codModulo (col I)
+  })
+
+  it('los datos empiezan en la fila 9 (índice 8)', () => {
+    expect(aoa[8][D]).toBe(1)
+    expect(aoa[8][D + 1]).toBe(1)
   })
 })

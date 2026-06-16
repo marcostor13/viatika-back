@@ -12,6 +12,8 @@ import { Expense, ExpenseSchema } from '../expense/entities/expense.entity'
 import { Advance, AdvanceSchema } from '../advance/entities/advance.entity'
 import { Project, ProjectSchema } from '../project/entities/project.entity'
 import { User, UserSchema } from '../user/schemas/user.schema'
+import { Category, CategorySchema } from '../category/entities/category.entity'
+import { ExchangeRateModule } from '../exchange-rate/exchange-rate.module'
 
 @Module({
   imports: [
@@ -21,9 +23,11 @@ import { User, UserSchema } from '../user/schemas/user.schema'
       { name: Advance.name, schema: AdvanceSchema },
       { name: Project.name, schema: ProjectSchema },
       { name: User.name, schema: UserSchema },
+      { name: Category.name, schema: CategorySchema },
     ]),
     AccountingConfigModule,
     AuditLogModule,
+    ExchangeRateModule,
   ],
   controllers: [AccountingEntriesController],
   providers: [AccountingEntriesService],

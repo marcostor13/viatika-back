@@ -2,6 +2,10 @@ import {
   CONTANET_COLUMNS,
   ContanetLine,
   FIRST_DATA_COL_INDEX,
+  COL_GRUPO,
+  COL_OBLIGATORIO,
+  COL_TIPO_DATO,
+  COL_CARACTERES,
 } from './contanet-columns'
 
 /**
@@ -24,25 +28,37 @@ export function buildContanetAoa(lines: ContanetLine[]): (string | number)[][] {
   row2[2] = 'CONTABILIDAD' // C
   aoa.push(row2)
 
-  // Fila 3: información obligatoria
+  // Fila 3: información obligatoria (marca «(*)» por columna)
   const row3 = emptyRow()
   row3[2] = 'Información Obligatoria'
+  CONTANET_COLUMNS.forEach((c, i) => {
+    if (COL_OBLIGATORIO.has(c.key)) row3[FIRST_DATA_COL_INDEX + i] = '(*)'
+  })
   aoa.push(row3)
 
-  // Fila 4: tipo de dato
+  // Fila 4: tipo de dato por columna
   const row4 = emptyRow()
   row4[2] = 'Tipo de Dato'
+  CONTANET_COLUMNS.forEach((c, i) => {
+    row4[FIRST_DATA_COL_INDEX + i] = COL_TIPO_DATO[c.key] ?? 'Texto'
+  })
   aoa.push(row4)
 
-  // Fila 5: cantidad de caracteres
+  // Fila 5: cantidad de caracteres por columna
   const row5 = emptyRow()
   row5[2] = 'Cantidad Caracteres'
+  CONTANET_COLUMNS.forEach((c, i) => {
+    const v = COL_CARACTERES[c.key]
+    if (v !== undefined) row5[FIRST_DATA_COL_INDEX + i] = v
+  })
   aoa.push(row5)
 
-  // Fila 6: descripción / grupos
+  // Fila 6: descripción / grupos (etiqueta al inicio de cada grupo)
   const row6 = emptyRow()
   row6[2] = 'Descripción'
-  row6[FIRST_DATA_COL_INDEX] = 'Codigo Correlativo cabecera'
+  CONTANET_COLUMNS.forEach((c, i) => {
+    if (COL_GRUPO[c.key]) row6[FIRST_DATA_COL_INDEX + i] = COL_GRUPO[c.key]
+  })
   aoa.push(row6)
 
   // Fila 7: encabezados amigables

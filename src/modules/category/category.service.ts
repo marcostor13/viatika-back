@@ -20,6 +20,7 @@ export interface ICategoryItem {
   key: string
   description?: string
   cuenta?: string
+  cuentaDestino6x?: string
   observaciones?: string
   isActive: boolean
   limit: number | null
@@ -88,6 +89,7 @@ export class CategoryService {
           key: d.key,
           description: d.description,
           cuenta: d.cuenta,
+          cuentaDestino6x: d.cuentaDestino6x,
           observaciones: d.observaciones,
           isActive: d.isActive,
           limit: d.limit ?? null,

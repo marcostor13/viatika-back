@@ -16,6 +16,7 @@ import { EmailModule } from '../email/email.module'
 import { NotificationsModule } from '../notifications/notifications.module'
 import { UserModule } from '../user/user.module'
 import { AdvanceModule } from '../advance/advance.module'
+import { UploadModule } from '../upload/upload.module'
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { AdvanceModule } from '../advance/advance.module'
     EmailModule,
     NotificationsModule,
     UserModule,
+    UploadModule,
     forwardRef(() => AdvanceModule),
   ],
   controllers: [ExpenseReportController],

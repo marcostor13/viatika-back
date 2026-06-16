@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Patch,
+  Delete,
   Param,
   Body,
   Request,
@@ -349,6 +350,29 @@ export class AdvanceController {
       userId: req.user._id || req.user.sub,
       userName: req.user.name || req.user.email,
       action: 'cancel_advance',
+      module: 'tesoreria',
+      entityId: id,
+      clientId: req.user.clientId,
+    })
+    return result
+  }
+
+  /**
+   * Elimina una solicitud de viáticos. El colaborador propietario puede eliminarla
+   * mientras no tenga ninguna aprobación; una vez aprobada por alguien, solo
+   * Contabilidad (o Superadmin) puede hacerlo.
+   */
+  @Delete(':id')
+  @Roles(ROLES.COLABORADOR, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
+  async remove(@Param('id') id: string, @Request() req) {
+    const result = await this.advanceService.remove(id, {
+      userId: req.user._id || req.user.sub,
+      role: req.user.roles?.[0],
+    })
+    this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email,
+      action: 'delete_advance',
       module: 'tesoreria',
       entityId: id,
       clientId: req.user.clientId,

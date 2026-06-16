@@ -426,10 +426,18 @@ export class ExpenseReportController {
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @Roles(
+    ROLES.ADMIN,
+    ROLES.SUPER_ADMIN,
+    ROLES.CONTABILIDAD,
+    ROLES.COLABORADOR
+  )
   @Delete(':id')
   async remove(@Param('id') id: string, @Request() req: any) {
-    const result = await this.expenseReportService.remove(id)
+    const result = await this.expenseReportService.remove(id, {
+      userId: req.user._id || req.user.sub,
+      role: req.user.roles?.[0],
+    })
     await this.auditLogService.log({
       userId: req.user._id || req.user.sub,
       userName: req.user.name || req.user.email || 'Usuario',

@@ -21,7 +21,10 @@ import {
 import { ApproveAdvanceDto, RejectAdvanceDto } from './dto/approve-advance.dto'
 import { PayAdvanceDto } from './dto/pay-advance.dto'
 import { ResubmitAdvanceDto } from './dto/resubmit-advance.dto'
-import { ExpenseReportService } from '../expense-report/expense-report.service'
+import {
+  ExpenseReportService,
+  SolicitudDeleteActor,
+} from '../expense-report/expense-report.service'
 import { ROLES } from '../auth/enums/roles.enum'
 import { ProjectService } from '../project/project.service'
 import { CategoryService } from '../category/category.service'
@@ -2106,6 +2109,54 @@ export class AdvanceService {
       this.logger.error(`Correo cancelación viático coordinador: ${msg}`)
     })
 
+    return advance
+  }
+
+  /**
+   * Elimina una solicitud de viáticos (anticipo) completa. La autorización depende
+   * del estado de aprobación:
+   *  - Sin ninguna aprobación L1/L2: el colaborador propietario, Contabilidad,
+   *    Administrador o Superadmin.
+   *  - Con al menos una aprobación: solo Contabilidad o Superadmin.
+   * Si el anticipo ya tiene una rendición vinculada, ésta se elimina en cascada.
+   */
+  async remove(id: string, actor: SolicitudDeleteActor): Promise<Advance> {
+    const advance = await this.advanceModel.findById(id).exec()
+    if (!advance) throw new NotFoundException(`Viático ${id} no encontrado`)
+
+    const role = actor?.role ?? ''
+    const isSuperAdmin = role === ROLES.SUPER_ADMIN
+    const isContabilidad = role === ROLES.CONTABILIDAD
+    const isColaborador = role === ROLES.COLABORADOR
+
+    const hasApproval =
+      (advance.approvalHistory ?? []).some(e => e.action === 'approved') ||
+      ['approved', 'partially_paid', 'paid', 'settled'].includes(advance.status)
+
+    if (hasApproval) {
+      if (!isContabilidad && !isSuperAdmin) {
+        throw new ForbiddenException(
+          'Este viático ya tiene una aprobación; solo Contabilidad puede eliminarlo.'
+        )
+      }
+    } else if (isColaborador && advance.userId.toString() !== String(actor.userId)) {
+      throw new ForbiddenException('Solo puedes eliminar tus propias solicitudes.')
+    }
+
+    // Cascada: si hay rendición vinculada, eliminarla también (incluye sus comprobantes).
+    if (advance.expenseReportId) {
+      try {
+        await this.expenseReportService.remove(
+          advance.expenseReportId.toString(),
+          actor
+        )
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.logger.error(`Error eliminando rendición vinculada al viático ${id}: ${msg}`)
+      }
+    }
+
+    await this.advanceModel.findByIdAndDelete(id).exec()
     return advance
   }
 

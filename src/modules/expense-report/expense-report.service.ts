@@ -1545,7 +1545,7 @@ export class ExpenseReportService {
 
     const reports = await this.expenseReportModel
       .find(query)
-      .select('_id codigo userId title motivo gestion budget status createdAt createdBy directaDeposit expenseIds')
+      .select('_id codigo userId title motivo gestion budget status createdAt createdBy directaDeposit expenseIds pendingBalanceFromReportId pendingBalanceAmount')
       .populate('userId', 'name email')
       .populate({ path: 'createdBy', select: 'name email roleId', populate: { path: 'roleId', select: 'name' } })
       .populate('expenseIds', 'total')
@@ -1566,7 +1566,14 @@ export class ExpenseReportService {
       }
       const expenses = (r.expenseIds as any[]) || []
       const totalGastado = expenses.reduce((s, e) => s + (Number(e?.total) || 0), 0)
-      const deposited = Number(r.directaDeposit?.amount ?? r.budget ?? 0)
+      // Rendición directa creada desde el saldo de otra (saldo heredado): no tiene
+      // `directaDeposit`, pero su presupuesto disponible es el saldo trasladado.
+      const hasInheritedBalance =
+        !!r.pendingBalanceFromReportId && Number(r.pendingBalanceAmount ?? 0) > 0
+      const deposited = Number(
+        r.directaDeposit?.amount ?? r.pendingBalanceAmount ?? r.budget ?? 0
+      )
+      const hasFunds = !!r.directaDeposit || hasInheritedBalance
       return {
         _id: String(r._id),
         codigo: r.codigo ?? null,
@@ -1575,10 +1582,10 @@ export class ExpenseReportService {
         motivo: r.motivo ?? null,
         status: r.status ?? null,
         createdAt: r.createdAt,
-        hasDeposit: !!r.directaDeposit,
+        hasDeposit: hasFunds,
         deposited,
         totalGastado,
-        saldo: r.directaDeposit ? deposited - totalGastado : null,
+        saldo: hasFunds ? deposited - totalGastado : null,
         expenseCount: expenses.length,
         generatedByName: creator?.name || creator?.email || null,
         generatedByRole: creator?.roleId?.name || null,

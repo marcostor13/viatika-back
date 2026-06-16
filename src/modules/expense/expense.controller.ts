@@ -370,6 +370,35 @@ export class ExpenseController {
     )
   }
 
+  /**
+   * Edición del desglose contable (base/IGV/tasa/inafecto/detalleAnalitico) por
+   * Contabilidad antes de generar los asientos. Marca el desglose como revisado.
+   */
+  @Patch('invoice/:id/desglose')
+  @Roles(ROLES.CONTABILIDAD, ROLES.ADMIN, ROLES.SUPER_ADMIN)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  async updateDesglose(
+    @Param('id') id: string,
+    @Body() updateExpenseDto: UpdateExpenseDto,
+    @Request() req
+  ) {
+    const result = await this.expenseService.update(
+      id,
+      { ...updateExpenseDto, desgloseRevisado: true },
+      this.toActorContext(req.user)
+    )
+    this.auditLogService.log({
+      userId: req.user?._id || req.user?.sub,
+      userName: req.user?.name || req.user?.email || 'Usuario',
+      action: 'update_expense_desglose',
+      module: 'facturas',
+      entityId: id,
+      details: 'Edición de desglose contable',
+      clientId: req.user?.clientId,
+    })
+    return result
+  }
+
   @Patch('invoice/:id/approve')
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
   @UseGuards(JwtAuthGuard, RolesGuard)

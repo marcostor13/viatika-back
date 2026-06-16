@@ -89,6 +89,10 @@ export class UpdateUserDto {
 
   @IsString()
   @IsOptional()
+  subcuenta14?: string
+
+  @IsString()
+  @IsOptional()
   area?: string
 
   @IsString()

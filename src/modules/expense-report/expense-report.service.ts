@@ -407,28 +407,50 @@ export class ExpenseReportService {
   }
 
   async findAllByUser(userId: string, clientId: string) {
-    return await this.expenseReportModel
+    const reports = await this.expenseReportModel
       .find({
         userId: new Types.ObjectId(userId),
         clientId: new Types.ObjectId(clientId),
         isCajaChica: { $ne: true },
       })
-      .populate('expenseIds', 'total')
+      .populate('expenseIds', 'total approvalCoord approvalCont')
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 })
+      .lean()
       .exec()
+    return reports.map(r => this.withDeletionApprovalFlag(r))
   }
 
   async findMyCajaChica(userId: string, clientId: string) {
-    return await this.expenseReportModel
+    const reports = await this.expenseReportModel
       .find({
         userId: new Types.ObjectId(userId),
         clientId: new Types.ObjectId(clientId),
         isCajaChica: true,
       })
-      .populate('expenseIds', 'total expenseType fechaEmision proveedor')
+      .populate(
+        'expenseIds',
+        'total expenseType fechaEmision proveedor approvalCoord approvalCont'
+      )
       .sort({ createdAt: -1 })
+      .lean()
       .exec()
+    return reports.map(r => this.withDeletionApprovalFlag(r))
+  }
+
+  /**
+   * Anexa `hasApprovedExpense` a un reporte para que el front sepa si algún
+   * comprobante ya fue aprobado (coord o contabilidad). Espeja la condición de
+   * `remove`: con cualquier aprobación, el colaborador ya no puede eliminar la
+   * solicitud, así que el botón no debe mostrarse.
+   */
+  private withDeletionApprovalFlag(report: any) {
+    const hasApprovedExpense = (report.expenseIds ?? []).some(
+      (e: any) =>
+        e?.approvalCoord?.status === 'approved' ||
+        e?.approvalCont?.status === 'approved'
+    )
+    return { ...report, hasApprovedExpense }
   }
 
   async findAllCajaChicaAvailable(clientId: string) {

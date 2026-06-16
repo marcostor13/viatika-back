@@ -79,6 +79,15 @@ export interface DepositScanResult {
   titular?: string
 }
 
+/** Datos extraídos de un comprobante de caja (escaneo OCR para autorellenar). */
+export interface CashVoucherScanResult {
+  entregadoA?: string
+  fecha?: string
+  direccion?: string
+  concepto?: string
+  monto: number
+}
+
 @Injectable()
 export class ExpenseService {
   private readonly logger = new Logger(ExpenseService.name)
@@ -174,6 +183,13 @@ export class ExpenseService {
       if (report.status !== 'open' && report.status !== 'rejected') {
         throw new ForbiddenException(
           'Solo puedes editar o eliminar gastos en rendiciones abiertas o rechazadas.'
+        )
+      }
+      // Caja chica finalizada: el total quedó congelado, el colaborador ya no
+      // puede modificar/eliminar gastos (mismo criterio que para agregarlos).
+      if ((report as unknown as { lockedByCajaChica?: boolean }).lockedByCajaChica) {
+        throw new ForbiddenException(
+          'La caja chica de esta rendición fue finalizada por Contabilidad. No se pueden modificar más gastos.'
         )
       }
     }
@@ -971,7 +987,110 @@ export class ExpenseService {
     }
   }
 
+  /**
+   * Escanea un comprobante de caja (imagen o PDF, por URL) y extrae los campos
+   * para autorellenar el formulario: entregado a, fecha, dirección, concepto y
+   * monto. Ligero: no persiste Expense ni valida nada; el usuario revisa y edita
+   * los datos antes de guardar.
+   */
+  async scanCashVoucher(
+    url: string,
+    mimeType?: string
+  ): Promise<CashVoucherScanResult> {
+    const isPdf =
+      (mimeType ? mimeType.toLowerCase().includes('pdf') : false) ||
+      /\.pdf(\?|$)/i.test(url)
+
+    const prompt =
+      'Eres un asistente que extrae datos de un COMPROBANTE DE CAJA (vale de ' +
+      'caja / comprobante de egreso de efectivo). Devuelve EXCLUSIVAMENTE un ' +
+      'JSON con la forma {"entregadoA": "<texto>", "fecha": "<dd/mm/aaaa>", ' +
+      '"direccion": "<texto>", "concepto": "<texto>", "monto": <número>}. ' +
+      'entregadoA es la persona o entidad a quien se entrega el dinero ' +
+      '("entregado a", "recibí de", "señor(es)"); fecha es la fecha del ' +
+      'comprobante; direccion la dirección si aparece; concepto el detalle o ' +
+      'motivo del pago/egreso; monto el importe total como número (sin símbolo ' +
+      'de moneda ni separadores de miles, punto decimal). Si un dato no ' +
+      'aparece, usa cadena vacía (o 0 para monto).'
+
+    try {
+      let content: string
+      if (isPdf) {
+        const buffer = await this.fetchUrlAsBuffer(url)
+        const pdfModule = await import('pdf-parse')
+        const pdfParse: (data: Buffer) => Promise<{ text: string }> =
+          (pdfModule as any).default ?? (pdfModule as any)
+        const parsed = await pdfParse(buffer)
+        const text = (parsed.text || '').substring(0, 15000)
+        const completion = await this.openai.chat.completions.create({
+          model: this.visionModel,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: prompt },
+                { type: 'text', text },
+              ],
+            },
+          ],
+          temperature: 0,
+          max_completion_tokens: 512,
+        })
+        content = completion.choices[0]?.message?.content || ''
+      } else {
+        const completion = await this.openai.chat.completions.create({
+          model: this.visionModel,
+          messages: this.buildVisionMessages(prompt, url),
+          temperature: 0,
+          max_completion_tokens: 512,
+        })
+        content = completion.choices[0]?.message?.content || ''
+      }
+      return this.parseCashVoucherScan(content)
+    } catch (error) {
+      this.logger.error('Error al escanear el comprobante de caja:', error)
+      throw new HttpException(
+        'No se pudo escanear el comprobante de caja.',
+        HttpStatus.INTERNAL_SERVER_ERROR
+      )
+    }
+  }
+
+  private parseCashVoucherScan(raw: string): CashVoucherScanResult {
+    const cleaned = (raw || '')
+      .replace(/^```json\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim()
+    let obj: any = {}
+    try {
+      obj = JSON.parse(cleaned)
+    } catch {
+      obj = {}
+    }
+    const monto =
+      typeof obj.monto === 'string'
+        ? Number(String(obj.monto).replace(/,/g, '')) || 0
+        : Number(obj.monto) || 0
+    const str = (v: unknown) => {
+      const s = v == null ? '' : String(v).trim()
+      return s.length ? s : undefined
+    }
+    return {
+      entregadoA: str(obj.entregadoA),
+      fecha: str(obj.fecha),
+      direccion: str(obj.direccion),
+      concepto: str(obj.concepto),
+      monto: monto > 0 ? monto : 0,
+    }
+  }
+
   async analyzeImageWithUrl(body: CreateExpenseDto): Promise<Expense> {
+    // Si la caja chica de la rendición ya fue finalizada por Contabilidad, no se
+    // permiten más gastos. Se valida antes del análisis para no gastar la llamada
+    // a OpenAI en un comprobante que será rechazado.
+    await this.expenseReportService.assertReportNotLockedByCajaChica(
+      body.expenseReportId
+    )
     const configSunat = await this.sunatConfigService.findOne(body.clientId)
     const prompt = PROMPT1
     try {
@@ -1045,6 +1164,10 @@ export class ExpenseService {
     if (!file || !file.buffer) {
       throw new HttpException('Archivo PDF no provisto', HttpStatus.BAD_REQUEST)
     }
+    // Caja chica finalizada: no se permiten más gastos.
+    await this.expenseReportService.assertReportNotLockedByCajaChica(
+      body.expenseReportId
+    )
 
     try {
       const pdfModule = await import('pdf-parse')
@@ -1136,6 +1259,10 @@ export class ExpenseService {
     if (!body.clientId) {
       throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
     }
+    // Caja chica finalizada: no se permiten más gastos.
+    await this.expenseReportService.assertReportNotLockedByCajaChica(
+      body.expenseReportId
+    )
     if (!body.mobilityRows || body.mobilityRows.length === 0) {
       throw new HttpException(
         'Se requiere al menos una fila en la planilla',
@@ -1217,6 +1344,10 @@ export class ExpenseService {
     if (!body.clientId) {
       throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
     }
+    // Caja chica finalizada: no se permiten más gastos.
+    await this.expenseReportService.assertReportNotLockedByCajaChica(
+      body.expenseReportId
+    )
     if (!body.total || body.total <= 0) {
       throw new HttpException(
         'Se requiere un monto válido',
@@ -1297,6 +1428,10 @@ export class ExpenseService {
     if (!body.clientId) {
       throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
     }
+    // Caja chica finalizada: no se permiten más gastos.
+    await this.expenseReportService.assertReportNotLockedByCajaChica(
+      body.expenseReportId
+    )
     if (!body.imageUrl) {
       throw new HttpException(
         'Debe adjuntar la foto/archivo del recibo de caja',
@@ -1376,6 +1511,10 @@ export class ExpenseService {
     if (!body.clientId) {
       throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
     }
+    // Caja chica finalizada: no se permiten más gastos.
+    await this.expenseReportService.assertReportNotLockedByCajaChica(
+      body.expenseReportId
+    )
     if (!body.total || body.total <= 0) {
       throw new HttpException(
         'Se requiere un monto válido',
@@ -1409,6 +1548,7 @@ export class ExpenseService {
       total: body.total,
       description,
       expenseType: 'comprobante_caja',
+      file: body.imageUrl,
       status: 'pending',
       createdBy: body.userId || 'system',
       fechaEmision: normalizedFecha ?? body.fechaEmision,
@@ -1478,6 +1618,10 @@ export class ExpenseService {
   }
 
   async create(createExpenseDto: CreateExpenseDto): Promise<Expense> {
+    // Caja chica finalizada: no se permiten más gastos.
+    await this.expenseReportService.assertReportNotLockedByCajaChica(
+      createExpenseDto.expenseReportId
+    )
     const dto = { ...createExpenseDto }
     this.sanitizeFechaEmisionOnWrite(dto)
     this.syncComentarioPlacaFromData(dto)

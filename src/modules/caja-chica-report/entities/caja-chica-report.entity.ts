@@ -56,3 +56,7 @@ export class CajaChicaReport {
 export const CajaChicaReportSchema = SchemaFactory.createForClass(CajaChicaReport)
 
 CajaChicaReportSchema.index({ clientId: 1, codigo: 1 }, { unique: true })
+
+// Para resolver rápido si una rendición está incluida en un reporte finalizado
+// (bloqueo de "subir más gastos" cuando Contabilidad ya finalizó la caja chica).
+CajaChicaReportSchema.index({ status: 1, 'selectedReports.expenseReportId': 1 })

@@ -66,6 +66,20 @@ export class ExpenseController {
     return this.expenseService.extractDepositInfo(body.url, body.mimeType)
   }
 
+  /**
+   * Escanea un comprobante de caja (imagen o PDF, por URL ya subida a S3) y
+   * extrae los campos para autorellenar el formulario. Ligero: no persiste.
+   */
+  @Post('scan-cash-voucher')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  async scanCashVoucher(@Body() body: { url?: string; mimeType?: string }) {
+    if (!body?.url) {
+      throw new Error('No se proporcionó la URL del comprobante de caja.')
+    }
+    return this.expenseService.scanCashVoucher(body.url, body.mimeType)
+  }
+
   @Post('analyze-image')
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
   @UseGuards(JwtAuthGuard, RolesGuard)

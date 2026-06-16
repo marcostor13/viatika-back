@@ -16,6 +16,10 @@ import {
 } from './entities/expense-report.entity'
 import { Expense, ExpenseDocument } from '../expense/entities/expense.entity'
 import {
+  CajaChicaReport,
+  CajaChicaReportDocument,
+} from '../caja-chica-report/entities/caja-chica-report.entity'
+import {
   parseFechaEmisionInput,
   applyFechaEmisionDisplayToExpense,
 } from '../expense/utils/fecha-emision.util'
@@ -28,6 +32,13 @@ import { CreateDirectaDepositDto } from './dto/create-directa-deposit.dto'
 import { AdvanceService } from '../advance/advance.service'
 import { ROLES } from '../auth/enums/roles.enum'
 import { applyFechaEmisionDisplayToExpenses } from '../expense/utils/fecha-emision.util'
+import { UploadService } from '../upload/upload.service'
+
+/** Contexto del usuario que solicita eliminar una solicitud. */
+export interface SolicitudDeleteActor {
+  userId: string
+  role: string
+}
 
 @Injectable()
 export class ExpenseReportService {
@@ -36,11 +47,14 @@ export class ExpenseReportService {
     private readonly expenseReportModel: Model<ExpenseReportDocument>,
     @InjectModel(Expense.name)
     private readonly expenseModel: Model<ExpenseDocument>,
+    @InjectModel(CajaChicaReport.name)
+    private readonly cajaChicaReportModel: Model<CajaChicaReportDocument>,
     private readonly emailService: EmailService,
     private readonly notificationsService: NotificationsService,
     private readonly userService: UserService,
     @Inject(forwardRef(() => AdvanceService))
-    private readonly advanceService: AdvanceService
+    private readonly advanceService: AdvanceService,
+    private readonly uploadService: UploadService
   ) {}
 
   private validatePaymentReceipt(
@@ -393,28 +407,50 @@ export class ExpenseReportService {
   }
 
   async findAllByUser(userId: string, clientId: string) {
-    return await this.expenseReportModel
+    const reports = await this.expenseReportModel
       .find({
         userId: new Types.ObjectId(userId),
         clientId: new Types.ObjectId(clientId),
         isCajaChica: { $ne: true },
       })
-      .populate('expenseIds', 'total')
+      .populate('expenseIds', 'total approvalCoord approvalCont')
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 })
+      .lean()
       .exec()
+    return reports.map(r => this.withDeletionApprovalFlag(r))
   }
 
   async findMyCajaChica(userId: string, clientId: string) {
-    return await this.expenseReportModel
+    const reports = await this.expenseReportModel
       .find({
         userId: new Types.ObjectId(userId),
         clientId: new Types.ObjectId(clientId),
         isCajaChica: true,
       })
-      .populate('expenseIds', 'total expenseType fechaEmision proveedor')
+      .populate(
+        'expenseIds',
+        'total expenseType fechaEmision proveedor approvalCoord approvalCont'
+      )
       .sort({ createdAt: -1 })
+      .lean()
       .exec()
+    return reports.map(r => this.withDeletionApprovalFlag(r))
+  }
+
+  /**
+   * Anexa `hasApprovedExpense` a un reporte para que el front sepa si algún
+   * comprobante ya fue aprobado (coord o contabilidad). Espeja la condición de
+   * `remove`: con cualquier aprobación, el colaborador ya no puede eliminar la
+   * solicitud, así que el botón no debe mostrarse.
+   */
+  private withDeletionApprovalFlag(report: any) {
+    const hasApprovedExpense = (report.expenseIds ?? []).some(
+      (e: any) =>
+        e?.approvalCoord?.status === 'approved' ||
+        e?.approvalCont?.status === 'approved'
+    )
+    return { ...report, hasApprovedExpense }
   }
 
   async findAllCajaChicaAvailable(clientId: string) {
@@ -424,7 +460,14 @@ export class ExpenseReportService {
         isCajaChica: true,
       })
       .populate('userId', 'name email')
-      .populate('expenseIds', 'total expenseType fechaEmision proveedor')
+      .populate({
+        path: 'expenseIds',
+        select: 'total expenseType fechaEmision proveedor data mobilityRows description categoryId proyectId',
+        populate: [
+          { path: 'categoryId', select: 'name' },
+          { path: 'proyectId', select: 'name code' },
+        ],
+      })
       .sort({ createdAt: -1 })
       .exec()
   }
@@ -525,6 +568,32 @@ export class ExpenseReportService {
     return { data, total, page: opts.page, limit: opts.limit, pages: Math.ceil(total / opts.limit) }
   }
 
+  /**
+   * ¿La rendición está incluida en un reporte de caja chica ya finalizado por
+   * Contabilidad? Al finalizar, el total queda congelado, por lo que el
+   * colaborador no debe poder agregar ni modificar gastos en esa rendición.
+   */
+  async isLockedByFinalizedCajaChica(reportId: string): Promise<boolean> {
+    if (!reportId || !Types.ObjectId.isValid(reportId)) return false
+    const count = await this.cajaChicaReportModel
+      .countDocuments({
+        status: 'finalized',
+        'selectedReports.expenseReportId': new Types.ObjectId(reportId),
+      })
+      .exec()
+    return count > 0
+  }
+
+  /** Lanza 403 si la rendición pertenece a una caja chica ya finalizada. */
+  async assertReportNotLockedByCajaChica(reportId?: string): Promise<void> {
+    if (!reportId) return
+    if (await this.isLockedByFinalizedCajaChica(reportId)) {
+      throw new ForbiddenException(
+        'La caja chica de esta rendición fue finalizada por Contabilidad. No se pueden agregar ni modificar más gastos.'
+      )
+    }
+  }
+
   async findOne(id: string) {
     const report = await this.expenseReportModel
       .findById(id)
@@ -538,7 +607,14 @@ export class ExpenseReportService {
     if (!report) {
       throw new NotFoundException(`Expense report with ID ${id} not found`)
     }
-    return this.normalizeReportExpenseDates(report)
+    const normalized = this.normalizeReportExpenseDates(report)
+    // Flag derivado para el front: si la caja chica fue finalizada, el
+    // colaborador ya no puede subir gastos (botón "Añadir Gasto" oculto).
+    ;(normalized as unknown as { lockedByCajaChica?: boolean }).lockedByCajaChica =
+      (normalized as unknown as { isCajaChica?: boolean }).isCajaChica === true
+        ? await this.isLockedByFinalizedCajaChica(id)
+        : false
+    return normalized
   }
 
   private normalizeReportExpenseDates(report: ExpenseReportDocument) {
@@ -1173,12 +1249,94 @@ export class ExpenseReportService {
     return fullyUpdatedReport
   }
 
-  async remove(id: string) {
+  /**
+   * Extrae la "key" de S3 a partir de la URL pública del archivo.
+   * Devuelve null si la URL no es absoluta o no se puede parsear.
+   */
+  private extractS3Key(fileUrl?: string): string | null {
+    if (!fileUrl) return null
+    try {
+      const parsed = new URL(fileUrl)
+      const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''))
+      return key || null
+    } catch {
+      return null
+    }
+  }
+
+  /** Borra un archivo de S3 en modo best-effort (no interrumpe el flujo si falla). */
+  private async tryDeleteS3File(fileUrl?: string): Promise<void> {
+    const key = this.extractS3Key(fileUrl)
+    if (!key) return
+    try {
+      await this.uploadService.deleteFile(key)
+    } catch (err) {
+      console.error('[remove] No se pudo eliminar archivo de S3:', fileUrl, err)
+    }
+  }
+
+  /**
+   * Elimina una solicitud (rendición directa / caja chica) completa, con cascada
+   * de comprobantes y sus archivos. La autorización depende del estado de aprobación:
+   *  - Sin comprobantes o con comprobantes pero ninguno aprobado:
+   *    el colaborador propietario, Contabilidad, Administrador o Superadmin.
+   *  - Con al menos una aprobación (a nivel comprobante o de reporte):
+   *    solo Contabilidad o Superadmin.
+   */
+  async remove(id: string, actor: SolicitudDeleteActor) {
     const report = await this.expenseReportModel.findById(id).lean().exec()
     if (!report) throw new NotFoundException(`Expense report with ID ${id} not found`)
-    if (report.expenseIds && report.expenseIds.length > 0) {
-      throw new BadRequestException('No se puede eliminar una rendición que ya tiene documentos adjuntos')
+
+    const role = actor?.role ?? ''
+    const isSuperAdmin = role === ROLES.SUPER_ADMIN
+    const isContabilidad = role === ROLES.CONTABILIDAD
+    const isColaborador = role === ROLES.COLABORADOR
+
+    // Carga los comprobantes adjuntos para evaluar el estado de aprobación.
+    const expenseIds = (report.expenseIds ?? []) as Types.ObjectId[]
+    const expenses = expenseIds.length
+      ? await this.expenseModel
+          .find({ _id: { $in: expenseIds } })
+          .select('_id file approvalCoord approvalCont')
+          .lean()
+          .exec()
+      : []
+
+    // "Aprobado por alguien" = aprobación a nivel comprobante O a nivel reporte.
+    const reportLevelApproved =
+      !!report.coordinatorApprovedBy || !!report.contabilidadApprovedBy
+    const anyExpenseApproved = expenses.some(
+      e =>
+        e.approvalCoord?.status === 'approved' ||
+        e.approvalCont?.status === 'approved'
+    )
+    const hasAnyApproval = reportLevelApproved || anyExpenseApproved
+
+    if (hasAnyApproval) {
+      // Estado 3: solo Contabilidad o Superadmin.
+      if (!isContabilidad && !isSuperAdmin) {
+        throw new ForbiddenException(
+          'Esta solicitud ya tiene una aprobación; solo Contabilidad puede eliminarla.'
+        )
+      }
+    } else if (isColaborador) {
+      // Estados 1 y 2: el colaborador solo puede eliminar las suyas.
+      const ownerId = String(report.createdBy ?? report.userId ?? '')
+      if (ownerId !== String(actor.userId)) {
+        throw new ForbiddenException(
+          'Solo puedes eliminar tus propias solicitudes.'
+        )
+      }
     }
+
+    // Cascada: elimina los comprobantes adjuntos y sus archivos en S3.
+    if (expenses.length > 0) {
+      for (const e of expenses) {
+        await this.tryDeleteS3File(e.file)
+      }
+      await this.expenseModel.deleteMany({ _id: { $in: expenseIds } }).exec()
+    }
+
     await this.expenseReportModel.findByIdAndDelete(id).exec()
     return report
   }

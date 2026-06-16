@@ -32,6 +32,13 @@ import { CreateDirectaDepositDto } from './dto/create-directa-deposit.dto'
 import { AdvanceService } from '../advance/advance.service'
 import { ROLES } from '../auth/enums/roles.enum'
 import { applyFechaEmisionDisplayToExpenses } from '../expense/utils/fecha-emision.util'
+import { UploadService } from '../upload/upload.service'
+
+/** Contexto del usuario que solicita eliminar una solicitud. */
+export interface SolicitudDeleteActor {
+  userId: string
+  role: string
+}
 
 @Injectable()
 export class ExpenseReportService {
@@ -46,7 +53,8 @@ export class ExpenseReportService {
     private readonly notificationsService: NotificationsService,
     private readonly userService: UserService,
     @Inject(forwardRef(() => AdvanceService))
-    private readonly advanceService: AdvanceService
+    private readonly advanceService: AdvanceService,
+    private readonly uploadService: UploadService
   ) {}
 
   private validatePaymentReceipt(
@@ -430,7 +438,14 @@ export class ExpenseReportService {
         isCajaChica: true,
       })
       .populate('userId', 'name email')
-      .populate('expenseIds', 'total expenseType fechaEmision proveedor')
+      .populate({
+        path: 'expenseIds',
+        select: 'total expenseType fechaEmision proveedor data mobilityRows description categoryId proyectId',
+        populate: [
+          { path: 'categoryId', select: 'name' },
+          { path: 'proyectId', select: 'name code' },
+        ],
+      })
       .sort({ createdAt: -1 })
       .exec()
   }
@@ -1212,12 +1227,94 @@ export class ExpenseReportService {
     return fullyUpdatedReport
   }
 
-  async remove(id: string) {
+  /**
+   * Extrae la "key" de S3 a partir de la URL pública del archivo.
+   * Devuelve null si la URL no es absoluta o no se puede parsear.
+   */
+  private extractS3Key(fileUrl?: string): string | null {
+    if (!fileUrl) return null
+    try {
+      const parsed = new URL(fileUrl)
+      const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''))
+      return key || null
+    } catch {
+      return null
+    }
+  }
+
+  /** Borra un archivo de S3 en modo best-effort (no interrumpe el flujo si falla). */
+  private async tryDeleteS3File(fileUrl?: string): Promise<void> {
+    const key = this.extractS3Key(fileUrl)
+    if (!key) return
+    try {
+      await this.uploadService.deleteFile(key)
+    } catch (err) {
+      console.error('[remove] No se pudo eliminar archivo de S3:', fileUrl, err)
+    }
+  }
+
+  /**
+   * Elimina una solicitud (rendición directa / caja chica) completa, con cascada
+   * de comprobantes y sus archivos. La autorización depende del estado de aprobación:
+   *  - Sin comprobantes o con comprobantes pero ninguno aprobado:
+   *    el colaborador propietario, Contabilidad, Administrador o Superadmin.
+   *  - Con al menos una aprobación (a nivel comprobante o de reporte):
+   *    solo Contabilidad o Superadmin.
+   */
+  async remove(id: string, actor: SolicitudDeleteActor) {
     const report = await this.expenseReportModel.findById(id).lean().exec()
     if (!report) throw new NotFoundException(`Expense report with ID ${id} not found`)
-    if (report.expenseIds && report.expenseIds.length > 0) {
-      throw new BadRequestException('No se puede eliminar una rendición que ya tiene documentos adjuntos')
+
+    const role = actor?.role ?? ''
+    const isSuperAdmin = role === ROLES.SUPER_ADMIN
+    const isContabilidad = role === ROLES.CONTABILIDAD
+    const isColaborador = role === ROLES.COLABORADOR
+
+    // Carga los comprobantes adjuntos para evaluar el estado de aprobación.
+    const expenseIds = (report.expenseIds ?? []) as Types.ObjectId[]
+    const expenses = expenseIds.length
+      ? await this.expenseModel
+          .find({ _id: { $in: expenseIds } })
+          .select('_id file approvalCoord approvalCont')
+          .lean()
+          .exec()
+      : []
+
+    // "Aprobado por alguien" = aprobación a nivel comprobante O a nivel reporte.
+    const reportLevelApproved =
+      !!report.coordinatorApprovedBy || !!report.contabilidadApprovedBy
+    const anyExpenseApproved = expenses.some(
+      e =>
+        e.approvalCoord?.status === 'approved' ||
+        e.approvalCont?.status === 'approved'
+    )
+    const hasAnyApproval = reportLevelApproved || anyExpenseApproved
+
+    if (hasAnyApproval) {
+      // Estado 3: solo Contabilidad o Superadmin.
+      if (!isContabilidad && !isSuperAdmin) {
+        throw new ForbiddenException(
+          'Esta solicitud ya tiene una aprobación; solo Contabilidad puede eliminarla.'
+        )
+      }
+    } else if (isColaborador) {
+      // Estados 1 y 2: el colaborador solo puede eliminar las suyas.
+      const ownerId = String(report.createdBy ?? report.userId ?? '')
+      if (ownerId !== String(actor.userId)) {
+        throw new ForbiddenException(
+          'Solo puedes eliminar tus propias solicitudes.'
+        )
+      }
     }
+
+    // Cascada: elimina los comprobantes adjuntos y sus archivos en S3.
+    if (expenses.length > 0) {
+      for (const e of expenses) {
+        await this.tryDeleteS3File(e.file)
+      }
+      await this.expenseModel.deleteMany({ _id: { $in: expenseIds } }).exec()
+    }
+
     await this.expenseReportModel.findByIdAndDelete(id).exec()
     return report
   }

@@ -133,7 +133,13 @@ export class CajaChicaReportService {
       (report.selectedReports ?? []).map(async (sr: any) => {
         const expReport = await this.expenseReportModel
           .findById(sr.expenseReportId)
-          .populate('expenseIds')
+          .populate({
+            path: 'expenseIds',
+            populate: [
+              { path: 'categoryId', select: 'name' },
+              { path: 'proyectId', select: 'name code' },
+            ],
+          })
           .lean()
           .exec()
         return {

@@ -49,6 +49,7 @@ export type AuditAction =
   | 'close_petty_cash'
   | 'cancel_rendicion'
   | 'cancel_advance'
+  | 'delete_advance'
   | 'update_email_notifications'
   | 'create_linea_negocio'
   | 'update_linea_negocio'

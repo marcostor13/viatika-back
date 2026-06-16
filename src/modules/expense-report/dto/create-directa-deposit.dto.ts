@@ -1,10 +1,4 @@
-import {
-  IsString,
-  IsNumber,
-  IsOptional,
-  IsMongoId,
-  Min,
-} from 'class-validator'
+import { IsString, IsNumber, IsOptional, IsMongoId, Min } from 'class-validator'
 
 /**
  * Creación de una rendición directa con depósito inicial, iniciada por Contabilidad.

@@ -23,7 +23,7 @@ export const PROMPT1 = `
       - igv: monto del IGV declarado en el comprobante (no la tasa, el monto en dinero). Número. Si el comprobante no tiene IGV (boleta sin IGV, inafecto), pon 0. Si no se puede determinar, null.
       - tasaIgv: tasa porcentual del IGV leída del comprobante. Normalmente 18, pero puede ser 10 o 10.5 (restaurantes). NUNCA asumas 18 si el documento indica otra tasa. Si no hay IGV, pon 0. Número.
       - inafecto: suma de conceptos inafectos al IGV (recargo al consumo, servicio, propina, D.L. 25988). Número. Si no hay, pon 0.
-      - REGLA DE COHERENCIA: cuando sea posible, baseAfecta + igv + inafecto debe ser igual a montoTotal. Si el documento solo trae el total y la tasa, puedes disgregar: baseAfecta = total / (1 + tasaIgv/100), igv = total - baseAfecta. Lee, no inventes; si dudas, deja los campos en null para revisión manual.
+      - REGLA DE COHERENCIA: LEE PRIMERO, NUNCA CALCULES si el valor ya está en el documento. Si el documento muestra explícitamente el monto de IGV (incluso si es 0.00), usa ese valor directamente; NUNCA lo derives del total y la tasa. Si el comprobante indica EXONERADO o INAFECTO y el IGV es 0, pon igv = 0, baseAfecta = 0, y registra el total en el campo que corresponde (operacionExonerada o operacionInafecta en comprobanteDetallado). Solo puedes disgregar (baseAfecta = total / (1 + tasaIgv/100), igv = total - baseAfecta) cuando el documento NO muestre ningún monto de IGV ni indique que la operación es exonerada o inafecta. Si dudas, deja los campos en null para revisión manual.
       # Campo "comprobanteDetallado" (información completa del comprobante peruano):
       - Además de los campos anteriores, agrega un objeto anidado "comprobanteDetallado" con TODA la información que puedas leer del comprobante. Las facturas peruanas varían su diseño según el emisor, así que ubica cada dato por su significado, no por su posición.
       - Estructura esperada (usa null en lo que no encuentres; NO inventes valores):
@@ -78,6 +78,29 @@ export const PROMPT1 = `
         "codigoQr": null
       }
     }
+
+    # Ejemplo de factura EXONERADA (sin IGV):
+    Si el documento muestra "EXONERADO S/ 90.00", "I.G.V. 18%: S/ 0.00", "TOTAL S/ 90.00", la salida correcta es:
+    {
+      "rucEmisor": "10483678296",
+      "tipoComprobante": "Factura",
+      "serie": "FF01",
+      "correlativo": "0000102",
+      "montoTotal": 90,
+      "moneda": "S/",
+      "razonSocial": "ALTURA",
+      "fechaEmision": "01-06-2026",
+      "comentario": "Servicio de movilidad por ALTURA por S/ 90.00.",
+      "baseAfecta": 0,
+      "igv": 0,
+      "tasaIgv": 0,
+      "inafecto": 0,
+      "comprobanteDetallado": {
+        "totales": { "operacionGravada": 0, "operacionExonerada": 90, "operacionInafecta": 0, "igv": 0, "tasaIgv": 18, "importeTotal": 90 },
+        "items": [ { "afectacionIgv": "exonerado", "precioUnitario": 90, "valorUnitario": 90, "valorVenta": 90 } ]
+      }
+    }
+    INCORRECTO para este caso sería: igv = 13.73, baseAfecta = 76.27 (eso es calcular en lugar de leer).
 
     # Reglas:
       - Debes extraer los datos de la factura y crear un objeto con los datos de la factura.

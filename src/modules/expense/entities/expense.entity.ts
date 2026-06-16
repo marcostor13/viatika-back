@@ -192,7 +192,11 @@ export class Expense {
   @Prop({
     type: [
       {
-        action: { type: String, enum: ['approved', 'rejected'], required: true },
+        action: {
+          type: String,
+          enum: ['approved', 'rejected'],
+          required: true,
+        },
         reviewerId: { type: String, required: false },
         reviewedAt: { type: Date, required: true },
         reason: { type: String, required: false },
@@ -271,7 +275,11 @@ export class Expense {
 
   @Prop({
     type: {
-      status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
+      status: {
+        type: String,
+        enum: ['pending', 'approved', 'rejected'],
+        default: 'pending',
+      },
       userId: { type: String },
       userName: { type: String },
       date: { type: Date },
@@ -284,7 +292,11 @@ export class Expense {
 
   @Prop({
     type: {
-      status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
+      status: {
+        type: String,
+        enum: ['pending', 'approved', 'rejected'],
+        default: 'pending',
+      },
       userId: { type: String },
       userName: { type: String },
       date: { type: Date },

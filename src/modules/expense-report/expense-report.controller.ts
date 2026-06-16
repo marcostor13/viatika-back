@@ -53,7 +53,8 @@ export class ExpenseReportController {
 
     // Rendición directa: requiere permiso 'nueva-rendicion' si quien crea es colaborador
     if (createExpenseReportDto.isDirecta && isCollaborator) {
-      const hasPermission = req.user.permissions?.modules?.includes('nueva-rendicion')
+      const hasPermission =
+        req.user.permissions?.modules?.includes('nueva-rendicion')
       if (!hasPermission) {
         throw new ForbiddenException(
           'No tienes permiso para crear rendiciones directas.'
@@ -63,7 +64,8 @@ export class ExpenseReportController {
 
     // Rendición caja chica: requiere permiso 'caja-chica' si quien crea es colaborador
     if (createExpenseReportDto.isCajaChica && isCollaborator) {
-      const hasPermission = req.user.permissions?.modules?.includes('caja-chica')
+      const hasPermission =
+        req.user.permissions?.modules?.includes('caja-chica')
       if (!hasPermission) {
         throw new ForbiddenException(
           'No tienes permiso para crear rendiciones de caja chica.'
@@ -158,7 +160,7 @@ export class ExpenseReportController {
     @Query('categoryId') categoryId?: string,
     @Query('docNumber') docNumber?: string,
     @Query('tipo') tipo?: string,
-    @Query('userId') userId?: string,
+    @Query('userId') userId?: string
   ) {
     return this.expenseReportService.findDirectRendicionExpenses(clientId, {
       page: page ? Number(page) : undefined,
@@ -179,7 +181,7 @@ export class ExpenseReportController {
     @Param('clientId') clientId: string,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
-    @Query('userId') userId?: string,
+    @Query('userId') userId?: string
   ) {
     return this.expenseReportService.findDirectRendicionReports(clientId, {
       dateFrom,
@@ -193,10 +195,15 @@ export class ExpenseReportController {
   findAllByClient(@Param('clientId') clientId: string, @Request() req: any) {
     const role = req.user.roles[0]
     if (role === ROLES.COORDINADOR) {
-      return this.expenseReportService.findAllByCoordinator(req.user._id, clientId)
+      return this.expenseReportService.findAllByCoordinator(
+        req.user._id,
+        clientId
+      )
     }
-    const hasRendicionesPermission = req.user.permissions?.modules?.includes('rendiciones')
-    const isRestrictedUser = role === ROLES.COLABORADOR && !hasRendicionesPermission
+    const hasRendicionesPermission =
+      req.user.permissions?.modules?.includes('rendiciones')
+    const isRestrictedUser =
+      role === ROLES.COLABORADOR && !hasRendicionesPermission
     if (isRestrictedUser) {
       return this.expenseReportService.findAllByUser(req.user._id, clientId)
     }
@@ -281,7 +288,13 @@ export class ExpenseReportController {
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.COORDINADOR, ROLES.CONTABILIDAD)
+  @Roles(
+    ROLES.ADMIN,
+    ROLES.SUPER_ADMIN,
+    ROLES.COLABORADOR,
+    ROLES.COORDINADOR,
+    ROLES.CONTABILIDAD
+  )
   @Patch(':id')
   async update(
     @Param('id') id: string,
@@ -293,8 +306,10 @@ export class ExpenseReportController {
     const isCollaborator = role === ROLES.COLABORADOR
     const isContabilidad = role === ROLES.CONTABILIDAD
     const isAdminOrSuperAdmin =
-      role === ROLES.ADMIN || role === ROLES.SUPER_ADMIN ||
-      (role === ROLES.COORDINADOR && req.user?.permissions?.modules?.includes('rendiciones'))
+      role === ROLES.ADMIN ||
+      role === ROLES.SUPER_ADMIN ||
+      (role === ROLES.COORDINADOR &&
+        req.user?.permissions?.modules?.includes('rendiciones'))
 
     if (
       isCollaborator &&
@@ -311,9 +326,7 @@ export class ExpenseReportController {
     }
 
     if (
-      (status === 'open' ||
-        status === 'closed' ||
-        status === 'reimbursed') &&
+      (status === 'open' || status === 'closed' || status === 'reimbursed') &&
       !isAdminOrSuperAdmin
     ) {
       throw new ForbiddenException(
@@ -426,12 +439,7 @@ export class ExpenseReportController {
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(
-    ROLES.ADMIN,
-    ROLES.SUPER_ADMIN,
-    ROLES.CONTABILIDAD,
-    ROLES.COLABORADOR
-  )
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD, ROLES.COLABORADOR)
   @Delete(':id')
   async remove(@Param('id') id: string, @Request() req: any) {
     const result = await this.expenseReportService.remove(id, {
@@ -487,7 +495,11 @@ export class ExpenseReportController {
     @Request() req: any
   ) {
     const reopenedBy = String(req.user._id || req.user.sub)
-    const result = await this.expenseReportService.reopen(id, reopenedBy, body.reason)
+    const result = await this.expenseReportService.reopen(
+      id,
+      reopenedBy,
+      body.reason
+    )
     await this.auditLogService.log({
       userId: req.user._id || req.user.sub,
       userName: req.user.name || req.user.email || 'Usuario',
@@ -510,7 +522,11 @@ export class ExpenseReportController {
     @Request() req: any
   ) {
     const requestedBy = req.user._id || req.user.sub
-    return this.expenseReportService.requestReopening(id, String(requestedBy), body.reason)
+    return this.expenseReportService.requestReopening(
+      id,
+      String(requestedBy),
+      body.reason
+    )
   }
 
   /** Aprueba o rechaza la reapertura (SuperAdmin/Contabilidad). */
@@ -523,11 +539,17 @@ export class ExpenseReportController {
     @Request() req: any
   ) {
     const approvedBy = req.user._id || req.user.sub
-    const result = await this.expenseReportService.approveReopening(id, String(approvedBy), body.approve)
+    const result = await this.expenseReportService.approveReopening(
+      id,
+      String(approvedBy),
+      body.approve
+    )
     await this.auditLogService.log({
       userId: req.user._id || req.user.sub,
       userName: req.user.name || req.user.email || 'Usuario',
-      action: body.approve ? 'approve_reopen_rendicion' : 'reject_reopen_rendicion',
+      action: body.approve
+        ? 'approve_reopen_rendicion'
+        : 'reject_reopen_rendicion',
       module: 'rendiciones',
       entityId: id,
       clientId: req.user.clientId,
@@ -541,7 +563,8 @@ export class ExpenseReportController {
   @Post(':id/return-voucher')
   async registerReturnVoucher(
     @Param('id') id: string,
-    @Body() body: {
+    @Body()
+    body: {
       depositDate: string
       bankOrigin?: string
       operationNumber?: string

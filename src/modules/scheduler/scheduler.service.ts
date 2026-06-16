@@ -14,12 +14,15 @@ export class SchedulerService {
   private readonly logger = new Logger(SchedulerService.name)
 
   constructor(
-    @InjectModel(Advance.name) private readonly advanceModel: Model<AdvanceDocument>,
-    @InjectModel(Expense.name) private readonly expenseModel: Model<ExpenseDocument>,
-    @InjectModel(Client.name) private readonly clientModel: Model<ClientDocument>,
+    @InjectModel(Advance.name)
+    private readonly advanceModel: Model<AdvanceDocument>,
+    @InjectModel(Expense.name)
+    private readonly expenseModel: Model<ExpenseDocument>,
+    @InjectModel(Client.name)
+    private readonly clientModel: Model<ClientDocument>,
     private readonly userService: UserService,
     private readonly emailService: EmailService,
-    private readonly notificationsService: NotificationsService,
+    private readonly notificationsService: NotificationsService
   ) {}
 
   @Cron('0 8 * * *')
@@ -53,9 +56,17 @@ export class SchedulerService {
 
       for (const advance of advances) {
         try {
-          await this.processAdvance(advance, frequency, isNotificationDay, todayStart)
+          await this.processAdvance(
+            advance,
+            frequency,
+            isNotificationDay,
+            todayStart
+          )
         } catch (err) {
-          this.logger.error(`[Scheduler] Error procesando advance ${advance._id}`, err)
+          this.logger.error(
+            `[Scheduler] Error procesando advance ${advance._id}`,
+            err
+          )
         }
       }
     }
@@ -65,12 +76,12 @@ export class SchedulerService {
     advance: AdvanceDocument,
     frequency: 'semanal' | 'mensual',
     isNotificationDay: boolean,
-    todayStart: Date,
+    todayStart: Date
   ) {
     const startDate = advance.startDate!
     const endDate = advance.endDate!
     const durationDays = Math.ceil(
-      (endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24),
+      (endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)
     )
 
     if (durationDays > 15) {
@@ -83,14 +94,19 @@ export class SchedulerService {
     }
   }
 
-  private async processLongAdvance(advance: AdvanceDocument, frequency: 'semanal' | 'mensual') {
+  private async processLongAdvance(
+    advance: AdvanceDocument,
+    frequency: 'semanal' | 'mensual'
+  ) {
     if (!advance.expenseReportId) return
 
     const periodDays = frequency === 'semanal' ? 7 : 30
     const periodStart = new Date()
     periodStart.setDate(periodStart.getDate() - periodDays)
 
-    const collaborator = await this.userService.findEmailNameClient(advance.userId.toString())
+    const collaborator = await this.userService.findEmailNameClient(
+      advance.userId.toString()
+    )
     if (!collaborator) return
 
     const recentExpenses = await this.expenseModel
@@ -115,10 +131,16 @@ export class SchedulerService {
 
     if (pendingCount > 0) {
       const coordinator = await this.userService.findEmailNameClient(
-        (advance.coordinatorId as Types.ObjectId).toString(),
+        advance.coordinatorId.toString()
       )
       if (coordinator) {
-        await this.notifyCoordinatorSummary(coordinator, collaborator, advance, pendingCount, frequency)
+        await this.notifyCoordinatorSummary(
+          coordinator,
+          collaborator,
+          advance,
+          pendingCount,
+          frequency
+        )
       }
     }
   }
@@ -126,7 +148,7 @@ export class SchedulerService {
   private async notifyCollaboratorReminder(
     collaborator: { email: string; name: string },
     advance: AdvanceDocument,
-    frequency: 'semanal' | 'mensual',
+    frequency: 'semanal' | 'mensual'
   ) {
     const platformUrl = this.emailService.buildAppUrl('/mis-rendiciones')
 
@@ -137,11 +159,19 @@ export class SchedulerService {
         message: `Tienes viáticos activos sin comprobantes cargados esta ${frequency === 'semanal' ? 'semana' : 'quincena/mes'}. Recuerda rendir tus gastos.`,
         type: 'warning',
         actionUrl: '/mis-rendiciones',
-        metadata: { advanceId: advance._id, event: 'recordatorio_rendicion', frequency },
+        metadata: {
+          advanceId: advance._id,
+          event: 'recordatorio_rendicion',
+          frequency,
+        },
       })
-      .catch(err => this.logger.error('Error notif in-app colaborador recordatorio', err))
+      .catch(err =>
+        this.logger.error('Error notif in-app colaborador recordatorio', err)
+      )
 
-    const collabEmailEnabled = await this.userService.isEmailEnabled(advance.userId.toString())
+    const collabEmailEnabled = await this.userService.isEmailEnabled(
+      advance.userId.toString()
+    )
     if (!collabEmailEnabled) return
 
     this.emailService
@@ -154,7 +184,9 @@ export class SchedulerService {
         frequency,
         platformUrl,
       })
-      .catch(err => this.logger.error('Error email recordatorio colaborador', err))
+      .catch(err =>
+        this.logger.error('Error email recordatorio colaborador', err)
+      )
   }
 
   private async notifyCoordinatorSummary(
@@ -162,7 +194,7 @@ export class SchedulerService {
     collaborator: { email: string; name: string },
     advance: AdvanceDocument,
     pendingCount: number,
-    frequency: 'semanal' | 'mensual',
+    frequency: 'semanal' | 'mensual'
   ) {
     const platformUrl = this.emailService.buildAppUrl('/invoice-approval')
 
@@ -180,10 +212,12 @@ export class SchedulerService {
           frequency,
         },
       })
-      .catch(err => this.logger.error('Error notif in-app coordinador resumen', err))
+      .catch(err =>
+        this.logger.error('Error notif in-app coordinador resumen', err)
+      )
 
     const coordinatorEmailEnabled = await this.userService.isEmailEnabled(
-      (advance.coordinatorId as Types.ObjectId).toString(),
+      (advance.coordinatorId as Types.ObjectId).toString()
     )
     if (!coordinatorEmailEnabled) return
 
@@ -203,7 +237,9 @@ export class SchedulerService {
   }
 
   private async sendLastDayReminder(advance: AdvanceDocument) {
-    const collaborator = await this.userService.findEmailNameClient(advance.userId.toString())
+    const collaborator = await this.userService.findEmailNameClient(
+      advance.userId.toString()
+    )
     if (!collaborator) return
 
     const platformUrl = this.emailService.buildAppUrl('/mis-rendiciones')
@@ -212,14 +248,17 @@ export class SchedulerService {
       .create({
         userId: advance.userId.toString(),
         title: 'Hoy vence tu periodo de viáticos',
-        message: 'Hoy es el último día de tu periodo de viáticos. Recuerda cargar todos tus comprobantes.',
+        message:
+          'Hoy es el último día de tu periodo de viáticos. Recuerda cargar todos tus comprobantes.',
         type: 'warning',
         actionUrl: '/mis-rendiciones',
         metadata: { advanceId: advance._id, event: 'recordatorio_ultimo_dia' },
       })
       .catch(err => this.logger.error('Error notif in-app último día', err))
 
-    const emailEnabled = await this.userService.isEmailEnabled(advance.userId.toString())
+    const emailEnabled = await this.userService.isEmailEnabled(
+      advance.userId.toString()
+    )
     if (!emailEnabled) return
 
     this.emailService
@@ -235,7 +274,9 @@ export class SchedulerService {
 
   private isNotificationDay(frequency: 'semanal' | 'mensual'): boolean {
     const today = new Date()
-    return frequency === 'semanal' ? today.getDay() === 1 : today.getDate() === 1
+    return frequency === 'semanal'
+      ? today.getDay() === 1
+      : today.getDate() === 1
   }
 
   private isSameDay(a: Date, b: Date): boolean {

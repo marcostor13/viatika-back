@@ -1,3 +1,6 @@
+import * as fs from 'fs'
+import * as path from 'path'
+import * as ExcelJS from 'exceljs'
 import {
   CONTANET_COLUMNS,
   ContanetLine,
@@ -7,11 +10,29 @@ import {
   COL_TIPO_DATO,
   COL_CARACTERES,
 } from './contanet-columns'
+import { AsientoTipo } from './accounting-entries.types'
+
+const TEMPLATE_MAP: Record<string, string> = {
+  compra: 'compras.xlsm',
+  aplicacion: 'aplicacion.xlsm',
+  solicitud: 'aplicacion.xlsm',
+  devolucion: 'reembolso.xlsm',
+  reembolso: 'reembolso.xlsm',
+}
+
+export function resolveTemplatePath(tipo?: AsientoTipo): string | null {
+  if (!tipo) return null
+  const file = TEMPLATE_MAP[tipo]
+  if (!file) return null
+  const p = path.join(process.cwd(), 'docs', 'asientos', file)
+  return fs.existsSync(p) ? p : null
+}
 
 /**
  * Construye la matriz (array de arrays) que replica la hoja `sheet1` del template
  * de Contanet: encabezados en filas 2-8 y datos a partir de la fila 9.
  * El índice 0 del arreglo exterior es la fila 1 (vacía).
+ * Usado como fallback cuando no hay template disponible.
  */
 export function buildContanetAoa(lines: ContanetLine[]): (string | number)[][] {
   const totalCols = FIRST_DATA_COL_INDEX + CONTANET_COLUMNS.length
@@ -89,13 +110,69 @@ export function buildContanetAoa(lines: ContanetLine[]): (string | number)[][] {
 }
 
 /**
- * Genera un buffer .xlsx con una hoja "CONTABILIDAD" que replica sheet1.
- * Usa SheetJS (xlsx), ya presente en el backend.
+ * Genera un buffer .xlsx con los asientos de Contanet.
+ * Si existe un template xlsm para el tipo, lo carga con ExcelJS (que preserva
+ * correctamente los estilos, colores y bordes) e inyecta los datos a partir
+ * de la fila 9. Si no hay template, genera un xlsx plano desde cero.
  */
 export async function buildContanetWorkbook(
   lines: ContanetLine[],
-  sheetName = 'CONTABILIDAD'
+  sheetName = 'CONTABILIDAD',
+  tipo?: AsientoTipo
 ): Promise<Buffer> {
+  const templatePath = resolveTemplatePath(tipo)
+
+  if (templatePath) {
+    const workbook = new ExcelJS.Workbook()
+    await workbook.xlsx.readFile(templatePath)
+
+    const worksheet = workbook.getWorksheet(sheetName)
+
+    if (worksheet) {
+      // Columna D = índice 4 en ExcelJS (1-based).
+      // FIRST_DATA_COL_INDEX = 3 (0-based) → +1 = 4 (1-based).
+      const firstCol = FIRST_DATA_COL_INDEX + 1
+      const lastRow = worksheet.lastRow?.number ?? 8
+
+      // Capturar estilos de la primera fila de datos antes de borrarla,
+      // para replicarlos en las filas inyectadas (fuente, alineación, formato).
+      const refStyles: Array<Record<string, any>> = []
+      if (lastRow >= 9) {
+        const refRow = worksheet.getRow(9)
+        CONTANET_COLUMNS.forEach((_, colIdx) => {
+          const cell = refRow.getCell(firstCol + colIdx)
+          refStyles.push({
+            font: cell.font ? { ...cell.font } : undefined,
+            alignment: cell.alignment ? { ...cell.alignment } : undefined,
+            numFmt: cell.numFmt || undefined,
+          })
+        })
+        worksheet.spliceRows(9, lastRow - 8)
+      }
+
+      // Inyectar filas de datos a partir de la fila 9.
+      lines.forEach((line, idx) => {
+        const row = worksheet.getRow(9 + idx)
+        CONTANET_COLUMNS.forEach((col, colIdx) => {
+          const v = line[col.key]
+          const cell = row.getCell(firstCol + colIdx)
+          cell.value = v === undefined || v === null ? null : v
+          const style = refStyles[colIdx]
+          if (style) {
+            if (style.font) cell.font = style.font
+            if (style.alignment) cell.alignment = style.alignment
+            if (style.numFmt) cell.numFmt = style.numFmt
+          }
+        })
+        row.commit()
+      })
+
+      const buffer = await workbook.xlsx.writeBuffer()
+      return Buffer.from(buffer as ArrayBuffer)
+    }
+  }
+
+  // Fallback: generar sin template (sin estilos)
   const xlsx = await import('xlsx')
   const aoa = buildContanetAoa(lines)
   const ws = xlsx.utils.aoa_to_sheet(aoa)

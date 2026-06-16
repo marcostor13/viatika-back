@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common'
+import { ConfigModule } from '@nestjs/config'
 import { MongooseModule } from '@nestjs/mongoose'
 import { AccountingEntriesService } from './accounting-entries.service'
 import { AccountingEntriesController } from './accounting-entries.controller'
@@ -25,6 +26,7 @@ import { ExchangeRateModule } from '../exchange-rate/exchange-rate.module'
       { name: User.name, schema: UserSchema },
       { name: Category.name, schema: CategorySchema },
     ]),
+    ConfigModule,
     AccountingConfigModule,
     AuditLogModule,
     ExchangeRateModule,

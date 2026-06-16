@@ -74,16 +74,21 @@ export class UserController {
     const role: string = req?.user?.roles?.[0] ?? ''
 
     if (role === ROLES.COLABORADOR) {
-      const hasRendicionesPermission = req?.user?.permissions?.modules?.includes('rendiciones')
+      const hasRendicionesPermission =
+        req?.user?.permissions?.modules?.includes('rendiciones')
       if (!hasRendicionesPermission) {
-        throw new ForbiddenException('No tienes permiso para ver usuarios de esta empresa')
+        throw new ForbiddenException(
+          'No tienes permiso para ver usuarios de esta empresa'
+        )
       }
     }
 
     if (role !== ROLES.SUPER_ADMIN && role !== ROLES.CONTABILIDAD) {
       const tokenClientId = req?.user?.clientId?.toString()
       if (!tokenClientId || tokenClientId !== clientId.toString()) {
-        throw new ForbiddenException('No tienes permiso para ver usuarios de esta empresa')
+        throw new ForbiddenException(
+          'No tienes permiso para ver usuarios de esta empresa'
+        )
       }
     }
 
@@ -180,7 +185,10 @@ export class UserController {
     @Body() body: { emailNotificationsEnabled: boolean },
     @Request() req: any
   ) {
-    await this.userService.setEmailNotifications(id.toString(), !!body.emailNotificationsEnabled)
+    await this.userService.setEmailNotifications(
+      id.toString(),
+      !!body.emailNotificationsEnabled
+    )
     this.auditLogService.log({
       userId: req.user._id || req.user.sub,
       userName: req.user.name || req.user.email,
@@ -259,32 +267,65 @@ export class UserController {
     const xlsx = await import('xlsx')
     const ws = xlsx.utils.aoa_to_sheet([
       [
-        'nombre', 'email', 'dni', 'codigoEmpleado', 'area', 'cargo',
-        'telefono', 'direccion', 'rol', 'emailCoordinador',
-        'banco', 'numeroCuenta', 'cci', 'tipoCuenta',
+        'nombre',
+        'email',
+        'dni',
+        'codigoEmpleado',
+        'area',
+        'cargo',
+        'telefono',
+        'direccion',
+        'rol',
+        'emailCoordinador',
+        'banco',
+        'numeroCuenta',
+        'cci',
+        'tipoCuenta',
       ],
       [
-        'Juan Pérez', 'juan@empresa.com', '12345678', 'EMP-001',
-        'Operaciones', 'Analista', '999888777', 'Av. Siempre Viva 123',
-        'Colaborador', 'jefe@empresa.com',
-        'BCP', '1912345678901', '00219112345678901234', 'ahorros',
+        'Juan Pérez',
+        'juan@empresa.com',
+        '12345678',
+        'EMP-001',
+        'Operaciones',
+        'Analista',
+        '999888777',
+        'Av. Siempre Viva 123',
+        'Colaborador',
+        'jefe@empresa.com',
+        'BCP',
+        '1912345678901',
+        '00219112345678901234',
+        'ahorros',
       ],
     ])
     const help = xlsx.utils.aoa_to_sheet([
       ['Campo', 'Detalle'],
       ['nombre', 'Obligatorio'],
       ['email', 'Obligatorio. Único por empresa'],
-      ['rol', 'Colaborador, Coordinador, Contabilidad o Administrador. Por defecto: Colaborador'],
-      ['emailCoordinador', 'Email de un usuario ya existente que aprobará sus viáticos (opcional)'],
+      [
+        'rol',
+        'Colaborador, Coordinador, Contabilidad o Administrador. Por defecto: Colaborador',
+      ],
+      [
+        'emailCoordinador',
+        'Email de un usuario ya existente que aprobará sus viáticos (opcional)',
+      ],
       ['tipoCuenta', 'ahorros o corriente'],
-      ['Contraseña', 'Se genera automáticamente. Se mostrará al finalizar la importación'],
+      [
+        'Contraseña',
+        'Se genera automáticamente. Se mostrará al finalizar la importación',
+      ],
       ['Permisos', 'Se asignan automáticamente según el rol'],
     ])
     const wb = xlsx.utils.book_new()
     xlsx.utils.book_append_sheet(wb, ws, 'Usuarios')
     xlsx.utils.book_append_sheet(wb, help, 'Instrucciones')
     const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' })
-    return { file: buffer.toString('base64'), filename: 'plantilla_usuarios.xlsx' }
+    return {
+      file: buffer.toString('base64'),
+      filename: 'plantilla_usuarios.xlsx',
+    }
   }
 
   @UseGuards(AuthGuard('jwt'))

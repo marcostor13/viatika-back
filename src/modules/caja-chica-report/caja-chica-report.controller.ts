@@ -24,7 +24,7 @@ import { AuditLogService } from '../audit-log/audit-log.service'
 export class CajaChicaReportController {
   constructor(
     private readonly service: CajaChicaReportService,
-    private readonly auditLogService: AuditLogService,
+    private readonly auditLogService: AuditLogService
   ) {}
 
   private resolveClientId(req: any): string {
@@ -38,9 +38,7 @@ export class CajaChicaReportController {
     const createdBy = String(req.user._id || req.user.sub)
     const clientId = this.resolveClientId(req)
     if (!clientId) {
-      throw new BadRequestException(
-        'Cliente no identificado en la sesión.',
-      )
+      throw new BadRequestException('Cliente no identificado en la sesión.')
     }
     const result = await this.service.create(dto, createdBy, clientId)
     await this.auditLogService.log({
@@ -69,7 +67,7 @@ export class CajaChicaReportController {
   async addReports(
     @Param('id') id: string,
     @Body() dto: AddReportsDto,
-    @Request() req: any,
+    @Request() req: any
   ) {
     const clientId = this.resolveClientId(req)
     const result = await this.service.addReports(id, dto.reportIds, clientId)
@@ -88,7 +86,7 @@ export class CajaChicaReportController {
   async removeReport(
     @Param('id') id: string,
     @Body('expenseReportId') expenseReportId: string,
-    @Request() req: any,
+    @Request() req: any
   ) {
     const result = await this.service.removeReport(id, expenseReportId)
     await this.auditLogService.log({

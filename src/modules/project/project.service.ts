@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common'
 import { CreateProjectDto } from './dto/create-project.dto'
 import { UpdateProjectDto } from './dto/update-project.dto'
 import { InjectModel } from '@nestjs/mongoose'
@@ -123,7 +127,8 @@ export class ProjectService {
 
   async create(createProjectDto: CreateProjectDto) {
     const clientId = new Types.ObjectId(createProjectDto.clientId)
-    const code = createProjectDto.code?.trim() || this.generateCode(createProjectDto.name)
+    const code =
+      createProjectDto.code?.trim() || this.generateCode(createProjectDto.name)
     await this.ensureUniqueCode(code, clientId)
 
     const lineaNegocioId = createProjectDto.lineaNegocioId?.trim()
@@ -168,7 +173,7 @@ export class ProjectService {
     // Filtro por perfiles de categoría (para colaboradores: solo sus centros de costo).
     if (opts?.categoryGroupIds && opts.categoryGroupIds.length > 0) {
       filter.categoryGroupId = {
-        $in: opts.categoryGroupIds.map((id) => new Types.ObjectId(id)),
+        $in: opts.categoryGroupIds.map(id => new Types.ObjectId(id)),
       }
     }
     if (opts?.search) {
@@ -193,7 +198,7 @@ export class ProjectService {
       this.projectModel.countDocuments(filter).exec(),
     ])
 
-    const data = projects.map((p) => this.toResponse(p))
+    const data = projects.map(p => this.toResponse(p))
 
     if (usePagination) {
       return { data, total, page, pages: Math.ceil(total / limit), limit }
@@ -251,8 +256,13 @@ export class ProjectService {
     }
 
     if (updatePayload.isActive === false) {
-      const activeExpenses = await (this.projectModel.db.model('Expense') as any)
-        .countDocuments({ proyectId: new Types.ObjectId(id), status: { $nin: ['rejected'] } })
+      const activeExpenses = await (
+        this.projectModel.db.model('Expense') as any
+      )
+        .countDocuments({
+          proyectId: new Types.ObjectId(id),
+          status: { $nin: ['rejected'] },
+        })
         .catch(() => 0)
       if (activeExpenses > 0) {
         throw new BadRequestException(
@@ -273,7 +283,10 @@ export class ProjectService {
         .populate('lineaNegocioId', 'name code')
         .exec()
     } catch (error) {
-      this.rethrowDuplicateCodeError(error, updatePayload.code ?? updateProjectDto.code ?? '')
+      this.rethrowDuplicateCodeError(
+        error,
+        updatePayload.code ?? updateProjectDto.code ?? ''
+      )
     }
 
     if (!project) {
@@ -294,15 +307,30 @@ export class ProjectService {
 
     for (const row of rows) {
       const name = String(row['Nombre Proyecto'] ?? row['name'] ?? '').trim()
-      if (!name) { errors.push('Fila sin nombre de proyecto'); continue }
+      if (!name) {
+        errors.push('Fila sin nombre de proyecto')
+        continue
+      }
 
-      const code = String(row['Código'] ?? row['Codigo'] ?? row['code'] ?? '').trim() || this.generateCode(name)
+      const code =
+        String(row['Código'] ?? row['Codigo'] ?? row['code'] ?? '').trim() ||
+        this.generateCode(name)
       const clientName = String(row['Nombre Cliente'] ?? '').trim() || undefined
 
       try {
-        const exists = await this.projectModel.findOne({ code, clientId: clientIdObj }).exec()
-        if (exists) { skipped.push(code); continue }
-        await this.projectModel.create({ name, code, clientId: clientIdObj, clientName })
+        const exists = await this.projectModel
+          .findOne({ code, clientId: clientIdObj })
+          .exec()
+        if (exists) {
+          skipped.push(code)
+          continue
+        }
+        await this.projectModel.create({
+          name,
+          code,
+          clientId: clientIdObj,
+          clientName,
+        })
         created++
       } catch (e: any) {
         errors.push(`${code}: ${e?.message || 'error'}`)

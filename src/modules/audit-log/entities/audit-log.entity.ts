@@ -58,6 +58,9 @@ export type AuditAction =
   | 'add_reports_caja_chica'
   | 'remove_report_caja_chica'
   | 'finalize_caja_chica_report'
+  | 'upsert_accounting_config'
+  | 'download_accounting_entries'
+  | 'update_expense_desglose'
 
 @Schema({ timestamps: true })
 export class AuditLog {

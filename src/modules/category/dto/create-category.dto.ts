@@ -19,6 +19,10 @@ export class CreateCategoryDto {
 
   @IsString()
   @IsOptional()
+  cuentaDestino6x?: string
+
+  @IsString()
+  @IsOptional()
   observaciones?: string
 
   @IsBoolean()

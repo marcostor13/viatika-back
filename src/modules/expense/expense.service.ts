@@ -56,6 +56,11 @@ interface ExtractedInvoiceData {
   direccionEmisor?: string
   comentario?: string
   placaVehiculo?: string
+  baseAfecta?: number
+  igv?: number
+  tasaIgv?: number
+  inafecto?: number
+  comprobanteDetallado?: Record<string, unknown>
   [key: string]: unknown
 }
 
@@ -542,6 +547,14 @@ export class ExpenseService {
       categoryLimitWarning: categoryMeta.warning,
       comentario: data.comentario || undefined,
       placaVehiculo: data.placaVehiculo || undefined,
+      baseAfecta: typeof data.baseAfecta === 'number' ? data.baseAfecta : undefined,
+      igv: typeof data.igv === 'number' ? data.igv : undefined,
+      tasaIgv: typeof data.tasaIgv === 'number' ? data.tasaIgv : undefined,
+      inafecto: typeof data.inafecto === 'number' ? data.inafecto : undefined,
+      comprobanteDetallado:
+        data.comprobanteDetallado && typeof data.comprobanteDetallado === 'object'
+          ? data.comprobanteDetallado
+          : undefined,
     })
   }
 
@@ -1573,6 +1586,37 @@ export class ExpenseService {
       : value
   }
 
+  /**
+   * Rellena el desglose contable (base/IGV/tasa/inafecto) desde el JSON `data`
+   * del OCR cuando el DTO no lo trae explícito. No sobreescribe valores ya provistos.
+   */
+  private syncDesgloseFromData(
+    dto: Partial<CreateExpenseDto | UpdateExpenseDto>
+  ): void {
+    if (dto.data == null || typeof dto.data !== 'string') return
+    try {
+      const parsed = JSON.parse(dto.data) as Record<string, unknown>
+      const num = (v: unknown): number | undefined =>
+        typeof v === 'number' && !Number.isNaN(v) ? v : undefined
+      if (dto.baseAfecta === undefined) dto.baseAfecta = num(parsed.baseAfecta)
+      if (dto.igv === undefined) dto.igv = num(parsed.igv)
+      if (dto.tasaIgv === undefined) dto.tasaIgv = num(parsed.tasaIgv)
+      if (dto.inafecto === undefined) dto.inafecto = num(parsed.inafecto)
+      if (
+        dto.comprobanteDetallado === undefined &&
+        parsed.comprobanteDetallado &&
+        typeof parsed.comprobanteDetallado === 'object'
+      ) {
+        dto.comprobanteDetallado = parsed.comprobanteDetallado as Record<
+          string,
+          unknown
+        >
+      }
+    } catch {
+      /* mantener dto original */
+    }
+  }
+
   async create(createExpenseDto: CreateExpenseDto): Promise<Expense> {
     // Caja chica finalizada: no se permiten más gastos.
     await this.expenseReportService.assertReportNotLockedByCajaChica(
@@ -1581,6 +1625,7 @@ export class ExpenseService {
     const dto = { ...createExpenseDto }
     this.sanitizeFechaEmisionOnWrite(dto)
     this.syncComentarioPlacaFromData(dto)
+    this.syncDesgloseFromData(dto)
 
     if (!dto.fechaEmision && dto.data) {
       try {

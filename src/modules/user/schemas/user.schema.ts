@@ -30,6 +30,8 @@ export interface UserDocument extends Document {
   isActive: boolean
   dni?: string
   employeeCode?: string
+  /** Subcuenta contable 14 del colaborador (asientos Contanet). Si vacío, se usa el DNI en cols AN-AS. */
+  subcuenta14?: string
   /** Área organizacional (notificaciones viáticos Fase 3). */
   area?: string
   /** Cargo del colaborador (notificaciones viáticos Fase 3). */
@@ -71,6 +73,9 @@ export class User {
 
   @Prop()
   employeeCode?: string
+
+  @Prop()
+  subcuenta14?: string
 
   @Prop()
   area?: string

@@ -55,7 +55,7 @@ export class ExpenseReportService {
     @Inject(forwardRef(() => AdvanceService))
     private readonly advanceService: AdvanceService,
     private readonly uploadService: UploadService
-  ) {}
+  ) { }
 
   private validatePaymentReceipt(
     mimeType?: string,
@@ -237,8 +237,8 @@ export class ExpenseReportService {
       pendingBalanceFromReportId:
         createExpenseReportDto.pendingBalanceFromReportId
           ? new Types.ObjectId(
-              createExpenseReportDto.pendingBalanceFromReportId
-            )
+            createExpenseReportDto.pendingBalanceFromReportId
+          )
           : undefined,
       // Rendición directa creada desde saldo: el presupuesto es el saldo heredado
       budget: createExpenseReportDto.pendingBalanceFromReportId
@@ -471,7 +471,28 @@ export class ExpenseReportService {
       .sort({ createdAt: -1 })
       .lean()
       .exec()
-    return reports.map(r => this.withDeletionApprovalFlag(r))
+
+    // ¿Cuáles de estas cajas chicas ya fueron jaladas por Contabilidad (en
+    // cualquier reporte, borrador o finalizado)? El dueño ya no puede borrarlas.
+    const ids = reports.map(r => r._id as Types.ObjectId)
+    const referencedSet = new Set<string>()
+    if (ids.length > 0) {
+      const referencing = await this.cajaChicaReportModel
+        .find({ 'selectedReports.expenseReportId': { $in: ids } })
+        .select('selectedReports.expenseReportId')
+        .lean()
+        .exec()
+      for (const cc of referencing) {
+        for (const sr of (cc as any).selectedReports ?? []) {
+          referencedSet.add(String(sr.expenseReportId))
+        }
+      }
+    }
+
+    return reports.map(r => ({
+      ...this.withDeletionApprovalFlag(r),
+      referencedByCajaChica: referencedSet.has(String(r._id)),
+    }))
   }
 
   /**
@@ -486,7 +507,16 @@ export class ExpenseReportService {
         e?.approvalCoord?.status === 'approved' ||
         e?.approvalCont?.status === 'approved'
     )
-    return { ...report, hasApprovedExpense }
+    // `createdByOther`: la solicitud la creó alguien distinto del dueño (ej.
+    // Contabilidad creó una rendición directa para el colaborador). En ese caso
+    // el dueño no puede eliminarla; el front oculta el botón.
+    const createdById = String(report.createdBy?._id ?? report.createdBy ?? '')
+    const ownerId = String(report.userId?._id ?? report.userId ?? '')
+    const createdByOther = !!createdById && !!ownerId && createdById !== ownerId
+    // `inheritedBalance`: la rendición directa se creó con saldo heredado de otra.
+    // El dueño no puede eliminarla (rompería la cadena del saldo); solo Contabilidad.
+    const inheritedBalance = !!report.pendingBalanceFromReportId
+    return { ...report, hasApprovedExpense, createdByOther, inheritedBalance }
   }
 
   async findAllCajaChicaAvailable(clientId: string) {
@@ -647,6 +677,22 @@ export class ExpenseReportService {
     return count > 0
   }
 
+  /**
+   * ¿La rendición de caja chica ya fue incluida (jalada) por Contabilidad en
+   * algún reporte de caja chica, esté en borrador o finalizado? Una vez jalada,
+   * el colaborador ya no puede eliminar su caja chica (rompería la
+   * consolidación); solo Contabilidad puede.
+   */
+  async isReferencedByCajaChica(reportId: string): Promise<boolean> {
+    if (!reportId || !Types.ObjectId.isValid(reportId)) return false
+    const count = await this.cajaChicaReportModel
+      .countDocuments({
+        'selectedReports.expenseReportId': new Types.ObjectId(reportId),
+      })
+      .exec()
+    return count > 0
+  }
+
   /** Lanza 403 si la rendición pertenece a una caja chica ya finalizada. */
   async assertReportNotLockedByCajaChica(reportId?: string): Promise<void> {
     if (!reportId) return
@@ -677,14 +723,14 @@ export class ExpenseReportService {
       throw new NotFoundException(`Expense report with ID ${id} not found`)
     }
     const normalized = this.normalizeReportExpenseDates(report)
-    // Flag derivado para el front: si la caja chica fue finalizada, el
-    // colaborador ya no puede subir gastos (botón "Añadir Gasto" oculto).
-    ;(
-      normalized as unknown as { lockedByCajaChica?: boolean }
-    ).lockedByCajaChica =
-      (normalized as unknown as { isCajaChica?: boolean }).isCajaChica === true
-        ? await this.isLockedByFinalizedCajaChica(id)
-        : false
+      // Flag derivado para el front: si la caja chica fue finalizada, el
+      // colaborador ya no puede subir gastos (botón "Añadir Gasto" oculto).
+      ; (
+        normalized as unknown as { lockedByCajaChica?: boolean }
+      ).lockedByCajaChica =
+        (normalized as unknown as { isCajaChica?: boolean }).isCajaChica === true
+          ? await this.isLockedByFinalizedCajaChica(id)
+          : false
     return normalized
   }
 
@@ -695,8 +741,8 @@ export class ExpenseReportService {
     const pojo =
       typeof (report as { toObject?: () => unknown }).toObject === 'function'
         ? (
-            report as unknown as { toObject: () => Record<string, unknown> }
-          ).toObject()
+          report as unknown as { toObject: () => Record<string, unknown> }
+        ).toObject()
         : (report as unknown as Record<string, unknown>)
 
     const raw = pojo.expenseIds
@@ -1099,7 +1145,7 @@ export class ExpenseReportService {
               type: 'warning',
               actionUrl: `/mis-rendiciones/${id}/detalle`,
             })
-            .catch(() => {})
+            .catch(() => { })
         }
       } catch (err) {
         console.error(
@@ -1437,10 +1483,10 @@ export class ExpenseReportService {
     const expenseIds = report.expenseIds ?? []
     const expenses = expenseIds.length
       ? await this.expenseModel
-          .find({ _id: { $in: expenseIds } })
-          .select('_id file approvalCoord approvalCont')
-          .lean()
-          .exec()
+        .find({ _id: { $in: expenseIds } })
+        .select('_id file approvalCoord approvalCont')
+        .lean()
+        .exec()
       : []
 
     // "Aprobado por alguien" = aprobación a nivel comprobante O a nivel reporte.
@@ -1451,17 +1497,46 @@ export class ExpenseReportService {
         e.approvalCoord?.status === 'approved' ||
         e.approvalCont?.status === 'approved'
     )
-    const hasAnyApproval = reportLevelApproved || anyExpenseApproved
 
-    if (hasAnyApproval) {
-      // Estado 3: solo Contabilidad o Superadmin.
+    // Condiciones que restringen el borrado a solo Contabilidad/Superadmin (el
+    // colaborador/coordinador dueño ya no puede eliminar).
+    let restricted = reportLevelApproved || anyExpenseApproved
+    let restrictedMsg =
+      'Esta solicitud ya tiene una aprobación; solo Contabilidad puede eliminarla.'
+
+    // Rendición directa creada por Contabilidad para el colaborador/coordinador
+    // (createdBy distinto del dueño), o creada con saldo heredado de otra
+    // rendición (borrarla rompería la cadena del saldo): solo Contabilidad.
+    if (!restricted && report.isDirecta) {
+      const createdById = String(report.createdBy ?? '')
+      const ownerId = String(report.userId ?? '')
+      if (createdById && ownerId && createdById !== ownerId) {
+        restricted = true
+        restrictedMsg =
+          'Esta rendición directa fue creada por Contabilidad; solo Contabilidad puede eliminarla.'
+      } else if (report.pendingBalanceFromReportId) {
+        restricted = true
+        restrictedMsg =
+          'Esta rendición directa se creó con saldo heredado de otra rendición; solo Contabilidad puede eliminarla.'
+      }
+    }
+
+    // Caja chica ya incluida (jalada) por Contabilidad en un reporte —borrador o
+    // finalizado—: solo Contabilidad puede eliminarla.
+    if (!restricted && report.isCajaChica) {
+      if (await this.isReferencedByCajaChica(id)) {
+        restricted = true
+        restrictedMsg =
+          'Esta caja chica ya fue incluida por Contabilidad en un reporte; solo Contabilidad puede eliminarla.'
+      }
+    }
+
+    if (restricted) {
       if (!isContabilidad && !isSuperAdmin) {
-        throw new ForbiddenException(
-          'Esta solicitud ya tiene una aprobación; solo Contabilidad puede eliminarla.'
-        )
+        throw new ForbiddenException(restrictedMsg)
       }
     } else if (isColaborador) {
-      // Estados 1 y 2: el colaborador solo puede eliminar las suyas.
+      // Estados iniciales: el colaborador solo puede eliminar las suyas.
       const ownerId = String(report.createdBy ?? report.userId ?? '')
       if (ownerId !== String(actor.userId)) {
         throw new ForbiddenException(
@@ -1743,9 +1818,7 @@ export class ExpenseReportService {
 
     const reports = await this.expenseReportModel
       .find(query)
-      .select(
-        '_id codigo userId title motivo gestion budget status createdAt createdBy directaDeposit expenseIds'
-      )
+      .select('_id codigo userId title motivo gestion budget status createdAt createdBy directaDeposit expenseIds pendingBalanceFromReportId pendingBalanceAmount')
       .populate('userId', 'name email')
       .populate({
         path: 'createdBy',
@@ -1769,11 +1842,15 @@ export class ExpenseReportService {
         origin = 'colaborador'
       }
       const expenses = (r.expenseIds as any[]) || []
-      const totalGastado = expenses.reduce(
-        (s, e) => s + (Number(e?.total) || 0),
-        0
+      const totalGastado = expenses.reduce((s, e) => s + (Number(e?.total) || 0), 0)
+      // Rendición directa creada desde el saldo de otra (saldo heredado): no tiene
+      // `directaDeposit`, pero su presupuesto disponible es el saldo trasladado.
+      const hasInheritedBalance =
+        !!r.pendingBalanceFromReportId && Number(r.pendingBalanceAmount ?? 0) > 0
+      const deposited = Number(
+        r.directaDeposit?.amount ?? r.pendingBalanceAmount ?? r.budget ?? 0
       )
-      const deposited = Number(r.directaDeposit?.amount ?? r.budget ?? 0)
+      const hasFunds = !!r.directaDeposit || hasInheritedBalance
       return {
         _id: String(r._id),
         codigo: r.codigo ?? null,
@@ -1782,10 +1859,10 @@ export class ExpenseReportService {
         motivo: r.motivo ?? null,
         status: r.status ?? null,
         createdAt: r.createdAt,
-        hasDeposit: !!r.directaDeposit,
+        hasDeposit: hasFunds,
         deposited,
         totalGastado,
-        saldo: r.directaDeposit ? deposited - totalGastado : null,
+        saldo: hasFunds ? deposited - totalGastado : null,
         expenseCount: expenses.length,
         generatedByName: creator?.name || creator?.email || null,
         generatedByRole: creator?.roleId?.name || null,
@@ -2441,7 +2518,7 @@ export class ExpenseReportService {
           reportTitle: updated.title,
           closedAt: closedAtStr,
         })
-        .catch(() => {})
+        .catch(() => { })
     }
 
     const settlement = (updated as any).settlement
@@ -2465,7 +2542,7 @@ export class ExpenseReportService {
             closedAt: closedAtStr,
             platformUrl,
           })
-          .catch(() => {})
+          .catch(() => { })
       }
       if (collaborator) {
         this.notificationsService
@@ -2476,7 +2553,7 @@ export class ExpenseReportService {
             type: 'warning',
             actionUrl: `/mis-rendiciones/${id}/detalle`,
           })
-          .catch(() => {})
+          .catch(() => { })
       }
     } else if (settlement?.type === 'reembolso' && settlementDiffAbs >= 0.01) {
       const amountFormatted = settlementDiffAbs.toFixed(2)
@@ -2493,7 +2570,7 @@ export class ExpenseReportService {
             amountFormatted,
             detailUrl: platformUrl,
           })
-          .catch(() => {})
+          .catch(() => { })
         this.notificationsService
           .create({
             userId: u._id,
@@ -2502,7 +2579,7 @@ export class ExpenseReportService {
             type: 'info',
             actionUrl: `/mis-rendiciones/${id}/detalle`,
           })
-          .catch(() => {})
+          .catch(() => { })
       }
     }
 
@@ -2564,13 +2641,13 @@ export class ExpenseReportService {
     const advanceTotal =
       activeAdvances.length > 0
         ? activeAdvances.reduce(
-            (s, a) =>
-              s +
-              (a.status === 'approved'
-                ? 0
-                : Number(a.paidAmount ?? a.amount) || 0),
-            0
-          )
+          (s, a) =>
+            s +
+            (a.status === 'approved'
+              ? 0
+              : Number(a.paidAmount ?? a.amount) || 0),
+          0
+        )
         : Number((report as any).budget ?? 0)
     const difference = advanceTotal - expenseTotal
     const notifySettlement = {
@@ -2628,7 +2705,7 @@ export class ExpenseReportService {
           reportTitle: report.title,
           closedAt: this.emailService.formatDateDDMMYYYY(voucher.uploadedAt),
         })
-        .catch(() => {})
+        .catch(() => { })
     }
     this.notificationsService
       .create({
@@ -2638,7 +2715,7 @@ export class ExpenseReportService {
         type: 'success',
         actionUrl: `/mis-rendiciones/${id}/detalle`,
       })
-      .catch(() => {})
+      .catch(() => { })
 
     const accountingUsers =
       await this.userService.findAccountingRecipientsWithIds(clientId)
@@ -2655,7 +2732,7 @@ export class ExpenseReportService {
           operationNumber: dto.operationNumber,
           platformUrl,
         })
-        .catch(() => {})
+        .catch(() => { })
       this.notificationsService
         .create({
           userId: u._id,
@@ -2664,7 +2741,7 @@ export class ExpenseReportService {
           type: 'info',
           actionUrl: `/mis-rendiciones/${id}/detalle`,
         })
-        .catch(() => {})
+        .catch(() => { })
     }
 
     return this.expenseReportModel
@@ -2875,7 +2952,7 @@ export class ExpenseReportService {
         type: 'warning',
         actionUrl: `/mis-rendiciones/${id}/detalle`,
       })
-      .catch(() => {})
+      .catch(() => { })
 
     if (collaborator?.email) {
       const collaboratorEmailEnabled = await this.userService.isEmailEnabled(
@@ -2915,7 +2992,7 @@ export class ExpenseReportService {
             type: 'info',
             actionUrl: `/mis-rendiciones/${id}/detalle`,
           })
-          .catch(() => {})
+          .catch(() => { })
 
         try {
           const coordinator =
@@ -2938,9 +3015,9 @@ export class ExpenseReportService {
                 )
               )
           }
-        } catch {}
+        } catch { }
       }
-    } catch {}
+    } catch { }
 
     return updated
   }

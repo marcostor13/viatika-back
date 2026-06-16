@@ -1404,10 +1404,11 @@ export class ExpenseReportService {
     }
 
     // Rendición de viáticos: si su anticipo vinculado ya fue aprobado/pagado (el
-    // coordinador aprobó y/o contabilidad pagó), el colaborador ya no puede
-    // eliminar la rendición; solo Contabilidad. (Estas rendiciones se auto-crean
-    // al registrar el pago del anticipo.)
-    if (!restricted && !report.isDirecta && !report.isCajaChica) {
+    // coordinador aprobó y/o contabilidad pagó), la rendición representa dinero ya
+    // desembolsado y NO puede eliminarse por la app —ni el colaborador ni
+    // Contabilidad—. Solo Superadmin (escape técnico). Estas rendiciones se
+    // auto-crean al registrar el pago del anticipo.
+    if (!report.isDirecta && !report.isCajaChica) {
       const rawAdvanceIds: string[] = (
         Array.isArray(report.advanceIds) ? report.advanceIds : []
       ).map((x: any) => (x && typeof x === 'object' && '_id' in x ? String(x._id) : String(x)))
@@ -1415,10 +1416,10 @@ export class ExpenseReportService {
       const hasApprovedAdvance = linked.some((a: any) =>
         ['approved', 'partially_paid', 'paid', 'settled'].includes(a.status)
       )
-      if (hasApprovedAdvance) {
-        restricted = true
-        restrictedMsg =
-          'El anticipo de esta rendición ya fue aprobado/pagado; solo Contabilidad puede eliminarla.'
+      if (hasApprovedAdvance && !isSuperAdmin) {
+        throw new ForbiddenException(
+          'El anticipo de esta rendición ya fue aprobado/pagado; la rendición no puede eliminarse.'
+        )
       }
     }
 

@@ -2164,6 +2164,16 @@ export class AdvanceService {
       (advance.approvalHistory ?? []).some(e => e.action === 'approved') ||
       ['approved', 'partially_paid', 'paid', 'settled'].includes(advance.status)
 
+    // El viático ya fue pagado y generó una rendición (representa dinero ya
+    // desembolsado): no puede eliminarse por la app —ni colaborador ni
+    // Contabilidad—. Solo Superadmin (escape técnico). Evita además orfanar la
+    // rendición vía la cascada.
+    if (advance.expenseReportId && !isSuperAdmin) {
+      throw new ForbiddenException(
+        'Este viático ya fue pagado y tiene una rendición asociada; no puede eliminarse.'
+      )
+    }
+
     if (hasApproval) {
       if (!isContabilidad && !isSuperAdmin) {
         throw new ForbiddenException(

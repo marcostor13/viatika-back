@@ -1484,13 +1484,22 @@ export class AdvanceService {
     if (!canPay)
       throw new ForbiddenException('No tienes permiso para registrar pagos')
 
-    const receiptValidation = this.isValidPaymentReceipt(
-      dto.paymentReceiptMimeType,
-      dto.paymentReceiptFileName,
-      dto.paymentReceiptSizeBytes
-    )
-    if (!receiptValidation.ok) {
-      throw new BadRequestException(receiptValidation.reason)
+    // El comprobante es obligatorio salvo cuando el pago es en efectivo. Si se
+    // adjunta uno (en cualquier método), se valida formato/tamaño.
+    if (dto.method !== 'efectivo' && !dto.paymentReceiptUrl) {
+      throw new BadRequestException(
+        'El comprobante es obligatorio para pagos por transferencia o cheque.'
+      )
+    }
+    if (dto.paymentReceiptUrl) {
+      const receiptValidation = this.isValidPaymentReceipt(
+        dto.paymentReceiptMimeType,
+        dto.paymentReceiptFileName,
+        dto.paymentReceiptSizeBytes
+      )
+      if (!receiptValidation.ok) {
+        throw new BadRequestException(receiptValidation.reason)
+      }
     }
 
     const prevPaid = Number(advance.paidAmount ?? 0)

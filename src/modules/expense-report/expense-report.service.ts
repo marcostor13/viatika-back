@@ -435,7 +435,28 @@ export class ExpenseReportService {
       .sort({ createdAt: -1 })
       .lean()
       .exec()
-    return reports.map(r => this.withDeletionApprovalFlag(r))
+
+    // ¿Cuáles de estas cajas chicas ya fueron jaladas por Contabilidad (en
+    // cualquier reporte, borrador o finalizado)? El dueño ya no puede borrarlas.
+    const ids = reports.map(r => r._id as Types.ObjectId)
+    const referencedSet = new Set<string>()
+    if (ids.length > 0) {
+      const referencing = await this.cajaChicaReportModel
+        .find({ 'selectedReports.expenseReportId': { $in: ids } })
+        .select('selectedReports.expenseReportId')
+        .lean()
+        .exec()
+      for (const cc of referencing) {
+        for (const sr of (cc as any).selectedReports ?? []) {
+          referencedSet.add(String(sr.expenseReportId))
+        }
+      }
+    }
+
+    return reports.map(r => ({
+      ...this.withDeletionApprovalFlag(r),
+      referencedByCajaChica: referencedSet.has(String(r._id)),
+    }))
   }
 
   /**
@@ -450,7 +471,16 @@ export class ExpenseReportService {
         e?.approvalCoord?.status === 'approved' ||
         e?.approvalCont?.status === 'approved'
     )
-    return { ...report, hasApprovedExpense }
+    // `createdByOther`: la solicitud la creó alguien distinto del dueño (ej.
+    // Contabilidad creó una rendición directa para el colaborador). En ese caso
+    // el dueño no puede eliminarla; el front oculta el botón.
+    const createdById = String(report.createdBy?._id ?? report.createdBy ?? '')
+    const ownerId = String(report.userId?._id ?? report.userId ?? '')
+    const createdByOther = !!createdById && !!ownerId && createdById !== ownerId
+    // `inheritedBalance`: la rendición directa se creó con saldo heredado de otra.
+    // El dueño no puede eliminarla (rompería la cadena del saldo); solo Contabilidad.
+    const inheritedBalance = !!report.pendingBalanceFromReportId
+    return { ...report, hasApprovedExpense, createdByOther, inheritedBalance }
   }
 
   async findAllCajaChicaAvailable(clientId: string) {
@@ -578,6 +608,22 @@ export class ExpenseReportService {
     const count = await this.cajaChicaReportModel
       .countDocuments({
         status: 'finalized',
+        'selectedReports.expenseReportId': new Types.ObjectId(reportId),
+      })
+      .exec()
+    return count > 0
+  }
+
+  /**
+   * ¿La rendición de caja chica ya fue incluida (jalada) por Contabilidad en
+   * algún reporte de caja chica, esté en borrador o finalizado? Una vez jalada,
+   * el colaborador ya no puede eliminar su caja chica (rompería la
+   * consolidación); solo Contabilidad puede.
+   */
+  async isReferencedByCajaChica(reportId: string): Promise<boolean> {
+    if (!reportId || !Types.ObjectId.isValid(reportId)) return false
+    const count = await this.cajaChicaReportModel
+      .countDocuments({
         'selectedReports.expenseReportId': new Types.ObjectId(reportId),
       })
       .exec()
@@ -1310,17 +1356,46 @@ export class ExpenseReportService {
         e.approvalCoord?.status === 'approved' ||
         e.approvalCont?.status === 'approved'
     )
-    const hasAnyApproval = reportLevelApproved || anyExpenseApproved
 
-    if (hasAnyApproval) {
-      // Estado 3: solo Contabilidad o Superadmin.
+    // Condiciones que restringen el borrado a solo Contabilidad/Superadmin (el
+    // colaborador/coordinador dueño ya no puede eliminar).
+    let restricted = reportLevelApproved || anyExpenseApproved
+    let restrictedMsg =
+      'Esta solicitud ya tiene una aprobación; solo Contabilidad puede eliminarla.'
+
+    // Rendición directa creada por Contabilidad para el colaborador/coordinador
+    // (createdBy distinto del dueño), o creada con saldo heredado de otra
+    // rendición (borrarla rompería la cadena del saldo): solo Contabilidad.
+    if (!restricted && report.isDirecta) {
+      const createdById = String(report.createdBy ?? '')
+      const ownerId = String(report.userId ?? '')
+      if (createdById && ownerId && createdById !== ownerId) {
+        restricted = true
+        restrictedMsg =
+          'Esta rendición directa fue creada por Contabilidad; solo Contabilidad puede eliminarla.'
+      } else if (report.pendingBalanceFromReportId) {
+        restricted = true
+        restrictedMsg =
+          'Esta rendición directa se creó con saldo heredado de otra rendición; solo Contabilidad puede eliminarla.'
+      }
+    }
+
+    // Caja chica ya incluida (jalada) por Contabilidad en un reporte —borrador o
+    // finalizado—: solo Contabilidad puede eliminarla.
+    if (!restricted && report.isCajaChica) {
+      if (await this.isReferencedByCajaChica(id)) {
+        restricted = true
+        restrictedMsg =
+          'Esta caja chica ya fue incluida por Contabilidad en un reporte; solo Contabilidad puede eliminarla.'
+      }
+    }
+
+    if (restricted) {
       if (!isContabilidad && !isSuperAdmin) {
-        throw new ForbiddenException(
-          'Esta solicitud ya tiene una aprobación; solo Contabilidad puede eliminarla.'
-        )
+        throw new ForbiddenException(restrictedMsg)
       }
     } else if (isColaborador) {
-      // Estados 1 y 2: el colaborador solo puede eliminar las suyas.
+      // Estados iniciales: el colaborador solo puede eliminar las suyas.
       const ownerId = String(report.createdBy ?? report.userId ?? '')
       if (ownerId !== String(actor.userId)) {
         throw new ForbiddenException(

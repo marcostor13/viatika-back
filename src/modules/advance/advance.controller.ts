@@ -65,10 +65,13 @@ export class AdvanceController {
     const userRole = req.user?.roles?.[0] || req.user?.role
     const isAdminRole = [ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(userRole)
     const canApproveL1 = req.user?.permissions?.canApproveL1 === true
-    const hasViaticosModule = req.user?.permissions?.modules?.includes('viaticos') === true
+    const hasViaticosModule =
+      req.user?.permissions?.modules?.includes('viaticos') === true
 
     if (!isAdminRole && !canApproveL1 && !hasViaticosModule) {
-      throw new ForbiddenException('Sin permiso para acceder a la gestión de viáticos')
+      throw new ForbiddenException(
+        'Sin permiso para acceder a la gestión de viáticos'
+      )
     }
 
     const rawClient = req.user?.clientId
@@ -297,7 +300,8 @@ export class AdvanceController {
   @Roles(ROLES.COLABORADOR, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
   uploadReturnProof(
     @Param('id') id: string,
-    @Body() body: {
+    @Body()
+    body: {
       depositDate: string
       amountReturned: number
       bankOrigin: string
@@ -379,5 +383,4 @@ export class AdvanceController {
     })
     return result
   }
-
 }

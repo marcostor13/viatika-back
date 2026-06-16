@@ -2,7 +2,10 @@ import { Module } from '@nestjs/common'
 import { MongooseModule } from '@nestjs/mongoose'
 import { SchedulerService } from './scheduler.service'
 import { Advance, AdvanceSchema } from '../advance/entities/advance.entity'
-import { ExpenseReport, ExpenseReportSchema } from '../expense-report/entities/expense-report.entity'
+import {
+  ExpenseReport,
+  ExpenseReportSchema,
+} from '../expense-report/entities/expense-report.entity'
 import { Expense, ExpenseSchema } from '../expense/entities/expense.entity'
 import { Client, ClientSchema } from '../client/entities/client.entity'
 import { UserModule } from '../user/user.module'

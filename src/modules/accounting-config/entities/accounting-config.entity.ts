@@ -92,7 +92,14 @@ export class AccountingConfig {
   /** Palabras clave que marcan condición inafecta (recargo al consumo, servicio, D.L. 25988, propina…). */
   @Prop({
     type: [String],
-    default: ['recargo al consumo', 'recargo consumo', 'rc', 'servicio', 'd.l. 25988', 'propina'],
+    default: [
+      'recargo al consumo',
+      'recargo consumo',
+      'rc',
+      'servicio',
+      'd.l. 25988',
+      'propina',
+    ],
   })
   inafectoKeywords: string[]
 

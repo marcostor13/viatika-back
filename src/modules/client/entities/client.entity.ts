@@ -64,7 +64,11 @@ export class Client {
   @Prop({
     type: {
       enabled: { type: Boolean, default: false },
-      frequency: { type: String, enum: ['semanal', 'mensual'], default: 'semanal' },
+      frequency: {
+        type: String,
+        enum: ['semanal', 'mensual'],
+        default: 'semanal',
+      },
       _id: false,
     },
     required: false,

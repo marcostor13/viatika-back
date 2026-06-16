@@ -21,7 +21,7 @@ export class CajaChicaReportService {
     @InjectModel(CajaChicaReport.name)
     private readonly model: Model<CajaChicaReportDocument>,
     @InjectModel(ExpenseReport.name)
-    private readonly expenseReportModel: Model<ExpenseReportDocument>,
+    private readonly expenseReportModel: Model<ExpenseReportDocument>
   ) {}
 
   private async generateCodigo(clientId: string): Promise<string> {
@@ -31,13 +31,17 @@ export class CajaChicaReportService {
       .findOneAndUpdate(
         { _id: key as any },
         { $inc: { seq: 1 } },
-        { upsert: true, returnDocument: 'after' },
+        { upsert: true, returnDocument: 'after' }
       )
     const seq = (res && (res.seq ?? res.value?.seq)) ?? 1
     return `CC-${String(seq).padStart(4, '0')}`
   }
 
-  async create(dto: CreateCajaChicaReportDto, createdBy: string, clientId: string) {
+  async create(
+    dto: CreateCajaChicaReportDto,
+    createdBy: string,
+    clientId: string
+  ) {
     const effectiveClientId = dto.clientId || clientId
     if (!effectiveClientId) {
       throw new BadRequestException('No se pudo determinar el cliente.')
@@ -70,8 +74,8 @@ export class CajaChicaReportService {
     const expReportIds = [
       ...new Set(
         reports.flatMap((r: any) =>
-          (r.selectedReports ?? []).map((sr: any) => String(sr.expenseReportId)),
-        ),
+          (r.selectedReports ?? []).map((sr: any) => String(sr.expenseReportId))
+        )
       ),
     ]
 
@@ -85,7 +89,7 @@ export class CajaChicaReportService {
       for (const er of expReports as any[]) {
         const sum = (er.expenseIds ?? []).reduce(
           (s: number, e: any) => s + (Number(e?.total) || 0),
-          0,
+          0
         )
         totalsByExpReport.set(String(er._id), sum)
       }
@@ -96,7 +100,7 @@ export class CajaChicaReportService {
       const totalAmount = (r.selectedReports ?? []).reduce(
         (sum: number, sr: any) =>
           sum + (totalsByExpReport.get(String(sr.expenseReportId)) ?? 0),
-        0,
+        0
       )
       if (totalAmount !== r.totalAmount) {
         drifted.push({ _id: r._id, totalAmount })
@@ -108,12 +112,12 @@ export class CajaChicaReportService {
     // queden corregidas.
     if (drifted.length) {
       await this.model.bulkWrite(
-        drifted.map((d) => ({
+        drifted.map(d => ({
           updateOne: {
             filter: { _id: d._id },
             update: { $set: { totalAmount: d.totalAmount } },
           },
-        })),
+        }))
       )
     }
 
@@ -146,7 +150,7 @@ export class CajaChicaReportService {
           ...sr,
           expenseReport: expReport,
         }
-      }),
+      })
     )
 
     // Recalcular el total desde los gastos ya poblados (mismo cálculo que el
@@ -157,9 +161,7 @@ export class CajaChicaReportService {
     // lista y las exportaciones también queden corregidas.
     const totalAmount = enriched.reduce((sum: number, sr: any) => {
       const expenses = (sr.expenseReport?.expenseIds ?? []) as any[]
-      return (
-        sum + expenses.reduce((s, e) => s + (Number(e?.total) || 0), 0)
-      )
+      return sum + expenses.reduce((s, e) => s + (Number(e?.total) || 0), 0)
     }, 0)
 
     if (totalAmount !== report.totalAmount) {
@@ -171,13 +173,16 @@ export class CajaChicaReportService {
 
   async addReports(id: string, reportIds: string[], clientId: string) {
     const cajaChicaReport = await this.model.findById(id).exec()
-    if (!cajaChicaReport) throw new NotFoundException(`Reporte CC ${id} no encontrado`)
+    if (!cajaChicaReport)
+      throw new NotFoundException(`Reporte CC ${id} no encontrado`)
     if (cajaChicaReport.status === 'finalized') {
-      throw new BadRequestException('No se puede modificar un reporte finalizado.')
+      throw new BadRequestException(
+        'No se puede modificar un reporte finalizado.'
+      )
     }
 
     const existingIds = new Set(
-      cajaChicaReport.selectedReports.map((r) => String(r.expenseReportId)),
+      cajaChicaReport.selectedReports.map(r => String(r.expenseReportId))
     )
 
     for (const reportId of reportIds) {
@@ -192,19 +197,21 @@ export class CajaChicaReportService {
 
       if (!expReport || !expReport.isCajaChica) {
         throw new BadRequestException(
-          `La rendición ${reportId} no es de tipo caja chica o no existe.`,
+          `La rendición ${reportId} no es de tipo caja chica o no existe.`
         )
       }
       if (String(expReport.clientId) !== clientId) {
         throw new BadRequestException(
-          `La rendición ${reportId} no pertenece a este cliente.`,
+          `La rendición ${reportId} no pertenece a este cliente.`
         )
       }
 
       const colaborador = expReport.userId as any
       cajaChicaReport.selectedReports.push({
         expenseReportId: new Types.ObjectId(reportId),
-        colaboradorId: new Types.ObjectId(String(colaborador?._id || colaborador)),
+        colaboradorId: new Types.ObjectId(
+          String(colaborador?._id || colaborador)
+        ),
         colaboradorName: colaborador?.name || 'Colaborador',
       })
     }
@@ -217,11 +224,13 @@ export class CajaChicaReportService {
     const report = await this.model.findById(id).exec()
     if (!report) throw new NotFoundException(`Reporte CC ${id} no encontrado`)
     if (report.status === 'finalized') {
-      throw new BadRequestException('No se puede modificar un reporte finalizado.')
+      throw new BadRequestException(
+        'No se puede modificar un reporte finalizado.'
+      )
     }
 
     report.selectedReports = report.selectedReports.filter(
-      (r) => String(r.expenseReportId) !== expenseReportId,
+      r => String(r.expenseReportId) !== expenseReportId
     )
     report.totalAmount = await this.recalculateTotal(report)
     return report.save()
@@ -235,7 +244,7 @@ export class CajaChicaReportService {
     }
     if (report.selectedReports.length === 0) {
       throw new BadRequestException(
-        'Debe incluir al menos una rendición antes de finalizar.',
+        'Debe incluir al menos una rendición antes de finalizar.'
       )
     }
     // Congelar el total correcto al finalizar (los montos pudieron ajustarse
@@ -245,7 +254,9 @@ export class CajaChicaReportService {
     return report.save()
   }
 
-  private async recalculateTotal(report: CajaChicaReportDocument): Promise<number> {
+  private async recalculateTotal(
+    report: CajaChicaReportDocument
+  ): Promise<number> {
     let total = 0
     for (const sr of report.selectedReports) {
       const expReport = await this.expenseReportModel

@@ -78,12 +78,8 @@ export class AccountingEntriesController {
         )
       }
       const tipoList = (
-        tipos
-          ? tipos.split(',').map((t) => t.trim())
-          : ALL_TIPOS
-      ).filter((t): t is AsientoTipo =>
-        (ALL_TIPOS as string[]).includes(t)
-      )
+        tipos ? tipos.split(',').map(t => t.trim()) : ALL_TIPOS
+      ).filter((t): t is AsientoTipo => (ALL_TIPOS as string[]).includes(t))
 
       const files = await this.service.generateForReport(
         reportId,
@@ -97,7 +93,7 @@ export class AccountingEntriesController {
         action: 'download_accounting_entries',
         module: 'facturas',
         entityId: reportId,
-        details: `Asientos: ${files.map((f) => f.tipo).join(', ')}`,
+        details: `Asientos: ${files.map(f => f.tipo).join(', ')}`,
         clientId,
       })
 

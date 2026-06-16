@@ -26,7 +26,9 @@ const makeMockCajaChicaDoc = (overrides: any = {}) => ({
   status: 'draft',
   selectedReports: [],
   totalAmount: 0,
-  save: jest.fn().mockResolvedValue({ _id: new Types.ObjectId(), ...overrides }),
+  save: jest
+    .fn()
+    .mockResolvedValue({ _id: new Types.ObjectId(), ...overrides }),
   ...overrides,
 })
 
@@ -45,10 +47,14 @@ describe('CajaChicaReportService', () => {
   let expenseReportModel: any
 
   beforeEach(async () => {
-    const mockCajaChicaModel: any = jest.fn().mockImplementation((data: any) => ({
-      ...data,
-      save: jest.fn().mockResolvedValue({ _id: new Types.ObjectId(), ...data }),
-    }))
+    const mockCajaChicaModel: any = jest
+      .fn()
+      .mockImplementation((data: any) => ({
+        ...data,
+        save: jest
+          .fn()
+          .mockResolvedValue({ _id: new Types.ObjectId(), ...data }),
+      }))
     mockCajaChicaModel.find = jest.fn().mockReturnValue({
       populate: jest.fn().mockReturnThis(),
       sort: jest.fn().mockReturnThis(),
@@ -59,7 +65,9 @@ describe('CajaChicaReportService', () => {
     mockCajaChicaModel.updateOne = jest.fn().mockReturnValue({
       exec: jest.fn().mockResolvedValue({ modifiedCount: 1 }),
     })
-    mockCajaChicaModel.bulkWrite = jest.fn().mockResolvedValue({ modifiedCount: 1 })
+    mockCajaChicaModel.bulkWrite = jest
+      .fn()
+      .mockResolvedValue({ modifiedCount: 1 })
     mockCajaChicaModel.db = mockDb
 
     const mockExpenseReportModel: any = {}
@@ -69,8 +77,14 @@ describe('CajaChicaReportService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         CajaChicaReportService,
-        { provide: getModelToken(CajaChicaReport.name), useValue: mockCajaChicaModel },
-        { provide: getModelToken(ExpenseReport.name), useValue: mockExpenseReportModel },
+        {
+          provide: getModelToken(CajaChicaReport.name),
+          useValue: mockCajaChicaModel,
+        },
+        {
+          provide: getModelToken(ExpenseReport.name),
+          useValue: mockExpenseReportModel,
+        },
       ],
     }).compile()
 
@@ -88,7 +102,7 @@ describe('CajaChicaReportService', () => {
 
     it('throws if no clientId', async () => {
       await expect(service.create({ title: 'x' }, userId, '')).rejects.toThrow(
-        BadRequestException,
+        BadRequestException
       )
     })
   })
@@ -111,7 +125,11 @@ describe('CajaChicaReportService', () => {
             title: 'Test',
             totalAmount: 0,
             selectedReports: [
-              { expenseReportId: new Types.ObjectId(expReportId), colaboradorId: new Types.ObjectId(), colaboradorName: 'Juan' },
+              {
+                expenseReportId: new Types.ObjectId(expReportId),
+                colaboradorId: new Types.ObjectId(),
+                colaboradorName: 'Juan',
+              },
             ],
           },
         ]),
@@ -163,7 +181,11 @@ describe('CajaChicaReportService', () => {
           title: 'Test',
           totalAmount: 0,
           selectedReports: [
-            { expenseReportId: new Types.ObjectId(expReportId), colaboradorId: new Types.ObjectId(), colaboradorName: 'Juan' },
+            {
+              expenseReportId: new Types.ObjectId(expReportId),
+              colaboradorId: new Types.ObjectId(),
+              colaboradorName: 'Juan',
+            },
           ],
         }),
       })
@@ -177,7 +199,7 @@ describe('CajaChicaReportService', () => {
       expect(result.totalAmount).toBe(150)
       expect(cajaChicaModel.updateOne).toHaveBeenCalledWith(
         { _id: reportId },
-        { $set: { totalAmount: 150 } },
+        { $set: { totalAmount: 150 } }
       )
     })
   })
@@ -187,30 +209,36 @@ describe('CajaChicaReportService', () => {
       cajaChicaModel.findById.mockReturnValue({
         exec: jest.fn().mockResolvedValue(null),
       })
-      await expect(service.addReports(reportId, [expReportId], clientId)).rejects.toThrow(
-        NotFoundException,
-      )
+      await expect(
+        service.addReports(reportId, [expReportId], clientId)
+      ).rejects.toThrow(NotFoundException)
     })
 
     it('throws BadRequestException when adding to finalized report', async () => {
       const doc = makeMockCajaChicaDoc({ status: 'finalized' })
-      cajaChicaModel.findById.mockReturnValue({ exec: jest.fn().mockResolvedValue(doc) })
-      await expect(service.addReports(reportId, [expReportId], clientId)).rejects.toThrow(
-        BadRequestException,
-      )
+      cajaChicaModel.findById.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(doc),
+      })
+      await expect(
+        service.addReports(reportId, [expReportId], clientId)
+      ).rejects.toThrow(BadRequestException)
     })
 
     it('throws BadRequestException when expense report is not caja chica', async () => {
       const doc = makeMockCajaChicaDoc()
-      cajaChicaModel.findById.mockReturnValue({ exec: jest.fn().mockResolvedValue(doc) })
+      cajaChicaModel.findById.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(doc),
+      })
       expenseReportModel.findById = jest.fn().mockReturnValue({
         populate: jest.fn().mockReturnThis(),
         lean: jest.fn().mockReturnThis(),
-        exec: jest.fn().mockResolvedValue(makeMockExpReport({ isCajaChica: false })),
+        exec: jest
+          .fn()
+          .mockResolvedValue(makeMockExpReport({ isCajaChica: false })),
       })
-      await expect(service.addReports(reportId, [expReportId], clientId)).rejects.toThrow(
-        BadRequestException,
-      )
+      await expect(
+        service.addReports(reportId, [expReportId], clientId)
+      ).rejects.toThrow(BadRequestException)
     })
 
     it('adds a valid caja chica expense report', async () => {
@@ -234,19 +262,27 @@ describe('CajaChicaReportService', () => {
 
   describe('removeReport', () => {
     it('throws NotFoundException when report not found', async () => {
-      cajaChicaModel.findById.mockReturnValue({ exec: jest.fn().mockResolvedValue(null) })
+      cajaChicaModel.findById.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(null),
+      })
       await expect(service.removeReport(reportId, expReportId)).rejects.toThrow(
-        NotFoundException,
+        NotFoundException
       )
     })
 
     it('removes the report and recalculates total', async () => {
       const doc = makeMockCajaChicaDoc({
         selectedReports: [
-          { expenseReportId: new Types.ObjectId(expReportId), colaboradorId: new Types.ObjectId(), colaboradorName: 'Juan' },
+          {
+            expenseReportId: new Types.ObjectId(expReportId),
+            colaboradorId: new Types.ObjectId(),
+            colaboradorName: 'Juan',
+          },
         ],
       })
-      cajaChicaModel.findById.mockReturnValue({ exec: jest.fn().mockResolvedValue(doc) })
+      cajaChicaModel.findById.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(doc),
+      })
       expenseReportModel.findById = jest.fn().mockReturnValue({
         populate: jest.fn().mockReturnThis(),
         lean: jest.fn().mockReturnThis(),
@@ -259,27 +295,47 @@ describe('CajaChicaReportService', () => {
 
   describe('finalize', () => {
     it('throws NotFoundException when report not found', async () => {
-      cajaChicaModel.findById.mockReturnValue({ exec: jest.fn().mockResolvedValue(null) })
-      await expect(service.finalize(reportId)).rejects.toThrow(NotFoundException)
+      cajaChicaModel.findById.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(null),
+      })
+      await expect(service.finalize(reportId)).rejects.toThrow(
+        NotFoundException
+      )
     })
 
     it('throws BadRequestException when already finalized', async () => {
       const doc = makeMockCajaChicaDoc({ status: 'finalized' })
-      cajaChicaModel.findById.mockReturnValue({ exec: jest.fn().mockResolvedValue(doc) })
-      await expect(service.finalize(reportId)).rejects.toThrow(BadRequestException)
+      cajaChicaModel.findById.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(doc),
+      })
+      await expect(service.finalize(reportId)).rejects.toThrow(
+        BadRequestException
+      )
     })
 
     it('throws BadRequestException when no selected reports', async () => {
       const doc = makeMockCajaChicaDoc({ selectedReports: [] })
-      cajaChicaModel.findById.mockReturnValue({ exec: jest.fn().mockResolvedValue(doc) })
-      await expect(service.finalize(reportId)).rejects.toThrow(BadRequestException)
+      cajaChicaModel.findById.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(doc),
+      })
+      await expect(service.finalize(reportId)).rejects.toThrow(
+        BadRequestException
+      )
     })
 
     it('finalizes a draft report with selected reports and recalculates total', async () => {
       const doc = makeMockCajaChicaDoc({
-        selectedReports: [{ expenseReportId: new Types.ObjectId(expReportId), colaboradorId: new Types.ObjectId(), colaboradorName: 'Juan' }],
+        selectedReports: [
+          {
+            expenseReportId: new Types.ObjectId(expReportId),
+            colaboradorId: new Types.ObjectId(),
+            colaboradorName: 'Juan',
+          },
+        ],
       })
-      cajaChicaModel.findById.mockReturnValue({ exec: jest.fn().mockResolvedValue(doc) })
+      cajaChicaModel.findById.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(doc),
+      })
       expenseReportModel.findById = jest.fn().mockReturnValue({
         populate: jest.fn().mockReturnThis(),
         lean: jest.fn().mockReturnThis(),

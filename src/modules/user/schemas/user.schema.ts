@@ -110,7 +110,12 @@ export class User {
       categoryProfileIds: { type: [String], default: [] },
       _id: false,
     },
-    default: () => ({ modules: [], canApproveL1: false, canApproveL2: false, categoryIds: [] }),
+    default: () => ({
+      modules: [],
+      canApproveL1: false,
+      canApproveL2: false,
+      categoryIds: [],
+    }),
   })
   permissions: UserPermissions
 

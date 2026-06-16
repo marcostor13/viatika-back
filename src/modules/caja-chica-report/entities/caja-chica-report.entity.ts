@@ -39,7 +39,11 @@ export class CajaChicaReport {
   @Prop({
     type: [
       {
-        expenseReportId: { type: Types.ObjectId, ref: 'ExpenseReport', required: true },
+        expenseReportId: {
+          type: Types.ObjectId,
+          ref: 'ExpenseReport',
+          required: true,
+        },
         colaboradorId: { type: Types.ObjectId, ref: 'User', required: true },
         colaboradorName: { type: String, required: true },
         _id: false,
@@ -53,7 +57,8 @@ export class CajaChicaReport {
   totalAmount: number
 }
 
-export const CajaChicaReportSchema = SchemaFactory.createForClass(CajaChicaReport)
+export const CajaChicaReportSchema =
+  SchemaFactory.createForClass(CajaChicaReport)
 
 CajaChicaReportSchema.index({ clientId: 1, codigo: 1 }, { unique: true })
 

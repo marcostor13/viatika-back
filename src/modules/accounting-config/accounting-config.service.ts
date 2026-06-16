@@ -59,8 +59,6 @@ export class AccountingConfigService {
   /** Resuelve la cuenta contable 104 a partir del número de cuenta bancaria. */
   async resolveBankAccount(clientId: string, nroCuenta: string) {
     const config = await this.findByClient(clientId)
-    return (
-      config?.bankAccounts?.find((b) => b.nroCuenta === nroCuenta) ?? null
-    )
+    return config?.bankAccounts?.find(b => b.nroCuenta === nroCuenta) ?? null
   }
 }

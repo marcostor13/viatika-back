@@ -1,6 +1,8 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common'
+import { ConfigService } from '@nestjs/config'
 import { InjectModel } from '@nestjs/mongoose'
 import { Model } from 'mongoose'
+import OpenAI from 'openai'
 import { ExpenseReport } from '../expense-report/entities/expense-report.entity'
 import { Expense } from '../expense/entities/expense.entity'
 import { Advance } from '../advance/entities/advance.entity'
@@ -15,12 +17,13 @@ import {
   ContanetLine,
   toExcelSerial,
 } from './entities/contanet-columns'
-import { buildContanetWorkbook } from './entities/contanet-export'
+import { buildContanetWorkbook, resolveTemplatePath } from './entities/contanet-export'
 import {
   AsientoTipo,
   CuadreError,
   GeneratedFile,
 } from './entities/accounting-entries.types'
+import { buildPcgeAccountsPrompt } from './constants/pcge-prompt'
 
 /** Porción analítica resuelta para una línea de gasto. */
 interface AnalyticPortion {
@@ -34,6 +37,8 @@ interface AnalyticPortion {
 @Injectable()
 export class AccountingEntriesService {
   private readonly logger = new Logger(AccountingEntriesService.name)
+  private readonly openai: OpenAI
+  private readonly aiModel = 'gpt-4o-mini'
 
   constructor(
     @InjectModel(ExpenseReport.name)
@@ -49,8 +54,13 @@ export class AccountingEntriesService {
     @InjectModel(Category.name)
     private categoryModel: Model<any>,
     private accountingConfigService: AccountingConfigService,
-    private exchangeRateService: ExchangeRateService
-  ) {}
+    private exchangeRateService: ExchangeRateService,
+    private configService: ConfigService
+  ) {
+    const apiKey = this.configService.get<string>('OPENAI_API_KEY')
+    if (!apiKey) throw new Error('OPENAI_API_KEY no configurada')
+    this.openai = new OpenAI({ apiKey })
+  }
 
   // ----------------------------------------------------------------------
   // Orquestación
@@ -118,7 +128,7 @@ export class AccountingEntriesService {
       })
       if (!lines.length) continue
       const cuadreErrors = this.validateCuadre(lines)
-      const buffer = await buildContanetWorkbook(lines)
+      const buffer = await buildContanetWorkbook(lines, 'CONTABILIDAD', tipo)
       files.push({
         tipo,
         filename: this.fileName(tipo, report),
@@ -131,17 +141,19 @@ export class AccountingEntriesService {
   }
 
   private fileName(tipo: AsientoTipo, report: any): string {
-    const code = report.codigo || report._id?.toString()?.slice(-6) || 'rendicion'
-    return `asientos_${tipo}_${code}.xlsx`
+    const code =
+      report.codigo || report._id?.toString()?.slice(-6) || 'rendicion'
+    const ext = 'xlsx'
+    return `asientos_${tipo}_${code}.${ext}`
   }
 
   /** Fecha de referencia para ejercicio/periodo: inicio de la solicitud. */
   private resolvePeriodDate(report: any, advances: any[]): Date {
     const advStarts = (advances ?? [])
-      .map((a) => a?.startDate || a?.createdAt)
+      .map(a => a?.startDate || a?.createdAt)
       .filter(Boolean)
-      .map((d) => new Date(d))
-      .filter((d) => !Number.isNaN(d.getTime()))
+      .map(d => new Date(d))
+      .filter(d => !Number.isNaN(d.getTime()))
     if (advStarts.length) {
       return advStarts.sort((a, b) => a.getTime() - b.getTime())[0]
     }
@@ -280,8 +292,7 @@ export class AccountingEntriesService {
 
   /** Fecha del asiento: fechaEmision del comprobante o fecha del reporte. */
   private asientoDate(expense: any, report: any): Date {
-    const raw =
-      expense?.fechaEmision || report?.createdAt || report?.updatedAt
+    const raw = expense?.fechaEmision || report?.createdAt || report?.updatedAt
     const d = raw ? new Date(raw) : new Date()
     return Number.isNaN(d.getTime()) ? new Date() : d
   }
@@ -313,18 +324,33 @@ export class AccountingEntriesService {
     const inafectaOp = num(tot.operacionInafecta)
     const gratuita = num(tot.operacionGratuita)
     const recargo =
-      num(expense.comprobanteDetallado?.recargoConsumo) ||
-      num(expense.inafecto)
+      num(expense.comprobanteDetallado?.recargoConsumo) || num(expense.inafecto)
 
     const portions: AnalyticPortion[] = []
     if (gravada > 0)
-      portions.push({ proyectId, condicion: 'afecto', monto: this.round2(gravada) })
+      portions.push({
+        proyectId,
+        condicion: 'afecto',
+        monto: this.round2(gravada),
+      })
     if (exonerada > 0)
-      portions.push({ proyectId, condicion: 'inafecto', monto: this.round2(exonerada) })
+      portions.push({
+        proyectId,
+        condicion: 'inafecto',
+        monto: this.round2(exonerada),
+      })
     if (inafectaOp > 0)
-      portions.push({ proyectId, condicion: 'inafecto', monto: this.round2(inafectaOp) })
+      portions.push({
+        proyectId,
+        condicion: 'inafecto',
+        monto: this.round2(inafectaOp),
+      })
     if (gratuita > 0)
-      portions.push({ proyectId, condicion: 'inafecto', monto: this.round2(gratuita) })
+      portions.push({
+        proyectId,
+        condicion: 'inafecto',
+        monto: this.round2(gratuita),
+      })
     if (recargo > 0)
       portions.push({
         proyectId,
@@ -340,11 +366,24 @@ export class AccountingEntriesService {
     const inafecto = Number(expense.inafecto) || 0
     const base =
       Number(expense.baseAfecta) || Math.max(total - igv - inafecto, 0)
-    if (base > 0) portions.push({ proyectId, condicion: 'afecto', monto: this.round2(base) })
+    if (base > 0)
+      portions.push({
+        proyectId,
+        condicion: 'afecto',
+        monto: this.round2(base),
+      })
     if (inafecto > 0)
-      portions.push({ proyectId, condicion: 'inafecto', monto: this.round2(inafecto) })
+      portions.push({
+        proyectId,
+        condicion: 'inafecto',
+        monto: this.round2(inafecto),
+      })
     if (!portions.length && total > 0)
-      portions.push({ proyectId, condicion: 'afecto', monto: this.round2(total) })
+      portions.push({
+        proyectId,
+        condicion: 'afecto',
+        monto: this.round2(total),
+      })
     return portions
   }
 
@@ -413,7 +452,8 @@ export class AccountingEntriesService {
   ): void {
     if (!project) return
     const cc = project.centroCosto || project.code || ''
-    const sub = project.subCentroCosto || project.centroCosto || project.code || ''
+    const sub =
+      project.subCentroCosto || project.centroCosto || project.code || ''
     if (cc) line.centroCosto = cc
     if (sub) {
       line.subCentroCosto = sub
@@ -429,6 +469,83 @@ export class AccountingEntriesService {
   }
 
   // ----------------------------------------------------------------------
+  // AI — Resolución de cuentas 9X/6X via PCGE Peru (OpenAI)
+  // ----------------------------------------------------------------------
+
+  /**
+   * Determina las cuentas PCGE 91.x (analítica) y 63.x (destino) para cada gasto usando IA.
+   * Envía un único request a OpenAI con todos los comprobantes de la rendición.
+   * Si el AI falla, retorna el mapa vacío y se usarán los fallbacks de categoría/config.
+   */
+  private async resolveAccounts6x(
+    expenses: any[],
+    categoryMap: Map<string, any>
+  ): Promise<Map<string, { cuenta9x?: string; cuenta6x?: string }>> {
+    const result = new Map<string, { cuenta9x?: string; cuenta6x?: string }>()
+    if (!expenses.length) return result
+
+    const contexts = expenses.map((expense, i) => {
+      const category = expense.categoryId
+        ? categoryMap.get(expense.categoryId.toString())
+        : undefined
+      const det = expense.comprobanteDetallado ?? {}
+      const items: string[] = (det.items ?? [])
+        .map((it: any) => (it.descripcion || '').trim())
+        .filter(Boolean)
+      return {
+        idx: i + 1,
+        expenseId: expense._id.toString(),
+        categoria: category?.name || 'Sin categoría',
+        cuenta9xConfigurada: category?.cuenta || '',
+        descripcion: expense.comentario || '',
+        items,
+      }
+    })
+
+    const prompt = buildPcgeAccountsPrompt(contexts)
+
+    try {
+      const completion = await this.openai.chat.completions.create({
+        model: this.aiModel,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0,
+        max_tokens: 512,
+      })
+
+      const raw = (completion.choices[0]?.message?.content || '').trim()
+      const parsed: Array<{
+        idx: number
+        cuenta9x?: string
+        cuenta6x?: string
+      }> = JSON.parse(raw)
+
+      const accountPattern = /^\d{2}\.\d+\.\d+\.\d+$/
+      for (const entry of parsed) {
+        const ctx = contexts[entry.idx - 1]
+        if (!ctx) continue
+        const resolved: { cuenta9x?: string; cuenta6x?: string } = {}
+        if (entry.cuenta9x && accountPattern.test(entry.cuenta9x))
+          resolved.cuenta9x = entry.cuenta9x
+        if (entry.cuenta6x && accountPattern.test(entry.cuenta6x))
+          resolved.cuenta6x = entry.cuenta6x
+        if (resolved.cuenta9x || resolved.cuenta6x) {
+          result.set(ctx.expenseId, resolved)
+        }
+      }
+
+      this.logger.log(
+        `AI resolvió cuentas para ${result.size}/${expenses.length} comprobantes`
+      )
+    } catch (error) {
+      this.logger.warn(
+        `AI no pudo resolver cuentas: ${error?.message}. Se usarán fallbacks de categoría.`
+      )
+    }
+
+    return result
+  }
+
+  // ----------------------------------------------------------------------
   // C2 — Builder COMPRA (registro de la compra, por comprobante)
   // ----------------------------------------------------------------------
 
@@ -441,10 +558,21 @@ export class AccountingEntriesService {
     periodDate: Date
     rateMap: Map<string, number>
   }): Promise<ContanetLine[]> {
-    const { config, expenses, report, projectMap, categoryMap, periodDate, rateMap } = ctx
+    const {
+      config,
+      expenses,
+      report,
+      projectMap,
+      categoryMap,
+      periodDate,
+      rateMap,
+    } = ctx
     const lines: ContanetLine[] = []
     let relacionado = 1
     let correlativo = 1
+
+    // Resuelve cuentas 9X/6X via IA (un solo request para toda la rendición)
+    const aiAccountsMap = await this.resolveAccounts6x(expenses, categoryMap)
 
     for (const expense of expenses) {
       const data = this.parseData(expense)
@@ -452,12 +580,17 @@ export class AccountingEntriesService {
       const date = this.asientoDate(expense, report)
       const tc = this.tcFor(date, rateMap, config)
 
-      // Cuentas resueltas por la CATEGORÍA del gasto (9X analítica, 6X destino).
+      // Cuenta 9X analítica: categoría configurada → AI → vacío (se omite el bloque 9X).
+      // Cuenta 6X destino: AI → category.cuentaDestino6x → config.cuenta79 (fallback).
       const category = expense.categoryId
         ? categoryMap.get(expense.categoryId.toString())
         : undefined
-      const cuenta9x = category?.cuenta || config.cuenta42 // 9X analítica
-      const cuenta6xCat = category?.cuentaDestino6x || config.cuenta79
+      const aiAccounts = aiAccountsMap.get(expense._id.toString())
+      const cuenta9x = category?.cuenta || aiAccounts?.cuenta9x || ''
+      const cuenta6xCat =
+        aiAccounts?.cuenta6x ||
+        category?.cuentaDestino6x ||
+        config.cuenta79
 
       // Centro de costo del proyecto del gasto (aplica a todas las líneas).
       const expenseProject = expense.proyectId
@@ -500,65 +633,113 @@ export class AccountingEntriesService {
         lines.push(line)
       }
 
-      // (1) Cuenta 42 — total del comprobante (Haber), provisión + proveedor
-      push(
-        this.baseLine(config, date, config.fuenteCompra, glosaBase, tc, periodDate, {
-          nroCuenta: config.cuenta42,
-          codTipDoc: '01',
-          nroSerie: serie,
-          nroDoc,
-          montoHaber: total,
-          montoHaberME: this.toME(total, tc),
-          esProvision: 1,
-          codTipDocIdentProv: ruc ? '06' : '',
-          nroDocProv: ruc,
-          razonSocialProv: razonSocial,
-        })
-      )
+      // (1) Cuentas 9X — analítica por porción (Debe); omitir si no hay cuenta configurada
+      if (cuenta9x) {
+        for (const p of portions) {
+          const glosa = p.etiqueta ? `${glosaBase} (${p.etiqueta})` : glosaBase
+          push(
+            this.baseLine(
+              config,
+              date,
+              config.fuenteCompra,
+              glosa,
+              tc,
+              periodDate,
+              {
+                nroCuenta: cuenta9x,
+                codTipDoc: '01',
+                nroSerie: serie,
+                nroDoc,
+                identTipAfecto: p.condicion === 'afecto' ? 'S' : 'N',
+                montoDebe: this.round2(p.monto),
+                montoDebeME: this.toME(p.monto, tc),
+              }
+            )
+          )
+        }
+      }
 
       // (2) Cuenta 40 — IGV (Debe), si aplica
       if (igv > 0) {
         const cuenta40 = this.resolveCuenta40(config, expense.tasaIgv)
         push(
-          this.baseLine(config, date, config.fuenteCompra, glosaBase, tc, periodDate, {
-            nroCuenta: cuenta40,
-            montoDebe: igv,
-            montoDebeME: this.toME(igv, tc),
-          })
+          this.baseLine(
+            config,
+            date,
+            config.fuenteCompra,
+            glosaBase,
+            tc,
+            periodDate,
+            {
+              nroCuenta: cuenta40,
+              codTipDoc: '01',
+              nroSerie: serie,
+              nroDoc,
+              montoDebe: igv,
+              montoDebeME: this.toME(igv, tc),
+            }
+          )
         )
       }
 
-      // (3) Cuentas 9X — analítica por porción (Debe)
-      for (const p of portions) {
-        const glosa = p.etiqueta ? `${glosaBase} (${p.etiqueta})` : glosaBase
-        push(
-          this.baseLine(config, date, config.fuenteCompra, glosa, tc, periodDate, {
-            nroCuenta: cuenta9x,
-            identTipAfecto: p.condicion === 'afecto' ? 'S' : 'N',
-            montoDebe: this.round2(p.monto),
-            montoDebeME: this.toME(p.monto, tc),
-          })
+      // (3) Cuenta 42 — total del comprobante (Haber), provisión + proveedor
+      push(
+        this.baseLine(
+          config,
+          date,
+          config.fuenteCompra,
+          glosaBase,
+          tc,
+          periodDate,
+          {
+            nroCuenta: config.cuenta42,
+            codTipDoc: '01',
+            nroSerie: serie,
+            nroDoc,
+            montoHaber: total,
+            montoHaberME: this.toME(total, tc),
+            esProvision: 1,
+            codTipDocIdentProv: ruc ? '06' : '',
+            nroDocProv: ruc,
+            razonSocialProv: razonSocial,
+          }
         )
-      }
+      )
 
       // (4) Destino — par 6X (Debe) / 79 (Haber) por porción
       for (const p of portions) {
         const glosa = p.etiqueta ? `${glosaBase} (${p.etiqueta})` : glosaBase
         push(
-          this.baseLine(config, date, config.fuenteCompra, glosa, tc, periodDate, {
-            nroCuenta: cuenta6xCat,
-            montoDebe: this.round2(p.monto),
-            montoDebeME: this.toME(p.monto, tc),
-            esDestino: 1,
-          })
+          this.baseLine(
+            config,
+            date,
+            config.fuenteCompra,
+            glosa,
+            tc,
+            periodDate,
+            {
+              nroCuenta: cuenta6xCat,
+              montoDebe: this.round2(p.monto),
+              montoDebeME: this.toME(p.monto, tc),
+              esDestino: 1,
+            }
+          )
         )
         push(
-          this.baseLine(config, date, config.fuenteCompra, glosa, tc, periodDate, {
-            nroCuenta: config.cuenta79,
-            montoHaber: this.round2(p.monto),
-            montoHaberME: this.toME(p.monto, tc),
-            esDestino: 1,
-          })
+          this.baseLine(
+            config,
+            date,
+            config.fuenteCompra,
+            glosa,
+            tc,
+            periodDate,
+            {
+              nroCuenta: config.cuenta79,
+              montoHaber: this.round2(p.monto),
+              montoHaberME: this.toME(p.monto, tc),
+              esDestino: 1,
+            }
+          )
         )
       }
 
@@ -574,7 +755,7 @@ export class AccountingEntriesService {
   ): string {
     const rates = config.igvRates ?? []
     if (tasaIgv != null) {
-      const match = rates.find((r) => Number(r.tasa) === Number(tasaIgv))
+      const match = rates.find(r => Number(r.tasa) === Number(tasaIgv))
       if (match) return match.cuenta40
     }
     return rates[0]?.cuenta40 || '40.1.1.100'
@@ -622,25 +803,41 @@ export class AccountingEntriesService {
 
       // 14 (Debe) — nace la obligación del colaborador
       lines.push({
-        ...this.baseLine(config, date, config.fuenteCajaBancos, glosa, tc, periodDate, {
-          nroCuenta: cuenta14,
-          montoDebe: amount,
-          montoDebeME: this.toME(amount, tc),
-          codTipDocIdentTrab: trabDni ? '01' : '',
-          nroDocTrab: trabDni,
-          razonSocialTrab: trabNombre,
-        }),
+        ...this.baseLine(
+          config,
+          date,
+          config.fuenteCajaBancos,
+          glosa,
+          tc,
+          periodDate,
+          {
+            nroCuenta: cuenta14,
+            montoDebe: amount,
+            montoDebeME: this.toME(amount, tc),
+            codTipDocIdentTrab: trabDni ? '01' : '',
+            nroDocTrab: trabDni,
+            razonSocialTrab: trabNombre,
+          }
+        ),
         relacionado,
         correlativo: correlativo++,
       })
 
       // 104 (Haber) — sale el dinero del banco
       lines.push({
-        ...this.baseLine(config, date, config.fuenteCajaBancos, glosa, tc, periodDate, {
-          nroCuenta: banco,
-          montoHaber: amount,
-          montoHaberME: this.toME(amount, tc),
-        }),
+        ...this.baseLine(
+          config,
+          date,
+          config.fuenteCajaBancos,
+          glosa,
+          tc,
+          periodDate,
+          {
+            nroCuenta: banco,
+            montoHaber: amount,
+            montoHaberME: this.toME(amount, tc),
+          }
+        ),
         relacionado,
         correlativo: correlativo++,
       })
@@ -687,31 +884,47 @@ export class AccountingEntriesService {
 
       // 42 (Debe) — cancela la provisión del proveedor
       lines.push({
-        ...this.baseLine(config, date, config.fuenteAplicacion, glosa, tc, periodDate, {
-          nroCuenta: config.cuenta42,
-          codTipDoc: '01',
-          nroSerie: det?.comprobante?.serie || data.serie || '',
-          nroDoc: det?.comprobante?.correlativo || data.correlativo || '',
-          montoDebe: total,
-          montoDebeME: this.toME(total, tc),
-          codTipDocIdentProv: ruc ? '06' : '',
-          nroDocProv: ruc,
-          razonSocialProv: razonSocial,
-        }),
+        ...this.baseLine(
+          config,
+          date,
+          config.fuenteAplicacion,
+          glosa,
+          tc,
+          periodDate,
+          {
+            nroCuenta: config.cuenta42,
+            codTipDoc: '01',
+            nroSerie: det?.comprobante?.serie || data.serie || '',
+            nroDoc: det?.comprobante?.correlativo || data.correlativo || '',
+            montoDebe: total,
+            montoDebeME: this.toME(total, tc),
+            codTipDocIdentProv: ruc ? '06' : '',
+            nroDocProv: ruc,
+            razonSocialProv: razonSocial,
+          }
+        ),
         relacionado,
         correlativo: correlativo++,
       })
 
       // 14 (Haber) — reduce la cuenta por cobrar del colaborador
       lines.push({
-        ...this.baseLine(config, date, config.fuenteAplicacion, glosa, tc, periodDate, {
-          nroCuenta: cuenta14,
-          montoHaber: total,
-          montoHaberME: this.toME(total, tc),
-          codTipDocIdentTrab: trabDni ? '01' : '',
-          nroDocTrab: trabDni,
-          razonSocialTrab: trabNombre,
-        }),
+        ...this.baseLine(
+          config,
+          date,
+          config.fuenteAplicacion,
+          glosa,
+          tc,
+          periodDate,
+          {
+            nroCuenta: cuenta14,
+            montoHaber: total,
+            montoHaberME: this.toME(total, tc),
+            codTipDocIdentTrab: trabDni ? '01' : '',
+            nroDocTrab: trabDni,
+            razonSocialTrab: trabNombre,
+          }
+        ),
         relacionado,
         correlativo: correlativo++,
       })
@@ -761,46 +974,78 @@ export class AccountingEntriesService {
     if (modo === 'devolucion') {
       // 104 (Debe) entra al banco / 14 (Haber) reduce la CxC
       lines.push({
-        ...this.baseLine(config, date, config.fuenteCajaBancos, glosa, tc, periodDate, {
-          nroCuenta: banco,
-          montoDebe: diff,
-          montoDebeME: this.toME(diff, tc),
-        }),
+        ...this.baseLine(
+          config,
+          date,
+          config.fuenteCajaBancos,
+          glosa,
+          tc,
+          periodDate,
+          {
+            nroCuenta: banco,
+            montoDebe: diff,
+            montoDebeME: this.toME(diff, tc),
+          }
+        ),
         relacionado: 1,
         correlativo: 1,
       })
       lines.push({
-        ...this.baseLine(config, date, config.fuenteCajaBancos, glosa, tc, periodDate, {
-          nroCuenta: cuenta14,
-          montoHaber: diff,
-          montoHaberME: this.toME(diff, tc),
-          codTipDocIdentTrab: trabDni ? '01' : '',
-          nroDocTrab: trabDni,
-          razonSocialTrab: trabNombre,
-        }),
+        ...this.baseLine(
+          config,
+          date,
+          config.fuenteCajaBancos,
+          glosa,
+          tc,
+          periodDate,
+          {
+            nroCuenta: cuenta14,
+            montoHaber: diff,
+            montoHaberME: this.toME(diff, tc),
+            codTipDocIdentTrab: trabDni ? '01' : '',
+            nroDocTrab: trabDni,
+            razonSocialTrab: trabNombre,
+          }
+        ),
         relacionado: 1,
         correlativo: 2,
       })
     } else {
       // Reembolso: 14/46 (Debe) / 104 (Haber) sale del banco
       lines.push({
-        ...this.baseLine(config, date, config.fuenteCajaBancos, glosa, tc, periodDate, {
-          nroCuenta: cuentaColab,
-          montoDebe: diff,
-          montoDebeME: this.toME(diff, tc),
-          codTipDocIdentTrab: trabDni ? '01' : '',
-          nroDocTrab: trabDni,
-          razonSocialTrab: trabNombre,
-        }),
+        ...this.baseLine(
+          config,
+          date,
+          config.fuenteCajaBancos,
+          glosa,
+          tc,
+          periodDate,
+          {
+            nroCuenta: cuentaColab,
+            montoDebe: diff,
+            montoDebeME: this.toME(diff, tc),
+            codTipDocIdentTrab: trabDni ? '01' : '',
+            nroDocTrab: trabDni,
+            razonSocialTrab: trabNombre,
+          }
+        ),
         relacionado: 1,
         correlativo: 1,
       })
       lines.push({
-        ...this.baseLine(config, date, config.fuenteCajaBancos, glosa, tc, periodDate, {
-          nroCuenta: banco,
-          montoHaber: diff,
-          montoHaberME: this.toME(diff, tc),
-        }),
+        ...this.baseLine(
+          config,
+          date,
+          config.fuenteCajaBancos,
+          glosa,
+          tc,
+          periodDate,
+          {
+            nroCuenta: banco,
+            montoHaber: diff,
+            montoHaberME: this.toME(diff, tc),
+          }
+        ),
         relacionado: 1,
         correlativo: 2,
       })
@@ -815,10 +1060,10 @@ export class AccountingEntriesService {
   ): string {
     const accounts = config.bankAccounts ?? []
     if (nroCuenta) {
-      const match = accounts.find((b) => b.nroCuenta === nroCuenta)
+      const match = accounts.find(b => b.nroCuenta === nroCuenta)
       if (match) return match.cuentaContable
     }
-    const active = accounts.find((b) => b.activo !== false)
+    const active = accounts.find(b => b.activo !== false)
     return active?.cuentaContable || accounts[0]?.cuentaContable || '10.4.1.100'
   }
 
@@ -852,7 +1097,7 @@ export class AccountingEntriesService {
   }
 
   private countAsientos(lines: ContanetLine[]): number {
-    return new Set(lines.map((l) => Number(l.relacionado))).size
+    return new Set(lines.map(l => Number(l.relacionado))).size
   }
 
   /** Expuesto para tests: columnas del template. */

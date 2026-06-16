@@ -1,7 +1,11 @@
 import { BadRequestException, Injectable } from '@nestjs/common'
 import { CreateClientDto } from './dto/create-client.dto'
 import { UpdateClientDto } from './dto/update-client.dto'
-import { Client, ClientDocument, ClientNotificationSettings } from './entities/client.entity'
+import {
+  Client,
+  ClientDocument,
+  ClientNotificationSettings,
+} from './entities/client.entity'
 import { ClientSession, Model } from 'mongoose'
 import { InjectModel } from '@nestjs/mongoose'
 
@@ -63,7 +67,14 @@ export class ClientService {
     await this.ensureUniqueCodigo(codigo)
 
     const payload = { ...this.normalizeClientPayload(createClientDto), codigo }
-    console.log('[ClientService.create] payload:', JSON.stringify({ email: payload.email, phone: payload.phone, address: payload.address }))
+    console.log(
+      '[ClientService.create] payload:',
+      JSON.stringify({
+        email: payload.email,
+        phone: payload.phone,
+        address: payload.address,
+      })
+    )
 
     try {
       if (session) {
@@ -86,7 +97,14 @@ export class ClientService {
 
   async update(id: string, updateClientDto: UpdateClientDto) {
     const payload = this.normalizeClientPayload({ ...updateClientDto })
-    console.log('[ClientService.update] payload:', JSON.stringify({ email: payload.email, phone: payload.phone, address: payload.address }))
+    console.log(
+      '[ClientService.update] payload:',
+      JSON.stringify({
+        email: payload.email,
+        phone: payload.phone,
+        address: payload.address,
+      })
+    )
 
     if (payload.codigo !== undefined) {
       const codigo = this.normalizeCodigo(payload.codigo)

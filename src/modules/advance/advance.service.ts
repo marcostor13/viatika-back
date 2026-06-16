@@ -1617,6 +1617,28 @@ export class AdvanceService {
   }
 
   /**
+   * De una lista de rendiciones, devuelve los IDs de las que tienen al menos un
+   * anticipo vinculado ya aprobado/pagado/liquidado. Sirve para que el front
+   * sepa que el colaborador ya no puede eliminar esas rendiciones de viáticos.
+   */
+  async findApprovedExpenseReportIds(reportIds: string[]): Promise<string[]> {
+    if (!reportIds.length) return []
+    const oids = reportIds
+      .filter(id => Types.ObjectId.isValid(id))
+      .map(id => new Types.ObjectId(id))
+    if (!oids.length) return []
+    const rows = await this.advanceModel
+      .find({
+        expenseReportId: { $in: oids },
+        status: { $in: ['approved', 'partially_paid', 'paid', 'settled'] },
+      })
+      .select('expenseReportId')
+      .lean()
+      .exec()
+    return [...new Set(rows.map(r => String(r.expenseReportId)))]
+  }
+
+  /**
    * Fase 6 — Al aprobar la rendición: liquida en bloque los anticipos pagados vinculados,
    * guarda el settlement en la rendición y avisa a contabilidad si corresponde reembolso al colaborador.
    */

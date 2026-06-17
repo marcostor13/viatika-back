@@ -334,6 +334,46 @@ export class ExpenseReportService {
   }
 
   /**
+   * BOLSA-2 (aditivo): Contabilidad abona un depósito directamente a la Bolsa del
+   * colaborador (WalletEntry tipo 'directa', origin 'deposito') SIN crear una
+   * rendición; el colaborador la crea luego consumiendo el saldo. Convive con
+   * `createDirectaWithDeposit` (que sí crea la rendición) durante la transición.
+   */
+  async depositToBolsa(
+    dto: CreateDirectaDepositDto,
+    createdBy: string,
+    clientId: string
+  ) {
+    const entry = await this.bolsaService.createEntry({
+      userId: dto.userId,
+      clientId,
+      type: 'directa',
+      origin: 'deposito',
+      amount: dto.amount,
+      scannedAmount: dto.scannedAmount,
+      operationNumber: dto.operationNumber,
+      operationDate: dto.operationDate,
+      depositDate: dto.depositDate,
+      receiptUrl: dto.receiptUrl,
+      titular: dto.titular,
+      note: dto.gestion ? `Depósito: ${dto.gestion}` : 'Depósito de Contabilidad',
+      createdBy,
+    })
+
+    this.notificationsService
+      .create({
+        userId: dto.userId,
+        title: 'Nuevo saldo en tu Bolsa',
+        message: `Contabilidad abonó S/ ${Number(dto.amount).toFixed(2)} a tu Bolsa. Puedes usarlo al crear una nueva rendición.`,
+        type: 'success',
+        actionUrl: `/mis-rendiciones`,
+      })
+      .catch(() => {})
+
+    return entry
+  }
+
+  /**
    * Crea una rendición directa con depósito inicial, iniciada por Contabilidad.
    * El usuario destino recibe el saldo disponible (amount = budget). Reutiliza
    * `create()` (genera el código RD) y luego adjunta el subdocumento `directaDeposit`.

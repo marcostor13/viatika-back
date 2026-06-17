@@ -140,6 +140,34 @@ export class ExpenseReportController {
     return result
   }
 
+  /** Contabilidad abona un depósito a la Bolsa del colaborador, sin crear rendición (BOLSA-2). */
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.CONTABILIDAD, ROLES.SUPER_ADMIN)
+  @Post('deposit-to-bolsa')
+  async depositToBolsa(@Body() dto: CreateDirectaDepositDto, @Request() req: any) {
+    const createdBy = req.user._id || req.user.sub
+    const clientId = this.resolveClientId(req)
+    if (!Types.ObjectId.isValid(clientId)) {
+      throw new BadRequestException(
+        'Cliente no identificado en la sesión; no se puede abonar a la Bolsa.'
+      )
+    }
+    const result = await this.expenseReportService.depositToBolsa(
+      dto,
+      String(createdBy),
+      clientId
+    )
+    await this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email || 'Usuario',
+      action: 'deposit_to_bolsa',
+      module: 'rendiciones',
+      entityId: result?._id?.toString(),
+      clientId: req.user.clientId,
+    })
+    return result
+  }
+
   /** Lista las rendiciones directas iniciadas por Contabilidad (con depósito). */
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(ROLES.CONTABILIDAD, ROLES.SUPER_ADMIN, ROLES.ADMIN)

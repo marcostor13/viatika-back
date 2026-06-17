@@ -454,7 +454,20 @@ export class ExpenseReportService {
       .sort({ createdAt: -1 })
       .lean()
       .exec()
-    return reports.map(r => this.withDeletionApprovalFlag(r))
+
+    // Rendiciones de viáticos cuyo anticipo vinculado ya fue aprobado/pagado: el
+    // colaborador ya no puede eliminarlas. Se resuelve en un solo query batch.
+    const viaticoReportIds = reports
+      .filter(r => !r.isDirecta && !(r as any).isCajaChica)
+      .map(r => String(r._id))
+    const approvedAdvanceSet = new Set(
+      await this.advanceService.findApprovedExpenseReportIds(viaticoReportIds)
+    )
+
+    return reports.map(r => ({
+      ...this.withDeletionApprovalFlag(r),
+      hasApprovedLinkedAdvance: approvedAdvanceSet.has(String(r._id)),
+    }))
   }
 
   async findMyCajaChica(userId: string, clientId: string) {
@@ -1528,6 +1541,26 @@ export class ExpenseReportService {
         restricted = true
         restrictedMsg =
           'Esta caja chica ya fue incluida por Contabilidad en un reporte; solo Contabilidad puede eliminarla.'
+      }
+    }
+
+    // Rendición de viáticos: si su anticipo vinculado ya fue aprobado/pagado (el
+    // coordinador aprobó y/o contabilidad pagó), la rendición representa dinero ya
+    // desembolsado y NO puede eliminarse por la app —ni el colaborador ni
+    // Contabilidad—. Solo Superadmin (escape técnico). Estas rendiciones se
+    // auto-crean al registrar el pago del anticipo.
+    if (!report.isDirecta && !report.isCajaChica) {
+      const rawAdvanceIds: string[] = (
+        Array.isArray(report.advanceIds) ? report.advanceIds : []
+      ).map((x: any) => (x && typeof x === 'object' && '_id' in x ? String(x._id) : String(x)))
+      const linked = await this.advanceService.findByExpenseReportId(id, rawAdvanceIds)
+      const hasApprovedAdvance = linked.some((a: any) =>
+        ['approved', 'partially_paid', 'paid', 'settled'].includes(a.status)
+      )
+      if (hasApprovedAdvance && !isSuperAdmin) {
+        throw new ForbiddenException(
+          'El anticipo de esta rendición ya fue aprobado/pagado; la rendición no puede eliminarse.'
+        )
       }
     }
 

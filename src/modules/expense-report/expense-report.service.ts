@@ -226,6 +226,28 @@ export class ExpenseReportService {
       ? await this.generateDirectaCodigo(createExpenseReportDto.clientId)
       : undefined
 
+    // BOLSA-3: financiar la rendición con saldos seleccionados de la Bolsa.
+    const consumedWalletEntryIds =
+      createExpenseReportDto.consumedWalletEntryIds ?? []
+    let consumedFromBolsa = 0
+    if (consumedWalletEntryIds.length) {
+      const targetType = isCajaChica
+        ? 'caja_chica'
+        : isDirecta
+          ? 'directa'
+          : 'viaticos'
+      const preview = await this.bolsaService.previewConsume(
+        consumedWalletEntryIds,
+        {
+          userId: createExpenseReportDto.userId,
+          clientId: createExpenseReportDto.clientId,
+          targetType,
+          projectId: createExpenseReportDto.projectId,
+        }
+      )
+      consumedFromBolsa = preview.total
+    }
+
     const report = new this.expenseReportModel({
       ...createExpenseReportDto,
       title,
@@ -242,10 +264,15 @@ export class ExpenseReportService {
             createExpenseReportDto.pendingBalanceFromReportId
           )
           : undefined,
-      // Rendición directa creada desde saldo: el presupuesto es el saldo heredado
-      budget: createExpenseReportDto.pendingBalanceFromReportId
-        ? (createExpenseReportDto.pendingBalanceAmount ?? 0)
-        : (createExpenseReportDto.budget ?? 0),
+      // Presupuesto: saldos de la Bolsa (BOLSA-3) > saldo heredado > budget recibido.
+      budget: consumedWalletEntryIds.length
+        ? consumedFromBolsa
+        : createExpenseReportDto.pendingBalanceFromReportId
+          ? (createExpenseReportDto.pendingBalanceAmount ?? 0)
+          : (createExpenseReportDto.budget ?? 0),
+      consumedWalletEntryIds: consumedWalletEntryIds.length
+        ? consumedWalletEntryIds.map((x) => new Types.ObjectId(x))
+        : undefined,
       // Caja chica y rendición directa: siempre open desde el inicio
       status:
         isDirecta || isCajaChica
@@ -256,6 +283,13 @@ export class ExpenseReportService {
       expenseIds: [],
     })
     const savedReport = await report.save()
+
+    // BOLSA-3: marcar los saldos de la Bolsa como consumidos por esta rendición.
+    if (consumedWalletEntryIds.length) {
+      await this.bolsaService.markConsumed(consumedWalletEntryIds, {
+        reportId: String(savedReport._id),
+      })
+    }
 
     // Si se creó desde saldo de otra rendición directa, marcar la rendición fuente
     if (createExpenseReportDto.pendingBalanceFromReportId) {

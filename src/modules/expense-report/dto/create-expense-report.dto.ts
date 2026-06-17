@@ -115,4 +115,10 @@ export class CreateExpenseReportDto {
   @IsNumber()
   @IsOptional()
   pendingBalanceAmount?: number
+
+  /** Saldos de la Bolsa seleccionados para financiar la rendición (BOLSA-3). */
+  @IsArray()
+  @IsMongoId({ each: true })
+  @IsOptional()
+  consumedWalletEntryIds?: string[]
 }

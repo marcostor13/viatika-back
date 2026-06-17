@@ -137,6 +137,8 @@ export interface ExpenseReportDocument extends Document {
   pendingBalanceFromReportId?: Types.ObjectId
   /** Monto heredado desde la rendición de origen. */
   pendingBalanceAmount?: number
+  /** Saldos de la Bolsa que financiaron esta rendición (BOLSA-3). */
+  consumedWalletEntryIds?: Types.ObjectId[]
   // New fields
   accountNumber?: string
   idDocument?: string
@@ -406,6 +408,9 @@ export class ExpenseReport {
 
   @Prop({ required: false })
   pendingBalanceAmount?: number
+
+  @Prop({ type: [Types.ObjectId], ref: 'WalletEntry', required: false })
+  consumedWalletEntryIds?: Types.ObjectId[]
 }
 
 export const ExpenseReportSchema = SchemaFactory.createForClass(ExpenseReport)

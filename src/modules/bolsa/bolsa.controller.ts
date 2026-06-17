@@ -3,10 +3,12 @@ import {
   Get,
   Post,
   Param,
+  Query,
   Body,
   Request,
   UseGuards,
 } from '@nestjs/common'
+import { WalletEntryType } from './entities/wallet-entry.entity'
 import { BolsaService } from './bolsa.service'
 import { CreateWalletEntryDto } from './dto/create-wallet-entry.dto'
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard'
@@ -67,6 +69,28 @@ export class BolsaController {
       clientId: req.user.clientId,
     })
     return result
+  }
+
+  /** Saldos consumibles del colaborador autenticado para un destino (BOLSA-3). */
+  @Get('available/my/client/:clientId')
+  @Roles(
+    ROLES.COLABORADOR,
+    ROLES.COORDINADOR,
+    ROLES.CONTABILIDAD,
+    ROLES.ADMIN,
+    ROLES.SUPER_ADMIN
+  )
+  getMyConsumable(
+    @Param('clientId') clientId: string,
+    @Query('targetType') targetType: WalletEntryType,
+    @Query('projectId') projectId: string | undefined,
+    @Request() req: any
+  ) {
+    const userId = req.user._id || req.user.sub
+    return this.service.getConsumableEntries(String(userId), clientId, {
+      targetType: targetType || 'directa',
+      projectId,
+    })
   }
 
   /** Detalle de un saldo de la Bolsa. */

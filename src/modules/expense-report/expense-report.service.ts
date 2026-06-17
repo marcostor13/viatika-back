@@ -766,6 +766,10 @@ export class ExpenseReportService {
       .populate('createdBy', 'name email')
       .populate('approvedBy', 'name email')
       .populate('projectId', 'name')
+      .populate(
+        'consumedWalletEntryIds',
+        'sourceCodigo amount remainingAmount type origin projectId operationNumber operationDate'
+      )
       .exec()
 
     if (!report) {
@@ -2442,6 +2446,10 @@ export class ExpenseReportService {
       .populate('createdBy', 'name email')
       .populate('approvedBy', 'name email')
       .populate('projectId', 'name')
+      .populate(
+        'consumedWalletEntryIds',
+        'sourceCodigo amount remainingAmount type origin projectId operationNumber operationDate'
+      )
       .exec()
     if (!report)
       throw new NotFoundException(`Expense report with ID ${id} not found`)

@@ -47,6 +47,7 @@ export type AuditAction =
   | 'create_petty_cash'
   | 'fund_petty_cash'
   | 'close_petty_cash'
+  | 'create_wallet_entry_manual'
   | 'cancel_rendicion'
   | 'cancel_advance'
   | 'delete_advance'

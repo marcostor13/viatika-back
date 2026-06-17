@@ -1875,13 +1875,6 @@ export class ExpenseReportService {
         origin = 'colaborador'
       }
       const expenses = (r.expenseIds as any[]) || []
-<<<<<<< HEAD
-      const totalGastado = expenses.reduce(
-        (s, e) => s + (Number(e?.total) || 0),
-        0
-      )
-      const deposited = Number(r.directaDeposit?.amount ?? r.budget ?? 0)
-=======
       const totalGastado = expenses.reduce((s, e) => s + (Number(e?.total) || 0), 0)
       // Rendición directa creada desde el saldo de otra (saldo heredado): no tiene
       // `directaDeposit`, pero su presupuesto disponible es el saldo trasladado.
@@ -1891,7 +1884,6 @@ export class ExpenseReportService {
         r.directaDeposit?.amount ?? r.pendingBalanceAmount ?? r.budget ?? 0
       )
       const hasFunds = !!r.directaDeposit || hasInheritedBalance
->>>>>>> 7ba97d839c0889d821445180381c1c8196b1456e
       return {
         _id: String(r._id),
         codigo: r.codigo ?? null,

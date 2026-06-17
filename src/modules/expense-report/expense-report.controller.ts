@@ -581,6 +581,29 @@ export class ExpenseReportController {
     return this.expenseReportService.registerReturnVoucher(id, body, userId)
   }
 
+  /** Guardar el saldo sobrante en la Bolsa del colaborador y cerrar la rendición (BOLSA-4). */
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.COLABORADOR, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
+  @Post(':id/save-balance-and-close')
+  async saveBalanceAndClose(@Param('id') id: string, @Request() req: any) {
+    const userId = String(req.user._id || req.user.sub)
+    const isColaborador = req.user.roles?.includes(ROLES.COLABORADOR) === true
+    const result = await this.expenseReportService.saveBalanceToWalletAndClose(
+      id,
+      userId,
+      isColaborador
+    )
+    this.auditLogService.log({
+      userId,
+      userName: req.user.name || req.user.email || 'Usuario',
+      action: 'save_balance_close_rendicion',
+      module: 'rendiciones',
+      entityId: id,
+      clientId: req.user.clientId,
+    })
+    return result
+  }
+
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
   @Post(':id/affidavit')

@@ -17,6 +17,7 @@ import { NotificationsModule } from '../notifications/notifications.module'
 import { UserModule } from '../user/user.module'
 import { AdvanceModule } from '../advance/advance.module'
 import { UploadModule } from '../upload/upload.module'
+import { BolsaModule } from '../bolsa/bolsa.module'
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { UploadModule } from '../upload/upload.module'
     UserModule,
     UploadModule,
     forwardRef(() => AdvanceModule),
+    BolsaModule,
   ],
   controllers: [ExpenseReportController],
   providers: [ExpenseReportService],

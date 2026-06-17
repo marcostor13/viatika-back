@@ -42,6 +42,7 @@ export type AuditAction =
   | 'update_category_group'
   | 'delete_category_group'
   | 'close_rendicion'
+  | 'save_balance_close_rendicion'
   | 'approve_reopen_rendicion'
   | 'reject_reopen_rendicion'
   | 'create_petty_cash'

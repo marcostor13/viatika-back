@@ -33,6 +33,7 @@ import { AdvanceService } from '../advance/advance.service'
 import { ROLES } from '../auth/enums/roles.enum'
 import { applyFechaEmisionDisplayToExpenses } from '../expense/utils/fecha-emision.util'
 import { UploadService } from '../upload/upload.service'
+import { BolsaService } from '../bolsa/bolsa.service'
 
 /** Contexto del usuario que solicita eliminar una solicitud. */
 export interface SolicitudDeleteActor {
@@ -54,7 +55,8 @@ export class ExpenseReportService {
     private readonly userService: UserService,
     @Inject(forwardRef(() => AdvanceService))
     private readonly advanceService: AdvanceService,
-    private readonly uploadService: UploadService
+    private readonly uploadService: UploadService,
+    private readonly bolsaService: BolsaService
   ) { }
 
   private validatePaymentReceipt(
@@ -2414,6 +2416,82 @@ export class ExpenseReportService {
 
   // ─── FASE 8 — Cierre Definitivo ──────────────────────────────────────────
 
+  /**
+   * Fuente ÚNICA de verdad del saldo sobrante de una rendición (BOLSA-4).
+   * `received` toma UNA sola fuente por prioridad excluyente (anticipos > depósito
+   * directa > saldo heredado > budget) para no doble-contar: `budget` se replica desde
+   * el depósito o el saldo heredado en `create()`. El gasto computable sigue la misma
+   * regla que `liquidateExpenseReport` (con fondo: todo no rechazado; viáticos: solo
+   * aprobados). Considera el saldo heredado (pendingBalanceAmount), que las copias
+   * inline omitían (causa del bloqueo de RD-0042).
+   */
+  private async computeLeftover(report: any): Promise<{
+    received: number
+    expenseTotal: number
+    leftover: number
+    type: 'devolucion' | 'reembolso' | 'equilibrado'
+    activeAdvances: any[]
+  }> {
+    const rawAdvanceIds = ((report.advanceIds ?? []) as any[]).map((x: any) =>
+      x && typeof x === 'object' && '_id' in x ? String(x._id) : String(x)
+    )
+    const linkedAdvances = await this.advanceService.findByExpenseReportId(
+      String(report._id),
+      rawAdvanceIds
+    )
+    const activeAdvances = linkedAdvances.filter((a: any) =>
+      ['approved', 'partially_paid', 'paid', 'settled'].includes(a.status)
+    )
+    const advancesPaid = activeAdvances.reduce(
+      (s: number, a: any) =>
+        s +
+        (a.status === 'approved' ? 0 : Number(a.paidAmount ?? a.amount) || 0),
+      0
+    )
+    const depositTotal = Number(report.directaDeposit?.amount ?? 0)
+    const inheritedBalance =
+      report.pendingBalanceFromReportId &&
+      Number(report.pendingBalanceAmount ?? 0) > 0
+        ? Number(report.pendingBalanceAmount)
+        : 0
+
+    // Prioridad excluyente: las fuentes se solapan por construcción (budget = depósito
+    // o = saldo heredado), por eso se toma SOLO una y nunca se suman entre sí.
+    const received =
+      activeAdvances.length > 0
+        ? advancesPaid
+        : depositTotal > 0
+          ? depositTotal
+          : inheritedBalance > 0
+            ? inheritedBalance
+            : Number(report.budget ?? 0)
+
+    const hasFunds =
+      depositTotal > 0 ||
+      inheritedBalance > 0 ||
+      report.isDirecta === true ||
+      report.isCajaChica === true
+    const expenses = (report.expenseIds as any[]) || []
+    const expenseTotal = expenses.reduce((s: number, e: any) => {
+      const st = String(e?.status || '').toLowerCase()
+      if (hasFunds) {
+        if (st === 'rejected') return s
+      } else if (st !== 'approved') {
+        return s
+      }
+      return s + (Number(e.total) || 0)
+    }, 0)
+
+    const leftover = received - expenseTotal
+    const type =
+      Math.abs(leftover) < 0.01
+        ? 'equilibrado'
+        : leftover > 0
+          ? 'devolucion'
+          : 'reembolso'
+    return { received, expenseTotal, leftover, type, activeAdvances }
+  }
+
   /** Valida todas las condiciones previas al cierre. Devuelve lista de errores (vacía = OK). */
   async validateClosureConditions(id: string): Promise<string[]> {
     const report = await this.expenseReportModel
@@ -2447,47 +2525,19 @@ export class ExpenseReportService {
       )
     }
 
-    // Determinar tipo de liquidación para validar comprobantes previos al cierre
+    // Determinar tipo de liquidación para validar comprobantes previos al cierre.
+    // Usa computeLeftover (fuente única que SÍ considera el saldo heredado) en vez del
+    // cálculo inline que omitía pendingBalanceAmount (causa del bloqueo de RD-0042).
     {
-      const existingSettlement = (report as any).settlement
-      let effectiveSettlementType = existingSettlement?.type as
-        | string
-        | undefined
-      if (!effectiveSettlementType) {
-        const expenses = (report.expenseIds as any[]) || []
-        const expenseTotal = expenses.reduce(
-          (s: number, e: any) => s + (Number(e.total) || 0),
-          0
-        )
-        const rawAdvanceIds = ((report as any).advanceIds ?? []).map(
-          (x: any) =>
-            x && typeof x === 'object' && '_id' in x ? String(x._id) : String(x)
-        )
-        const linkedAdvances = await this.advanceService.findByExpenseReportId(
-          id,
-          rawAdvanceIds
-        )
-        const activeAdvances = linkedAdvances.filter((a: any) =>
-          ['approved', 'partially_paid', 'paid', 'settled'].includes(a.status)
-        )
-        const depositTotal = Number((report as any).directaDeposit?.amount ?? 0)
-        const advanceTotal =
-          activeAdvances.reduce(
-            (s: number, a: any) =>
-              s +
-              (a.status === 'approved'
-                ? 0
-                : Number(a.paidAmount ?? a.amount) || 0),
-            0
-          ) + depositTotal
-        const difference = advanceTotal - expenseTotal
-        if (Math.abs(difference) >= 0.01) {
-          effectiveSettlementType = difference > 0 ? 'devolucion' : 'reembolso'
-        }
-      }
+      const existingType = (report as any).settlement?.type as string | undefined
+      const effectiveSettlementType =
+        existingType ?? (await this.computeLeftover(report)).type
+      // Si el sobrante ya se envió a la Bolsa ("guardar saldo"), no se exige el
+      // comprobante de devolución: el saldo se reutiliza, no se devuelve.
       if (
         effectiveSettlementType === 'devolucion' &&
-        !(report as any).returnVoucher
+        !(report as any).returnVoucher &&
+        !(report as any).remainingToBolsa
       ) {
         errors.push(
           'El colaborador debe adjuntar el comprobante de devolución antes de cerrar la rendición.'
@@ -2563,7 +2613,11 @@ export class ExpenseReportService {
 
     // Solo enviar correos de devolución / reembolso si hay un monto real (>= 0.01).
     // Evita los correos con "S/ 0.00" cuando el settlement persistido quedó stale.
-    if (settlement?.type === 'devolucion' && settlementDiffAbs >= 0.01) {
+    if (
+      settlement?.type === 'devolucion' &&
+      settlementDiffAbs >= 0.01 &&
+      !(updated as any).remainingToBolsa
+    ) {
       const amountFormatted = settlementDiffAbs.toFixed(2)
       if (collaboratorEmailEnabled) {
         this.emailService
@@ -2619,6 +2673,157 @@ export class ExpenseReportService {
     return updated
   }
 
+  /**
+   * "Guardar saldo": envía el sobrante de la rendición a la Bolsa del colaborador
+   * (WalletEntry con origin 'saldo_sobrante') y marca `remainingToBolsa`. NO genera
+   * asiento contable (el saldo ya vive en cuenta 14) ni correo de devolución: el saldo
+   * se reutiliza, no se devuelve. El cierre lo hace `saveBalanceToWalletAndClose`.
+   */
+  async guardarSaldoSobrante(
+    id: string,
+    actorUserId: string,
+    isCollaborator = false
+  ): Promise<{ leftover: number; walletEntryId: string | null }> {
+    const report = await this.expenseReportModel
+      .findById(id)
+      .populate('expenseIds', 'total status')
+      .exec()
+    if (!report) throw new NotFoundException(`Rendición ${id} no encontrada`)
+    if (isCollaborator && report.userId.toString() !== actorUserId) {
+      throw new ForbiddenException(
+        'Solo el colaborador dueño puede guardar el saldo de esta rendición.'
+      )
+    }
+    if (report.status !== 'approved' && report.status !== 'reimbursed') {
+      throw new BadRequestException(
+        `Estado actual "${report.status}" no permite guardar saldo. Se requiere aprobada o reembolsada.`
+      )
+    }
+    if ((report as any).remainingToBolsa) {
+      throw new BadRequestException(
+        'El saldo de esta rendición ya fue enviado a la Bolsa.'
+      )
+    }
+    if ((report as any).returnVoucher) {
+      throw new BadRequestException(
+        'Esta rendición ya tiene un comprobante de devolución; no se puede guardar el saldo en la Bolsa.'
+      )
+    }
+
+    const isCajaChica = report.isCajaChica === true
+    const isDirecta = report.isDirecta === true
+    const hasInherited = !!(
+      (report as any).pendingBalanceFromReportId &&
+      Number((report as any).pendingBalanceAmount ?? 0) > 0
+    )
+    // El fondo de caja chica vive en CajaChicaReport, no en ExpenseReport: sin depósito,
+    // saldo heredado ni budget no se puede calcular el sobrante de forma fiable (BOLSA-6).
+    if (
+      isCajaChica &&
+      Number((report as any).directaDeposit?.amount ?? 0) <= 0 &&
+      !hasInherited &&
+      Number((report as any).budget ?? 0) <= 0
+    ) {
+      throw new BadRequestException(
+        'El arrastre de saldo de caja chica se habilitará en una fase posterior (BOLSA-6).'
+      )
+    }
+
+    const { received, expenseTotal, leftover, type } =
+      await this.computeLeftover(report)
+    if (type === 'reembolso') {
+      throw new BadRequestException(
+        'Esta rendición tiene saldo a favor del colaborador (reembolso); no aplica guardar saldo.'
+      )
+    }
+    // Persistir el settlement corregido (override de uno stale calculado sin el saldo
+    // heredado) para que validateClosureConditions en close() vea el tipo correcto y no
+    // exija un comprobante de reembolso/devolución inexistente (causa del bloqueo RD-0042).
+    const correctedSettlement = {
+      advanceTotal: received,
+      expenseTotal,
+      difference: leftover,
+      type,
+      settledAt: new Date(),
+    }
+    if (leftover < 0.01) {
+      // Equilibrado: no hay sobrante que guardar; se persiste settlement y se cierra.
+      await this.expenseReportModel
+        .findByIdAndUpdate(id, { $set: { settlement: correctedSettlement } })
+        .exec()
+      return { leftover: 0, walletEntryId: null }
+    }
+
+    const walletType = isCajaChica
+      ? 'caja_chica'
+      : isDirecta
+        ? 'directa'
+        : 'viaticos'
+    const projectId = (report as any).projectId
+      ? String((report as any).projectId)
+      : undefined
+    if (walletType === 'viaticos' && !projectId) {
+      throw new BadRequestException(
+        'No se puede guardar el saldo de viáticos sin proyecto asociado.'
+      )
+    }
+
+    const entry = await this.bolsaService.createEntry({
+      userId: String(report.userId),
+      clientId: String(report.clientId),
+      projectId,
+      type: walletType,
+      origin: 'saldo_sobrante',
+      amount: leftover,
+      sourceReportId: String(report._id),
+      sourceCodigo: (report as any).codigo,
+      note: `Saldo sobrante de ${(report as any).codigo ?? report.title}`,
+      createdBy: actorUserId,
+    })
+
+    await this.expenseReportModel
+      .findByIdAndUpdate(id, {
+        $set: {
+          settlement: correctedSettlement,
+          remainingToBolsa: {
+            walletEntryId: entry._id,
+            amount: leftover,
+            savedAt: new Date(),
+            savedBy: new Types.ObjectId(actorUserId),
+          },
+        },
+      })
+      .exec()
+
+    // Notificación correcta: saldo guardado (NUNCA "devuelve el dinero").
+    this.notificationsService
+      .create({
+        userId: String(report.userId),
+        title: 'Saldo enviado a tu Bolsa',
+        message: `El saldo sobrante de S/ ${leftover.toFixed(2)} de la rendición "${report.title}" se envió a tu Bolsa y queda disponible para una nueva rendición.`,
+        type: 'success',
+        actionUrl: `/mis-rendiciones/${id}/detalle`,
+      })
+      .catch(() => {})
+
+    return { leftover, walletEntryId: String(entry._id) }
+  }
+
+  /**
+   * Guarda el saldo sobrante en la Bolsa y cierra la rendición. Desbloquea los casos
+   * atascados (sobrante que no se cierra). Reutiliza `close()` (settlement/advances/
+   * closureRecord); `remainingToBolsa` relaja la exigencia de comprobante y suprime el
+   * correo de devolución.
+   */
+  async saveBalanceToWalletAndClose(
+    id: string,
+    actorUserId: string,
+    isCollaborator = false
+  ): Promise<ExpenseReportDocument> {
+    await this.guardarSaldoSobrante(id, actorUserId, isCollaborator)
+    return this.close(id, actorUserId)
+  }
+
   async registerReturnVoucher(
     id: string,
     dto: {
@@ -2647,6 +2852,11 @@ export class ExpenseReportService {
     if ((report as any).returnVoucher) {
       throw new BadRequestException(
         'Ya se ha cargado un comprobante de devolución para esta rendición.'
+      )
+    }
+    if ((report as any).remainingToBolsa) {
+      throw new BadRequestException(
+        'El sobrante de esta rendición ya fue enviado a la Bolsa; no procede una devolución.'
       )
     }
     if (report.userId.toString() !== userId) {

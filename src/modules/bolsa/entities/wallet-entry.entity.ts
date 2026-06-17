@@ -146,3 +146,8 @@ export const WalletEntrySchema = SchemaFactory.createForClass(WalletEntry)
 WalletEntrySchema.index({ clientId: 1, userId: 1, status: 1 })
 // Filtro por proyecto (RN-1) al ofrecer saldos consumibles.
 WalletEntrySchema.index({ clientId: 1, userId: 1, projectId: 1, status: 1 })
+// Idempotencia (BOLSA-4): un único saldo sobrante por rendición de origen.
+WalletEntrySchema.index(
+  { sourceReportId: 1 },
+  { unique: true, partialFilterExpression: { origin: 'saldo_sobrante' } }
+)

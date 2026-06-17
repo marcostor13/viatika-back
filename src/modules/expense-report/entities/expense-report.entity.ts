@@ -43,6 +43,14 @@ export interface Settlement {
   settledAt: Date
 }
 
+/** Trazabilidad del sobrante enviado a la Bolsa al cerrar (BOLSA-4). */
+export interface RemainingToBolsa {
+  walletEntryId: Types.ObjectId
+  amount: number
+  savedAt: Date
+  savedBy: Types.ObjectId
+}
+
 export interface ExpenseReportBudgetItem {
   description: string
   amount: number
@@ -143,6 +151,8 @@ export interface ExpenseReportDocument extends Document {
   reimbursedAt?: Date
   reimbursementAccountingNotifiedAt?: Date
   closureRecord?: ClosureRecord
+  /** Sobrante enviado a la Bolsa al cerrar (BOLSA-4): su presencia indica saldo reutilizado, no devuelto. */
+  remainingToBolsa?: RemainingToBolsa
   coordinatorApprovedAt?: Date
   coordinatorApprovedBy?: Types.ObjectId
   contabilidadApprovedAt?: Date
@@ -355,6 +365,9 @@ export class ExpenseReport {
 
   @Prop({ type: Object, required: false })
   closureRecord?: ClosureRecord
+
+  @Prop({ type: Object, required: false })
+  remainingToBolsa?: RemainingToBolsa
 
   @Prop({ type: Date, required: false })
   coordinatorApprovedAt?: Date

@@ -1762,14 +1762,26 @@ export class AdvanceService {
     // Rendición directa iniciada por Contabilidad: el depósito funciona como anticipo
     // (el saldo no gastado lo devuelve el colaborador/coordinador).
     const depositTotal = Number((report as any).directaDeposit?.amount ?? 0)
-    const hasDeposit = depositTotal > 0
+    // Saldo heredado (directa creada desde el saldo de otra): es fondo recibido igual
+    // que un depósito (su `budget` = pendingBalanceAmount). Sin esto, una directa
+    // heredada liquidaba con advanceTotal=0 → 'reembolso' falso (bug RD-0042).
+    const inheritedBalance =
+      (report as any).pendingBalanceFromReportId &&
+      Number((report as any).pendingBalanceAmount ?? 0) > 0
+        ? Number((report as any).pendingBalanceAmount)
+        : 0
+    const hasFunds =
+      depositTotal > 0 ||
+      inheritedBalance > 0 ||
+      (report as any).isDirecta === true ||
+      (report as any).isCajaChica === true
 
     const expenses = (report.expenseIds as any[]) || []
     const expenseTotal = expenses.reduce((sum, e) => {
-      // En una rendición directa con depósito todo gasto registrado (no rechazado)
-      // cuenta como gastado; en viáticos solo cuentan los gastos aprobados.
+      // Con fondo (directa/depósito/heredado/caja chica) cuenta todo gasto no
+      // rechazado; en viáticos solo cuentan los gastos aprobados.
       const status = String(e?.status || '').toLowerCase()
-      if (hasDeposit) {
+      if (hasFunds) {
         if (status === 'rejected') return sum
       } else if (status !== 'approved') {
         return sum
@@ -1789,7 +1801,8 @@ export class AdvanceService {
       partiallyPaidAdvances.length === 0 &&
       settledAdvances.length === 0 &&
       approvedAdvances.length === 0 &&
-      depositTotal <= 0
+      depositTotal <= 0 &&
+      inheritedBalance <= 0
     ) {
       return
     }
@@ -1811,7 +1824,9 @@ export class AdvanceService {
           s +
           (a.status === 'approved' ? 0 : Number(a.paidAmount ?? a.amount) || 0),
         0
-      ) + depositTotal
+      ) +
+      depositTotal +
+      inheritedBalance
 
     const difference = advanceTotal - expenseTotal
     let type: 'reembolso' | 'devolucion' | 'equilibrado'

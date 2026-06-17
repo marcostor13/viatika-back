@@ -4,6 +4,7 @@ import { AdvanceService } from './advance.service'
 import { AdvanceController } from './advance.controller'
 import { Advance, AdvanceSchema } from './entities/advance.entity'
 import { ExpenseReportModule } from '../expense-report/expense-report.module'
+import { BolsaModule } from '../bolsa/bolsa.module'
 import { AuditLogModule } from '../audit-log/audit-log.module'
 import { ProjectModule } from '../project/project.module'
 import { CategoryModule } from '../category/category.module'
@@ -15,6 +16,7 @@ import { NotificationsModule } from '../notifications/notifications.module'
   imports: [
     MongooseModule.forFeature([{ name: Advance.name, schema: AdvanceSchema }]),
     forwardRef(() => ExpenseReportModule),
+    BolsaModule,
     AuditLogModule,
     ProjectModule,
     CategoryModule,

@@ -108,6 +108,12 @@ export class CreateAdvanceDto {
   @IsOptional()
   additionalAmount?: number
 
+  /** Saldos de la Bolsa seleccionados para financiar el viático (BOLSA-3). */
+  @IsArray()
+  @IsMongoId({ each: true })
+  @IsOptional()
+  consumedWalletEntryIds?: string[]
+
   /** Seteados desde el JWT en el controlador */
   userId?: string
   clientId?: string

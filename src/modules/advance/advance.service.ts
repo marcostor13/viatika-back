@@ -32,6 +32,7 @@ import { UserService } from '../user/user.service'
 import { UserPermissions } from '../user/schemas/user.schema'
 import { EmailService } from '../email/email.service'
 import { NotificationsService } from '../notifications/notifications.service'
+import { BolsaService } from '../bolsa/bolsa.service'
 
 @Injectable()
 export class AdvanceService {
@@ -46,7 +47,8 @@ export class AdvanceService {
     private readonly categoryService: CategoryService,
     private readonly userService: UserService,
     private readonly emailService: EmailService,
-    private readonly notificationsService: NotificationsService
+    private readonly notificationsService: NotificationsService,
+    private readonly bolsaService: BolsaService
   ) {}
 
   async create(dto: CreateAdvanceDto): Promise<Advance> {
@@ -353,7 +355,25 @@ export class AdvanceService {
     }
 
     const pendingAmt = Number(dto.pendingBalanceAmount ?? 0)
-    const linesOnlyAmount = Math.round((dto.amount - pendingAmt) * 100) / 100
+
+    // BOLSA-3 (viáticos): financiar el viático con saldos de la Bolsa del MISMO
+    // proyecto (RN-1). Cuentan como saldo heredado adicional, igual que pendingAmt.
+    const consumedWalletEntryIds = dto.consumedWalletEntryIds ?? []
+    let consumedFromBolsa = 0
+    if (consumedWalletEntryIds.length) {
+      const preview = await this.bolsaService.previewConsume(
+        consumedWalletEntryIds,
+        {
+          userId: dto.userId!,
+          clientId: dto.clientId!,
+          targetType: 'viaticos',
+          projectId: dto.projectId,
+        }
+      )
+      consumedFromBolsa = preview.total
+    }
+    const inheritedTotal = Math.round((pendingAmt + consumedFromBolsa) * 100) / 100
+    const linesOnlyAmount = Math.round((dto.amount - inheritedTotal) * 100) / 100
 
     const { lineDocs, roundedSum, description, requiredLevels } =
       await this.validateViaticoBusinessRulesAndLines(
@@ -369,7 +389,7 @@ export class AdvanceService {
         dto.clientId!
       )
 
-    const totalAmount = Math.round((roundedSum + pendingAmt) * 100) / 100
+    const totalAmount = Math.round((roundedSum + inheritedTotal) * 100) / 100
     const totalRequiredLevels = totalAmount > ADVANCE_THRESHOLDS.L1_MAX ? 2 : 1
 
     const advance = await this.advanceModel.create({
@@ -403,6 +423,12 @@ export class AdvanceService {
           pendingBalanceAmount: pendingAmt,
           additionalAmount: roundedSum,
         }),
+      ...(consumedWalletEntryIds.length > 0 && {
+        consumedWalletEntryIds: consumedWalletEntryIds.map(
+          (x) => new Types.ObjectId(String(x))
+        ),
+        additionalAmount: roundedSum,
+      }),
     })
 
     if (dto.expenseReportId) {
@@ -417,6 +443,12 @@ export class AdvanceService {
         dto.pendingBalanceFromReportId,
         (advance as any)._id.toString()
       )
+    }
+
+    if (consumedWalletEntryIds.length > 0) {
+      await this.bolsaService.markConsumed(consumedWalletEntryIds, {
+        advanceId: (advance as any)._id.toString(),
+      })
     }
 
     void this.notifyCoordinatorViatico(

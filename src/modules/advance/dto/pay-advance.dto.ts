@@ -37,9 +37,11 @@ export class PayAdvanceDto {
   @IsOptional()
   reference?: string
 
+  // Opcional: el efectivo no lleva comprobante. La obligatoriedad para
+  // transferencia/cheque se valida en advance.service.registerPayment.
+  @IsOptional()
   @IsUrl()
-  @IsNotEmpty()
-  paymentReceiptUrl: string
+  paymentReceiptUrl?: string
 
   @IsString()
   @IsOptional()

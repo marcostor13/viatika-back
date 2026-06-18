@@ -1553,13 +1553,22 @@ export class AdvanceService {
     if (!canPay)
       throw new ForbiddenException('No tienes permiso para registrar pagos')
 
-    const receiptValidation = this.isValidPaymentReceipt(
-      dto.paymentReceiptMimeType,
-      dto.paymentReceiptFileName,
-      dto.paymentReceiptSizeBytes
-    )
-    if (!receiptValidation.ok) {
-      throw new BadRequestException(receiptValidation.reason)
+    // El comprobante es obligatorio salvo cuando el pago es en efectivo. Si se
+    // adjunta uno (en cualquier método), se valida formato/tamaño.
+    if (dto.method !== 'efectivo' && !dto.paymentReceiptUrl) {
+      throw new BadRequestException(
+        'El comprobante es obligatorio para pagos por transferencia o cheque.'
+      )
+    }
+    if (dto.paymentReceiptUrl) {
+      const receiptValidation = this.isValidPaymentReceipt(
+        dto.paymentReceiptMimeType,
+        dto.paymentReceiptFileName,
+        dto.paymentReceiptSizeBytes
+      )
+      if (!receiptValidation.ok) {
+        throw new BadRequestException(receiptValidation.reason)
+      }
     }
 
     const prevPaid = Number(advance.paidAmount ?? 0)
@@ -1691,6 +1700,28 @@ export class AdvanceService {
         ? { $or: [{ _id: { $in: idList } }, { expenseReportId: oid }] }
         : { expenseReportId: oid }
     return this.advanceModel.find(query).exec() as Promise<AdvanceDocument[]>
+  }
+
+  /**
+   * De una lista de rendiciones, devuelve los IDs de las que tienen al menos un
+   * anticipo vinculado ya aprobado/pagado/liquidado. Sirve para que el front
+   * sepa que el colaborador ya no puede eliminar esas rendiciones de viáticos.
+   */
+  async findApprovedExpenseReportIds(reportIds: string[]): Promise<string[]> {
+    if (!reportIds.length) return []
+    const oids = reportIds
+      .filter(id => Types.ObjectId.isValid(id))
+      .map(id => new Types.ObjectId(id))
+    if (!oids.length) return []
+    const rows = await this.advanceModel
+      .find({
+        expenseReportId: { $in: oids },
+        status: { $in: ['approved', 'partially_paid', 'paid', 'settled'] },
+      })
+      .select('expenseReportId')
+      .lean()
+      .exec()
+    return [...new Set(rows.map(r => String(r.expenseReportId)))]
   }
 
   /**
@@ -2227,6 +2258,16 @@ export class AdvanceService {
     const hasApproval =
       (advance.approvalHistory ?? []).some(e => e.action === 'approved') ||
       ['approved', 'partially_paid', 'paid', 'settled'].includes(advance.status)
+
+    // El viático ya fue pagado y generó una rendición (representa dinero ya
+    // desembolsado): no puede eliminarse por la app —ni colaborador ni
+    // Contabilidad—. Solo Superadmin (escape técnico). Evita además orfanar la
+    // rendición vía la cascada.
+    if (advance.expenseReportId && !isSuperAdmin) {
+      throw new ForbiddenException(
+        'Este viático ya fue pagado y tiene una rendición asociada; no puede eliminarse.'
+      )
+    }
 
     if (hasApproval) {
       if (!isContabilidad && !isSuperAdmin) {

@@ -793,6 +793,11 @@ export class ExpenseReportService implements OnModuleInit {
       .populate('createdBy', 'name email')
       .populate('approvedBy', 'name email')
       .populate('projectId', 'name')
+      .populate({
+        path: 'saldoIds',
+        select: 'type amount concepto deposit sourceReportId createdAt',
+        populate: { path: 'sourceReportId', select: 'codigo title gestion' },
+      })
       .exec()
 
     if (!report) {

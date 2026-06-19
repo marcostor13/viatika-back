@@ -1921,7 +1921,7 @@ export class ExpenseReportService implements OnModuleInit {
     const reports = await this.expenseReportModel
       .find(query)
       .select(
-        '_id codigo userId title motivo gestion budget status createdAt createdBy directaDeposit expenseIds pendingBalanceFromReportId pendingBalanceAmount'
+        '_id codigo userId title motivo gestion budget status createdAt createdBy directaDeposit expenseIds pendingBalanceFromReportId pendingBalanceAmount saldoIds'
       )
       .populate('userId', 'name email')
       .populate({
@@ -1955,10 +1955,15 @@ export class ExpenseReportService implements OnModuleInit {
       const hasInheritedBalance =
         !!r.pendingBalanceFromReportId &&
         Number(r.pendingBalanceAmount ?? 0) > 0
+      // Rendición directa financiada con saldos de la bolsa: su presupuesto disponible
+      // es el `budget` (suma de los saldos consumidos).
+      const hasSaldoFinancing =
+        Array.isArray(r.saldoIds) && r.saldoIds.length > 0
       const deposited = Number(
         r.directaDeposit?.amount ?? r.pendingBalanceAmount ?? r.budget ?? 0
       )
-      const hasFunds = !!r.directaDeposit || hasInheritedBalance
+      const hasFunds =
+        !!r.directaDeposit || hasInheritedBalance || hasSaldoFinancing
       return {
         _id: String(r._id),
         codigo: r.codigo ?? null,

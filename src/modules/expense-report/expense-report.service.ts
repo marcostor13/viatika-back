@@ -41,6 +41,7 @@ import { CreateViaticoExpenseReportDto } from './dto/create-viatico-expense-repo
 import { PayViaticoDto } from './dto/pay-viatico.dto'
 import { ResubmitViaticoDto } from './dto/resubmit-viatico.dto'
 import { CreateAdvanceLineDto } from '../advance/dto/create-advance.dto'
+import { SaldoService } from '../saldo/saldo.service'
 import { Logger } from '@nestjs/common'
 
 /** Contexto del usuario que solicita eliminar una solicitud. */
@@ -67,7 +68,8 @@ export class ExpenseReportService implements OnModuleInit {
     private readonly advanceService: AdvanceService,
     private readonly uploadService: UploadService,
     private readonly projectService: ProjectService,
-    private readonly categoryService: CategoryService
+    private readonly categoryService: CategoryService,
+    private readonly saldoService: SaldoService
   ) { }
 
   async onModuleInit() {
@@ -256,6 +258,19 @@ export class ExpenseReportService implements OnModuleInit {
       ? await this.generateDirectaCodigo(createExpenseReportDto.clientId)
       : undefined
 
+    // Saldos de la bolsa seleccionados (rendición directa financiada con saldo).
+    const saldoIds = Array.isArray(createExpenseReportDto.saldoIds)
+      ? createExpenseReportDto.saldoIds
+      : []
+    const hasSaldos = saldoIds.length > 0
+    const saldoBudget = hasSaldos
+      ? await this.saldoService.sumAmounts(
+        saldoIds,
+        createExpenseReportDto.userId,
+        createExpenseReportDto.clientId
+      )
+      : 0
+
     const report = new this.expenseReportModel({
       ...createExpenseReportDto,
       title,
@@ -272,10 +287,16 @@ export class ExpenseReportService implements OnModuleInit {
             createExpenseReportDto.pendingBalanceFromReportId
           )
           : undefined,
-      // Rendición directa creada desde saldo: el presupuesto es el saldo heredado
-      budget: createExpenseReportDto.pendingBalanceFromReportId
-        ? (createExpenseReportDto.pendingBalanceAmount ?? 0)
-        : (createExpenseReportDto.budget ?? 0),
+      // Presupuesto: si se financia con saldos de la bolsa = suma de saldos;
+      // si hereda saldo pendiente = monto heredado; caso normal = budget recibido.
+      budget: hasSaldos
+        ? saldoBudget
+        : createExpenseReportDto.pendingBalanceFromReportId
+          ? (createExpenseReportDto.pendingBalanceAmount ?? 0)
+          : (createExpenseReportDto.budget ?? 0),
+      saldoIds: hasSaldos
+        ? saldoIds.map(id => new Types.ObjectId(id))
+        : undefined,
       // Caja chica y rendición directa: siempre open desde el inicio
       status:
         isDirecta || isCajaChica
@@ -286,6 +307,16 @@ export class ExpenseReportService implements OnModuleInit {
       expenseIds: [],
     })
     const savedReport = await report.save()
+
+    // Consumir (completo) los saldos de la bolsa que financian esta rendición directa.
+    if (hasSaldos) {
+      await this.saldoService.consume(saldoIds, {
+        userId: createExpenseReportDto.userId,
+        clientId: createExpenseReportDto.clientId,
+        context: 'rendicion_directa',
+        reportId: String(savedReport._id),
+      })
+    }
 
     // Si se creó desde saldo de otra rendición directa, marcar la rendición fuente
     if (createExpenseReportDto.pendingBalanceFromReportId) {
@@ -3662,6 +3693,24 @@ export class ExpenseReportService implements OnModuleInit {
       Math.abs(difference) < 0.01 ? 'equilibrado' : difference > 0 ? 'devolucion' : 'reembolso'
 
     await this.updateSettlement(reportId, { advanceTotal, expenseTotal, difference, type, settledAt: new Date() })
+
+    // Remanente positivo (devolución): el saldo no gastado queda disponible para
+    // el colaborador en su bolsa de "Saldo" (tipo `rendicion`, con su centro de costo).
+    if (type === 'devolucion' && difference > 0.01) {
+      try {
+        await this.saldoService.createFromRemnant({
+          userId: report.userId,
+          clientId: report.clientId,
+          projectId: report.projectId ?? null,
+          sourceReportId: reportId,
+          amount: difference,
+          type: 'rendicion',
+        })
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.logger.error(`Crear saldo remanente viático ${reportId}: ${msg}`)
+      }
+    }
 
     // Auto-cierre inmediato cuando el viático queda equilibrado.
     // fromClose=true indica que esta llamada viene desde close() — evita recursión.

@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { InjectModel } from '@nestjs/mongoose'
 import { Model } from 'mongoose'
+import { createHash } from 'crypto'
 import OpenAI from 'openai'
 import { ExpenseReport } from '../expense-report/entities/expense-report.entity'
 import { Expense } from '../expense/entities/expense.entity'
@@ -23,6 +24,7 @@ import {
   CuadreError,
   GeneratedFile,
 } from './entities/accounting-entries.types'
+import { AccountingEntriesCache } from './entities/accounting-entries-cache.entity'
 import { buildPcgeAccountsPrompt } from './constants/pcge-prompt'
 
 /** Porción analítica resuelta para una línea de gasto. */
@@ -53,6 +55,8 @@ export class AccountingEntriesService {
     private userModel: Model<any>,
     @InjectModel(Category.name)
     private categoryModel: Model<any>,
+    @InjectModel(AccountingEntriesCache.name)
+    private cacheModel: Model<any>,
     private accountingConfigService: AccountingConfigService,
     private exchangeRateService: ExchangeRateService,
     private configService: ConfigService
@@ -81,29 +85,61 @@ export class AccountingEntriesService {
       .exec()) as any
     if (!report) throw new NotFoundException('Rendición no encontrada')
 
-    const config = await this.accountingConfigService.getEffective(clientId)
-
-    const expenses = (await this.expenseModel
-      .find({ expenseReportId: report._id, status: { $ne: 'rejected' } })
-      .lean()
-      .exec()) as any[]
-
-    const advances = (
-      report.advanceIds?.length
-        ? await this.advanceModel
+    // Lecturas independientes en paralelo (config + entidades del reporte).
+    const [config, expenses, advances, colaborador] = await Promise.all([
+      this.accountingConfigService.getEffective(clientId),
+      this.expenseModel
+        .find({ expenseReportId: report._id, status: { $ne: 'rejected' } })
+        .lean()
+        .exec() as Promise<any[]>,
+      (report.advanceIds?.length
+        ? this.advanceModel
             .find({ _id: { $in: report.advanceIds } })
             .lean()
             .exec()
-        : []
-    ) as any[]
+        : Promise.resolve([])) as Promise<any[]>,
+      this.userModel.findById(report.userId).lean().exec(),
+    ])
 
-    const colaborador = (await this.userModel
-      .findById(report.userId)
+    // Fingerprint barato: invalida la caché si cambia la rendición, sus gastos,
+    // los anticipos o la configuración contable.
+    const fingerprint = this.computeFingerprint(
+      report,
+      expenses,
+      advances,
+      config
+    )
+
+    // Reutiliza de caché los tipos cuyo fingerprint coincide.
+    const cachedDocs = (await this.cacheModel
+      .find({ reportId: report._id, tipo: { $in: tipos }, fingerprint })
       .lean()
-      .exec()) as any
+      .exec()) as any[]
+    const cachedByTipo = new Map<string, any>(
+      cachedDocs.map(c => [c.tipo, c])
+    )
 
-    const projectMap = await this.buildProjectMap(expenses, report, clientId)
-    const categoryMap = await this.buildCategoryMap(expenses, clientId)
+    const files: GeneratedFile[] = []
+    for (const tipo of tipos) {
+      const hit = cachedByTipo.get(tipo)
+      if (!hit) continue
+      files.push({
+        tipo,
+        filename: hit.filename,
+        base64: this.bufferToBase64(hit.buffer),
+        asientosCount: hit.asientosCount ?? 0,
+        cuadreErrors: hit.cuadreErrors ?? [],
+      })
+    }
+
+    const tiposToGenerate = tipos.filter(t => !cachedByTipo.has(t))
+    if (!tiposToGenerate.length) return this.orderFiles(files, tipos)
+
+    // Trabajo pesado (IA + tipo de cambio + ExcelJS) solo para los faltantes.
+    const [projectMap, categoryMap] = await Promise.all([
+      this.buildProjectMap(expenses, report, clientId),
+      this.buildCategoryMap(expenses, clientId),
+    ])
 
     // Ejercicio/periodo: de la fecha de inicio de la solicitud (anticipo) o, en su
     // defecto, de la rendición. Es constante para todas las líneas del lote.
@@ -113,8 +149,7 @@ export class AccountingEntriesService {
     // las filas (no solo el primer comprobante) tengan ME y cambio de moneda.
     const rateMap = await this.prefetchRates(report, expenses, advances, config)
 
-    const files: GeneratedFile[] = []
-    for (const tipo of tipos) {
+    for (const tipo of tiposToGenerate) {
       const lines = await this.buildLinesForTipo(tipo, {
         report,
         config,
@@ -129,15 +164,105 @@ export class AccountingEntriesService {
       if (!lines.length) continue
       const cuadreErrors = this.validateCuadre(lines)
       const buffer = await buildContanetWorkbook(lines, 'CONTABILIDAD', tipo)
+      const filename = this.fileName(tipo, report)
+      const asientosCount = this.countAsientos(lines)
       files.push({
         tipo,
-        filename: this.fileName(tipo, report),
+        filename,
         base64: buffer.toString('base64'),
-        asientosCount: this.countAsientos(lines),
+        asientosCount,
+        cuadreErrors,
+      })
+      await this.persistCache(report, clientId, tipo, fingerprint, {
+        filename,
+        buffer,
+        asientosCount,
         cuadreErrors,
       })
     }
-    return files
+    return this.orderFiles(files, tipos)
+  }
+
+  /** Ordena los archivos según el orden solicitado en `tipos`. */
+  private orderFiles(files: GeneratedFile[], tipos: AsientoTipo[]): GeneratedFile[] {
+    const order = new Map(tipos.map((t, i) => [t, i]))
+    return [...files].sort(
+      (a, b) => (order.get(a.tipo) ?? 0) - (order.get(b.tipo) ?? 0)
+    )
+  }
+
+  /** base64 de un Buffer de Mongo (puede llegar como { buffer } binario). */
+  private bufferToBase64(buf: any): string {
+    if (Buffer.isBuffer(buf)) return buf.toString('base64')
+    if (buf?.buffer) return Buffer.from(buf.buffer).toString('base64')
+    return Buffer.from(buf ?? []).toString('base64')
+  }
+
+  /**
+   * Hash de invalidación de caché. Cualquier cambio en la rendición, sus gastos,
+   * los anticipos o la configuración contable produce un fingerprint distinto.
+   */
+  private computeFingerprint(
+    report: any,
+    expenses: any[],
+    advances: any[],
+    config: any
+  ): string {
+    const ts = (x: any): number => {
+      const raw = x?.updatedAt || x?.createdAt
+      const t = raw ? new Date(raw).getTime() : 0
+      return Number.isNaN(t) ? 0 : t
+    }
+    const maxTs = (arr: any[]): number =>
+      arr.reduce((m, x) => Math.max(m, ts(x)), 0)
+    const parts = [
+      ts(report),
+      report?.status ?? '',
+      expenses.length,
+      maxTs(expenses),
+      advances.length,
+      maxTs(advances),
+      ts(config),
+    ]
+    return createHash('sha1').update(parts.join('|')).digest('hex')
+  }
+
+  /** Persiste (upsert) el archivo generado en la caché de asientos. */
+  private async persistCache(
+    report: any,
+    clientId: string,
+    tipo: AsientoTipo,
+    fingerprint: string,
+    data: {
+      filename: string
+      buffer: Buffer
+      asientosCount: number
+      cuadreErrors: CuadreError[]
+    }
+  ): Promise<void> {
+    try {
+      await this.cacheModel
+        .findOneAndUpdate(
+          { reportId: report._id, tipo },
+          {
+            $set: {
+              clientId: report.clientId ?? clientId,
+              fingerprint,
+              filename: data.filename,
+              buffer: data.buffer,
+              asientosCount: data.asientosCount,
+              cuadreErrors: data.cuadreErrors,
+            },
+          },
+          { upsert: true }
+        )
+        .exec()
+    } catch (error) {
+      // La caché es best-effort: si falla, el archivo igual se devuelve.
+      this.logger.warn(
+        `No se pudo cachear asientos (${tipo}): ${(error as Error)?.message}`
+      )
+    }
   }
 
   private fileName(tipo: AsientoTipo, report: any): string {
@@ -181,10 +306,12 @@ export class AccountingEntriesService {
 
     const fallback = Number(config.tipoCambio) || 1
     const map = new Map<string, number>()
-    for (const iso of dates) {
-      const rate = await this.exchangeRateService.getRate(iso)
-      map.set(iso, rate ?? fallback)
-    }
+    // Consulta todas las fechas en paralelo (cada una cachea en BD por su cuenta).
+    const isoList = Array.from(dates)
+    const rates = await Promise.all(
+      isoList.map(iso => this.exchangeRateService.getRate(iso))
+    )
+    isoList.forEach((iso, i) => map.set(iso, rates[i] ?? fallback))
     return map
   }
 

@@ -19,6 +19,7 @@ import { AdvanceModule } from '../advance/advance.module'
 import { UploadModule } from '../upload/upload.module'
 import { ProjectModule } from '../project/project.module'
 import { CategoryModule } from '../category/category.module'
+import { SaldoModule } from '../saldo/saldo.module'
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { CategoryModule } from '../category/category.module'
     UploadModule,
     ProjectModule,
     CategoryModule,
+    SaldoModule,
     forwardRef(() => AdvanceModule),
   ],
   controllers: [ExpenseReportController],

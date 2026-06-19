@@ -13,6 +13,7 @@ export type AuditAction =
   | 'create_other_expense'
   | 'create_rendicion'
   | 'create_rendicion_directa_deposito'
+  | 'create_saldo_pago'
   | 'delete_rendicion'
   | 'update_rendicion_status'
   | 'reopen_rendicion'

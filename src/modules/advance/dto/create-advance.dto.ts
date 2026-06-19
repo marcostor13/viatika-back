@@ -108,6 +108,12 @@ export class CreateAdvanceDto {
   @IsOptional()
   additionalAmount?: number
 
+  /** Saldos de la bolsa seleccionados para financiar esta solicitud (consumo completo, mismo centro de costo). */
+  @IsArray()
+  @IsMongoId({ each: true })
+  @IsOptional()
+  saldoIds?: string[]
+
   /** Seteados desde el JWT en el controlador */
   userId?: string
   clientId?: string

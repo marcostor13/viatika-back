@@ -10,11 +10,23 @@ import { EmailService } from '../email/email.service'
 import { NotificationsService } from '../notifications/notifications.service'
 import { UserService } from '../user/user.service'
 import { AdvanceService } from '../advance/advance.service'
+import { UploadService } from '../upload/upload.service'
+import { ProjectService } from '../project/project.service'
+import { CategoryService } from '../category/category.service'
+import { SaldoService } from '../saldo/saldo.service'
 import { ROLES } from '../auth/enums/roles.enum'
+
+const mockSaldoService = {
+  createFromRemnant: jest.fn().mockResolvedValue(null),
+  createFromPago: jest.fn().mockResolvedValue({}),
+  consume: jest.fn().mockResolvedValue(0),
+  sumAmounts: jest.fn().mockResolvedValue(0),
+}
 
 const mockAdvanceService = {
   liquidateExpenseReport: jest.fn().mockResolvedValue(undefined),
   findPaymentReceiptsForCollaborator: jest.fn().mockResolvedValue([]),
+  findByExpenseReportId: jest.fn().mockResolvedValue([]),
 }
 
 const reportId = new Types.ObjectId().toString()
@@ -27,6 +39,7 @@ const mockEmailService = {
   sendRendicionFullyApprovedEmail: jest.fn().mockResolvedValue(undefined),
   sendRendicionReembolsoPagado: jest.fn().mockResolvedValue(undefined),
   buildAppUrl: jest.fn().mockReturnValue('http://localhost:4200/app'),
+  formatDateDDMMYYYY: jest.fn().mockReturnValue('01/01/2026'),
 }
 
 const mockNotificationsService = {
@@ -92,6 +105,10 @@ describe('ExpenseReportService — Fase 5 (envío y aprobación final)', () => {
         { provide: NotificationsService, useValue: mockNotificationsService },
         { provide: UserService, useValue: mockUserService },
         { provide: AdvanceService, useValue: mockAdvanceService },
+        { provide: UploadService, useValue: {} },
+        { provide: ProjectService, useValue: {} },
+        { provide: CategoryService, useValue: {} },
+        { provide: SaldoService, useValue: mockSaldoService },
       ],
     }).compile()
 
@@ -317,6 +334,7 @@ describe('ExpenseReportService — Fase 8 (cierre definitivo)', () => {
     sendRendicionReembolsoPagado: jest.fn().mockResolvedValue(undefined),
     sendRendicionCerrada: jest.fn().mockResolvedValue(undefined),
     buildAppUrl: jest.fn().mockReturnValue('http://localhost:4200/app'),
+    formatDateDDMMYYYY: jest.fn().mockReturnValue('01/01/2026'),
   }
 
   const mockUserServicePhase8 = {
@@ -376,6 +394,10 @@ describe('ExpenseReportService — Fase 8 (cierre definitivo)', () => {
         { provide: NotificationsService, useValue: mockNotificationsService },
         { provide: UserService, useValue: mockUserServicePhase8 },
         { provide: AdvanceService, useValue: mockAdvanceService },
+        { provide: UploadService, useValue: {} },
+        { provide: ProjectService, useValue: {} },
+        { provide: CategoryService, useValue: {} },
+        { provide: SaldoService, useValue: mockSaldoService },
       ],
     }).compile()
 
@@ -731,6 +753,10 @@ describe('ExpenseReportService — Fase 6 (reembolso: tenant y registro)', () =>
         { provide: NotificationsService, useValue: mockNotificationsService },
         { provide: UserService, useValue: mockUserService },
         { provide: AdvanceService, useValue: mockAdvanceService },
+        { provide: UploadService, useValue: {} },
+        { provide: ProjectService, useValue: {} },
+        { provide: CategoryService, useValue: {} },
+        { provide: SaldoService, useValue: mockSaldoService },
       ],
     }).compile()
 

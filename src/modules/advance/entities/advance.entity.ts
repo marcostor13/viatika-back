@@ -164,6 +164,8 @@ export interface AdvanceDocument extends Document {
   pendingBalanceAmount?: number
   /** Monto adicional solicitado por encima del saldo pendiente. */
   additionalAmount?: number
+  /** Saldos de la bolsa consumidos para financiar esta solicitud de viáticos. */
+  saldoIds?: Types.ObjectId[]
 }
 
 // Umbrales de aprobación multinivel
@@ -384,6 +386,9 @@ export class Advance {
 
   @Prop({ type: Number, required: false })
   additionalAmount?: number
+
+  @Prop({ type: [{ type: Types.ObjectId, ref: 'Saldo' }], default: undefined })
+  saldoIds?: Types.ObjectId[]
 }
 
 export const AdvanceSchema = SchemaFactory.createForClass(Advance)

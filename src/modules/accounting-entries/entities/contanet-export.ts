@@ -28,6 +28,17 @@ export function resolveTemplatePath(tipo?: AsientoTipo): string | null {
   return fs.existsSync(p) ? p : null
 }
 
+/** Bytes del template cacheados en memoria (se leen del disco una sola vez). */
+const TEMPLATE_BUFFER_CACHE = new Map<string, Buffer>()
+
+function readTemplateBuffer(templatePath: string): Buffer {
+  const cached = TEMPLATE_BUFFER_CACHE.get(templatePath)
+  if (cached) return cached
+  const buffer = fs.readFileSync(templatePath)
+  TEMPLATE_BUFFER_CACHE.set(templatePath, buffer)
+  return buffer
+}
+
 /**
  * Construye la matriz (array de arrays) que replica la hoja `sheet1` del template
  * de Contanet: encabezados en filas 2-8 y datos a partir de la fila 9.
@@ -124,7 +135,7 @@ export async function buildContanetWorkbook(
 
   if (templatePath) {
     const workbook = new ExcelJS.Workbook()
-    await workbook.xlsx.readFile(templatePath)
+    await workbook.xlsx.load(readTemplateBuffer(templatePath) as any)
 
     const worksheet = workbook.getWorksheet(sheetName)
 

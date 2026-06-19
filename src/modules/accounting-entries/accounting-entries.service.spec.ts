@@ -46,8 +46,9 @@ function newService(): AccountingEntriesService {
   const stub: any = {}
   const exchangeStub: any = { getRate: async () => TC }
   const configStub: any = { get: () => 'test-api-key' }
-  // (reportModel, expenseModel, advanceModel, projectModel, userModel, categoryModel, accountingConfigService, exchangeService, configService)
+  // (reportModel, expenseModel, advanceModel, projectModel, userModel, categoryModel, cacheModel, accountingConfigService, exchangeService, configService)
   return new AccountingEntriesService(
+    stub,
     stub,
     stub,
     stub,

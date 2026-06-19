@@ -15,6 +15,10 @@ import { Project, ProjectSchema } from '../project/entities/project.entity'
 import { User, UserSchema } from '../user/schemas/user.schema'
 import { Category, CategorySchema } from '../category/entities/category.entity'
 import { ExchangeRateModule } from '../exchange-rate/exchange-rate.module'
+import {
+  AccountingEntriesCache,
+  AccountingEntriesCacheSchema,
+} from './entities/accounting-entries-cache.entity'
 
 @Module({
   imports: [
@@ -25,6 +29,7 @@ import { ExchangeRateModule } from '../exchange-rate/exchange-rate.module'
       { name: Project.name, schema: ProjectSchema },
       { name: User.name, schema: UserSchema },
       { name: Category.name, schema: CategorySchema },
+      { name: AccountingEntriesCache.name, schema: AccountingEntriesCacheSchema },
     ]),
     ConfigModule,
     AccountingConfigModule,

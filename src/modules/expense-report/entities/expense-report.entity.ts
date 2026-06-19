@@ -147,6 +147,8 @@ export interface ExpenseReportDocument extends Document {
   pendingBalanceFromReportId?: Types.ObjectId
   /** Monto heredado desde la rendición de origen. */
   pendingBalanceAmount?: number
+  /** Saldos de la bolsa consumidos para financiar esta rendición directa. */
+  saldoIds?: Types.ObjectId[]
   accountNumber?: string
   idDocument?: string
   peopleNames?: string[]
@@ -445,6 +447,9 @@ export class ExpenseReport {
 
   @Prop({ required: false })
   pendingBalanceAmount?: number
+
+  @Prop({ type: [{ type: Types.ObjectId, ref: 'Saldo' }], default: undefined })
+  saldoIds?: Types.ObjectId[]
 
   // ─── Campos exclusivos de viático ────────────────────────────────────────────
 

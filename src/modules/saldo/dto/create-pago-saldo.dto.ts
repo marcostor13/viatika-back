@@ -17,6 +17,10 @@ export class CreatePagoSaldoDto {
   scannedAmount?: number // monto crudo del OCR (auditoría)
 
   @IsString()
+  @IsOptional()
+  concepto?: string // gestión / motivo libre del pago (opcional)
+
+  @IsString()
   receiptUrl: string
 
   @IsString()

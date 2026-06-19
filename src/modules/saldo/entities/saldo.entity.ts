@@ -37,6 +37,8 @@ export interface SaldoDocument extends Document {
   type: SaldoType
   amount: number
   status: SaldoStatus
+  /** Gestión / motivo libre que escribe quien origina el saldo (opcional). */
+  concepto?: string
   projectId?: Types.ObjectId
   sourceReportId?: Types.ObjectId
   deposit?: SaldoDepositInfo
@@ -68,6 +70,10 @@ export class Saldo {
 
   @Prop({ required: true, default: 'available', enum: ['available', 'consumed'] })
   status: SaldoStatus
+
+  /** Gestión / motivo libre que escribe quien origina el saldo (opcional). */
+  @Prop({ type: String, required: false, trim: true })
+  concepto?: string
 
   /** Centro de costo. Nulo para type `pago`. */
   @Prop({ type: Types.ObjectId, ref: 'Project', required: false })

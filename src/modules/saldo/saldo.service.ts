@@ -37,6 +37,7 @@ export class SaldoService {
       type: 'pago',
       amount: dto.amount,
       status: 'available',
+      concepto: dto.concepto?.trim() || undefined,
       deposit: {
         amount: dto.amount,
         scannedAmount: dto.scannedAmount,

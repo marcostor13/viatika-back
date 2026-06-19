@@ -803,6 +803,10 @@ export class ExpenseReportService implements OnModuleInit {
     if (!report) {
       throw new NotFoundException(`Expense report with ID ${id} not found`)
     }
+    // Auto-sanado (lazy, idempotente): directa financiada con bolsa ya aprobada cuyo
+    // sobrante aún no se reflejó en la bolsa (aprobadas antes de esta funcionalidad).
+    // Se corrige sola al abrir el detalle, una rendición a la vez, sin barrido global.
+    await this.ensureDirectaBolsaRemnant(id, report).catch(() => undefined)
     const normalized = this.normalizeReportExpenseDates(report)
       // Flag derivado para el front: si la caja chica fue finalizada, el
       // colaborador ya no puede subir gastos (botón "Añadir Gasto" oculto).
@@ -1091,6 +1095,10 @@ export class ExpenseReportService implements OnModuleInit {
     if (dto.status === 'approved') {
       const owner = fullyUpdatedReport.userId as any
       const ownerId = owner?._id ? String(owner._id) : String(owner)
+
+      // Directa financiada con la bolsa: el sobrante regresa a la bolsa del colaborador.
+      await this.settleDirectaFinanciadaConBolsa(id, fullyUpdatedReport, ownerId)
+
       const reportTitle = fullyUpdatedReport.title
       const budgetDisplay =
         await this.computeReportBudgetDisplay(fullyUpdatedReport)
@@ -2061,6 +2069,107 @@ export class ExpenseReportService implements OnModuleInit {
       .exec()
   }
 
+  /**
+   * Fondos entregados al colaborador en una rendición directa: depósito de
+   * contabilidad, saldo heredado de otra rendición, o financiamiento con la bolsa
+   * de saldos (`saldoIds` → presupuesto). Base para calcular devolución vs reembolso.
+   */
+  private directaFundsGiven(report: any): number {
+    const deposit = Number(report?.directaDeposit?.amount ?? 0)
+    if (deposit > 0) return deposit
+    const inherited = Number(report?.pendingBalanceAmount ?? 0)
+    if (report?.pendingBalanceFromReportId && inherited > 0) return inherited
+    if (Array.isArray(report?.saldoIds) && report.saldoIds.length > 0) {
+      return Number(report?.budget ?? 0)
+    }
+    return 0
+  }
+
+  /**
+   * Al aprobar una rendición directa financiada con la bolsa de saldos, el
+   * sobrante (presupuesto − gastado) regresa automáticamente a la bolsa del
+   * colaborador como saldo remanente (`rendicion_directa`). Si luego decide
+   * devolverlo a contabilidad, ese remanente se descuenta. Idempotente por rendición.
+   */
+  private async settleDirectaFinanciadaConBolsa(
+    reportId: string,
+    report: any,
+    ownerId: string
+  ): Promise<void> {
+    const saldoIds = report?.saldoIds
+    if (!report?.isDirecta || !Array.isArray(saldoIds) || saldoIds.length === 0) {
+      return
+    }
+    const budget = Number(report?.budget ?? 0)
+    const populated = await this.expenseReportModel
+      .findById(reportId)
+      .populate('expenseIds', 'total')
+      .lean()
+      .exec()
+    const gastado = (((populated as any)?.expenseIds as any[]) ?? []).reduce(
+      (s, e) => s + (Number(e?.total) || 0),
+      0
+    )
+    const difference = budget - gastado
+    if (Math.abs(difference) >= 0.01) {
+      await this.updateSettlement(reportId, {
+        advanceTotal: budget,
+        expenseTotal: gastado,
+        difference,
+        type: difference > 0 ? 'devolucion' : 'reembolso',
+        settledAt: new Date(),
+        // El sobrante quedó disponible en la bolsa (no exige comprobante para cerrar).
+        toBolsa: difference > 0,
+      })
+    }
+    if (difference > 0.01) {
+      try {
+        await this.saldoService.createFromRemnant({
+          userId: ownerId,
+          clientId: report.clientId,
+          projectId: report?.projectId ?? null,
+          sourceReportId: reportId,
+          amount: difference,
+          type: 'rendicion_directa',
+        })
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.logger.error(`Remanente directa-bolsa ${reportId}: ${msg}`)
+      }
+    }
+  }
+
+  /**
+   * Garantiza (perezosamente, al abrir el detalle) que una directa financiada con
+   * bolsa ya aprobada con sobrante tenga su remanente en la bolsa. Solo actúa si aún
+   * no fue liquidada (`!settlement`) y hay sobrante; idempotente y no bloqueante.
+   */
+  private async ensureDirectaBolsaRemnant(
+    reportId: string,
+    report: any
+  ): Promise<void> {
+    const status = report?.status
+    const saldoIds = report?.saldoIds
+    if (
+      !report?.isDirecta ||
+      !Array.isArray(saldoIds) ||
+      saldoIds.length === 0 ||
+      (status !== 'approved' && status !== 'closed') ||
+      report?.settlement
+    ) {
+      return
+    }
+    const budget = Number(report?.budget ?? 0)
+    const gastado = ((report?.expenseIds as any[]) ?? []).reduce(
+      (s, e) => s + (Number(e?.total) || 0),
+      0
+    )
+    if (budget - gastado <= 0.01) return
+    const owner = report.userId
+    const ownerId = owner?._id ? String(owner._id) : String(owner)
+    await this.settleDirectaFinanciadaConBolsa(reportId, report, ownerId)
+  }
+
   async setApprovedBy(reportId: string, userId: string) {
     await this.expenseReportModel
       .findByIdAndUpdate(reportId, {
@@ -2327,7 +2436,7 @@ export class ExpenseReportService implements OnModuleInit {
       )
       // Si no hay anticipos activos, el colaborador gastó de su propio bolsillo (saldo = 0 - gastos).
       // Excepción: en una rendición directa con depósito de Contabilidad, ese depósito funciona como anticipo.
-      const depositTotal = Number((report as any).directaDeposit?.amount ?? 0)
+      const depositTotal = this.directaFundsGiven(report)
       const advanceTotal =
         activeAdvances.reduce(
           (s: number, a: any) =>
@@ -2550,7 +2659,7 @@ export class ExpenseReportService implements OnModuleInit {
         const activeAdvances = linkedAdvances.filter((a: any) =>
           ['approved', 'partially_paid', 'paid', 'settled'].includes(a.status)
         )
-        const depositTotal = Number((report as any).directaDeposit?.amount ?? 0)
+        const depositTotal = this.directaFundsGiven(report)
         const advanceTotal =
           activeAdvances.reduce(
             (s: number, a: any) =>
@@ -2567,7 +2676,8 @@ export class ExpenseReportService implements OnModuleInit {
       }
       if (
         effectiveSettlementType === 'devolucion' &&
-        !(report as any).returnVoucher
+        !(report as any).returnVoucher &&
+        !(report as any).settlement?.toBolsa
       ) {
         errors.push(
           'El colaborador debe adjuntar el comprobante de devolución antes de cerrar la rendición.'
@@ -2802,6 +2912,15 @@ export class ExpenseReportService implements OnModuleInit {
     await this.expenseReportModel
       .findByIdAndUpdate(id, { $set: { returnVoucher: voucher } })
       .exec()
+
+    // Si el sobrante había quedado en la bolsa (directa financiada con saldo) y el
+    // colaborador decide devolverlo a contabilidad, se descuenta de la bolsa.
+    try {
+      await this.saldoService.removeRemnantBySourceReport(id)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      this.logger.error(`Descontar remanente al devolver ${id}: ${msg}`)
+    }
 
     const amountFormatted = Math.abs(
       Number(notifySettlement.difference ?? 0)

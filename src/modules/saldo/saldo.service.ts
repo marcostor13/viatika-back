@@ -121,6 +121,27 @@ export class SaldoService {
     return saldo
   }
 
+  /**
+   * Descuenta de la bolsa el saldo remanente generado por una rendición (cuando el
+   * colaborador decide devolver el sobrante a contabilidad en lugar de conservarlo).
+   * Devuelve el monto descontado.
+   */
+  async removeRemnantBySourceReport(
+    sourceReportId: string | Types.ObjectId
+  ): Promise<number> {
+    const remnant = await this.saldoModel
+      .findOne({
+        sourceReportId: new Types.ObjectId(String(sourceReportId)),
+        status: 'available',
+      })
+      .exec()
+    if (!remnant) return 0
+    remnant.status = 'consumed'
+    remnant.consumedAt = new Date()
+    await remnant.save()
+    return Number(remnant.amount) || 0
+  }
+
   /** Todos los saldos disponibles del colaborador (página Saldo). */
   async findAvailableByUser(userId: string, clientId: string) {
     return this.saldoModel

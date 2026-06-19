@@ -316,6 +316,18 @@ export class ExpenseReportService implements OnModuleInit {
         context: 'rendicion_directa',
         reportId: String(savedReport._id),
       })
+
+      // Las rendiciones que originaron los remanentes consumidos quedan resueltas
+      // ("saldo trasladado a esta nueva rendición") → se muestran como cerradas.
+      const sourceReportIds =
+        await this.saldoService.getSourceReportIds(saldoIds)
+      for (const srcId of sourceReportIds) {
+        await this.expenseReportModel
+          .findByIdAndUpdate(srcId, {
+            pendingBalanceUsedInRendicionId: savedReport._id,
+          })
+          .exec()
+      }
     }
 
     // Si se creó desde saldo de otra rendición directa, marcar la rendición fuente
@@ -807,6 +819,9 @@ export class ExpenseReportService implements OnModuleInit {
     // sobrante aún no se reflejó en la bolsa (aprobadas antes de esta funcionalidad).
     // Se corrige sola al abrir el detalle, una rendición a la vez, sin barrido global.
     await this.ensureDirectaBolsaRemnant(id, report).catch(() => undefined)
+    // Auto-sanado (lazy): si el remanente de esta rendición ya fue consumido por otra
+    // pero la fuente no quedó marcada como "trasladada", se corrige al abrirla.
+    await this.ensureSourceMarkedIfRemnantConsumed(id, report).catch(() => undefined)
     const normalized = this.normalizeReportExpenseDates(report)
       // Flag derivado para el front: si la caja chica fue finalizada, el
       // colaborador ya no puede subir gastos (botón "Añadir Gasto" oculto).
@@ -2168,6 +2183,26 @@ export class ExpenseReportService implements OnModuleInit {
     const owner = report.userId
     const ownerId = owner?._id ? String(owner._id) : String(owner)
     await this.settleDirectaFinanciadaConBolsa(reportId, report, ownerId)
+  }
+
+  /**
+   * Si el remanente que originó esta rendición directa ya fue consumido por otra
+   * (financiándola con la bolsa) pero la fuente no quedó marcada como "trasladada",
+   * la marca al abrir el detalle. Idempotente y no bloqueante.
+   */
+  private async ensureSourceMarkedIfRemnantConsumed(
+    reportId: string,
+    report: any
+  ): Promise<void> {
+    if (!report?.isDirecta || report?.pendingBalanceUsedInRendicionId) return
+    const consumer = await this.saldoService.findRemnantConsumer(reportId)
+    if (!consumer) return
+    await this.expenseReportModel
+      .findByIdAndUpdate(reportId, {
+        pendingBalanceUsedInRendicionId: new Types.ObjectId(consumer),
+      })
+      .exec()
+    report.pendingBalanceUsedInRendicionId = new Types.ObjectId(consumer)
   }
 
   async setApprovedBy(reportId: string, userId: string) {

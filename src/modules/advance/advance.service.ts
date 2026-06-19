@@ -1221,6 +1221,19 @@ export class AdvanceService {
       .exec()
   }
 
+  /** Advances sin ExpenseReport vinculado (modelo legado sin fase de gastos iniciada). */
+  async findOrphaned(clientId: string) {
+    return this.advanceModel
+      .find({
+        clientId: new Types.ObjectId(clientId),
+        expenseReportId: { $exists: false },
+      })
+      .populate('userId', 'name email')
+      .populate('projectId', 'code name')
+      .sort({ createdAt: -1 })
+      .exec()
+  }
+
   async findForViaticosPage(opts: {
     requesterId: string
     requesterRole: string
@@ -1728,9 +1741,15 @@ export class AdvanceService {
    * Fase 6 — Al aprobar la rendición: liquida en bloque los anticipos pagados vinculados,
    * guarda el settlement en la rendición y avisa a contabilidad si corresponde reembolso al colaborador.
    */
-  async liquidateExpenseReport(reportId: string): Promise<void> {
+  async liquidateExpenseReport(reportId: string, fromClose = false): Promise<void> {
     const report = await this.expenseReportService.findOneWithAdvances(reportId)
     if (!report || report.status !== 'approved') {
+      return
+    }
+
+    // Rendiciones de tipo viático se liquidan con su propio método (no tienen Advance externo).
+    if ((report as any).type === 'viatico') {
+      await this.expenseReportService.liquidateViaticoReport(reportId, fromClose)
       return
     }
 

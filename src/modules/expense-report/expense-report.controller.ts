@@ -24,6 +24,9 @@ import { ROLES } from '../auth/enums/roles.enum'
 import { AuditLogService } from '../audit-log/audit-log.service'
 import { RegisterReimbursementPaymentDto } from './dto/register-reimbursement-payment.dto'
 import { CreateDirectaDepositDto } from './dto/create-directa-deposit.dto'
+import { CreateViaticoExpenseReportDto } from './dto/create-viatico-expense-report.dto'
+import { PayViaticoDto } from './dto/pay-viatico.dto'
+import { ResubmitViaticoDto } from './dto/resubmit-viatico.dto'
 
 @Controller('expense-report')
 export class ExpenseReportController {
@@ -607,5 +610,200 @@ export class ExpenseReportController {
       clientId: req.user.clientId,
     })
     return result
+  }
+
+  // ─── VIÁTICOS UNIFICADOS ─────────────────────────────────────────────────────
+
+  /** Lista de viáticos con filtros (admins, coordinadores, colaboradores con módulo). */
+  @UseGuards(AuthGuard('jwt'))
+  @Get('viaticos/list')
+  findViaticos(
+    @Request() req: any,
+    @Query('status') status?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+  ) {
+    const role = req.user?.roles?.[0] ?? ''
+    const clientId = this.resolveClientId(req)
+    return this.expenseReportService.findViaticos({
+      requesterId: String(req.user._id || req.user.sub),
+      requesterRole: role,
+      requesterPermissions: req.user?.permissions,
+      clientId,
+      status,
+      dateFrom,
+      dateTo,
+    })
+  }
+
+  /** Mis viáticos (colaborador). */
+  @UseGuards(AuthGuard('jwt'))
+  @Get('viaticos/my')
+  findMyViaticos(@Request() req: any) {
+    const userId = String(req.user._id || req.user.sub)
+    const clientId = this.resolveClientId(req)
+    return this.expenseReportService.findMyViaticos(userId, clientId)
+  }
+
+  /** Viáticos con devoluciones pendientes (contabilidad). */
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
+  @Get('viaticos/pending-returns')
+  findViaticosPendingReturns(@Request() req: any) {
+    const clientId = this.resolveClientId(req)
+    return this.expenseReportService.findViaticosPendingReturns(clientId)
+  }
+
+  /** Crear solicitud de viático (nueva rendición type='viatico'). */
+  @UseGuards(AuthGuard('jwt'))
+  @Post('viatico')
+  async createViatico(
+    @Body() dto: CreateViaticoExpenseReportDto,
+    @Request() req: any
+  ) {
+    const userId = String(req.user._id || req.user.sub)
+    const clientId = this.resolveClientId(req)
+    if (!clientId) throw new BadRequestException('Cliente no identificado en la sesión.')
+    const result = await this.expenseReportService.createViatico(dto, userId, clientId)
+    await this.auditLogService.log({
+      userId: req.user._id || req.user.sub,
+      userName: req.user.name || req.user.email || 'Usuario',
+      action: 'create_viatico',
+      module: 'viaticos',
+      entityId: (result as any)?._id?.toString(),
+      clientId: req.user.clientId,
+    })
+    return result
+  }
+
+  /** Aprobar viático nivel 1. */
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD)
+  @Patch(':id/viatico/approve-l1')
+  async approveViaticoL1(
+    @Param('id') id: string,
+    @Body() body: { notes?: string },
+    @Request() req: any
+  ) {
+    const userRole = req.user?.roles?.[0] ?? ''
+    const result = await this.expenseReportService.approveViaticoL1(
+      id,
+      { approvedBy: String(req.user._id || req.user.sub), notes: body.notes },
+      userRole,
+      req.user?.permissions
+    )
+    await this.auditLogService.log({ userId: req.user._id || req.user.sub, userName: req.user.name || req.user.email || 'Usuario', action: 'approve_viatico_l1', module: 'viaticos', entityId: id, clientId: req.user.clientId })
+    return result
+  }
+
+  /** Aprobar viático nivel 2. */
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD)
+  @Patch(':id/viatico/approve-l2')
+  async approveViaticoL2(
+    @Param('id') id: string,
+    @Body() body: { notes?: string },
+    @Request() req: any
+  ) {
+    const userRole = req.user?.roles?.[0] ?? ''
+    const result = await this.expenseReportService.approveViaticoL2(
+      id,
+      { approvedBy: String(req.user._id || req.user.sub), notes: body.notes },
+      userRole,
+      req.user?.permissions
+    )
+    await this.auditLogService.log({ userId: req.user._id || req.user.sub, userName: req.user.name || req.user.email || 'Usuario', action: 'approve_viatico_l2', module: 'viaticos', entityId: id, clientId: req.user.clientId })
+    return result
+  }
+
+  /** Rechazar viático. */
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD)
+  @Patch(':id/viatico/reject')
+  async rejectViatico(
+    @Param('id') id: string,
+    @Body() body: { rejectionReason: string },
+    @Request() req: any
+  ) {
+    const userRole = req.user?.roles?.[0] ?? ''
+    const result = await this.expenseReportService.rejectViatico(
+      id,
+      { rejectedBy: String(req.user._id || req.user.sub), rejectionReason: body.rejectionReason },
+      userRole,
+      req.user?.permissions
+    )
+    await this.auditLogService.log({ userId: req.user._id || req.user.sub, userName: req.user.name || req.user.email || 'Usuario', action: 'reject_viatico', module: 'viaticos', entityId: id, details: body.rejectionReason, clientId: req.user.clientId })
+    return result
+  }
+
+  /** Reenviar viático tras rechazo. */
+  @UseGuards(AuthGuard('jwt'))
+  @Patch(':id/viatico/resubmit')
+  async resubmitViatico(
+    @Param('id') id: string,
+    @Body() dto: ResubmitViaticoDto,
+    @Request() req: any
+  ) {
+    const actingUserId = String(req.user._id || req.user.sub)
+    const clientId = this.resolveClientId(req)
+    const result = await this.expenseReportService.resubmitViatico(id, dto, actingUserId, clientId)
+    await this.auditLogService.log({ userId: req.user._id || req.user.sub, userName: req.user.name || req.user.email || 'Usuario', action: 'resubmit_viatico', module: 'viaticos', entityId: id, clientId: req.user.clientId })
+    return result
+  }
+
+  /** Registrar pago del viático (tesorería / canApproveL2). */
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD)
+  @Patch(':id/viatico/register-payment')
+  async registerViaticoPayment(
+    @Param('id') id: string,
+    @Body() dto: PayViaticoDto,
+    @Request() req: any
+  ) {
+    const userRole = req.user?.roles?.[0] ?? ''
+    const result = await this.expenseReportService.registerViaticoPayment(id, dto, userRole, req.user?.permissions)
+    await this.auditLogService.log({ userId: req.user._id || req.user.sub, userName: req.user.name || req.user.email || 'Usuario', action: 'register_viatico_payment', module: 'viaticos', entityId: id, clientId: req.user.clientId })
+    return result
+  }
+
+  /** Cancelar viático (colaborador propietario en pending_l1). */
+  @UseGuards(AuthGuard('jwt'))
+  @Patch(':id/viatico/cancel')
+  async cancelViatico(@Param('id') id: string, @Request() req: any) {
+    const userId = String(req.user._id || req.user.sub)
+    const result = await this.expenseReportService.cancelViatico(id, userId)
+    await this.auditLogService.log({ userId: req.user._id || req.user.sub, userName: req.user.name || req.user.email || 'Usuario', action: 'cancel_viatico', module: 'viaticos', entityId: id, clientId: req.user.clientId })
+    return result
+  }
+
+  /** Iniciar flujo de devolución de saldo. */
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
+  @Patch(':id/viatico/return/initiate')
+  initiateViaticoReturn(@Param('id') id: string) {
+    return this.expenseReportService.initiateViaticoReturnTracking(id)
+  }
+
+  /** Colaborador sube comprobante de devolución. */
+  @UseGuards(AuthGuard('jwt'))
+  @Patch(':id/viatico/return/proof')
+  uploadViaticoReturnProof(
+    @Param('id') id: string,
+    @Body() body: { depositDate: Date; amountReturned: number; bankOrigin: string; operationNumber: string; fileUrl: string; fileKey?: string; note?: string; scannedAmount?: number; operationDate?: string; operationTime?: string; titular?: string }
+  ) {
+    return this.expenseReportService.uploadViaticoReturnProof(id, body)
+  }
+
+  /** Contabilidad valida o rechaza comprobante de devolución. */
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
+  @Patch(':id/viatico/return/validate')
+  validateViaticoReturn(
+    @Param('id') id: string,
+    @Body() body: { approved: boolean; rejectionReason?: string },
+    @Request() req: any
+  ) {
+    const validatedBy = String(req.user._id || req.user.sub)
+    return this.expenseReportService.validateViaticoReturn(id, body.approved, validatedBy, body.rejectionReason)
   }
 }

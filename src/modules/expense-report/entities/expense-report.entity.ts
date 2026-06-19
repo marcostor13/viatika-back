@@ -1,5 +1,13 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose'
 import { Document, Types } from 'mongoose'
+import {
+  AdvanceLineItem,
+  AdvancePayment,
+  ApprovalEntry,
+  CoordinatorNotificationLog,
+  PaymentInfo,
+  ReturnRecord,
+} from '../../advance/entities/advance.entity'
 
 export type ExpenseReportStatus =
   | 'solicited'
@@ -11,6 +19,15 @@ export type ExpenseReportStatus =
   | 'reimbursed'
   | 'closed'
   | 'cancelled'
+  | 'pending_l1'
+  | 'pending_l2'
+  | 'viatico_approved'
+  | 'partially_paid'
+  | 'paid'
+  | 'settled'
+  | 'returned'
+
+export type ExpenseReportType = 'rendicion' | 'viatico' | 'directa' | 'caja_chica'
 
 export type ReopeningStatus = 'none' | 'requested' | 'approved'
 
@@ -102,6 +119,7 @@ export interface ReimbursementPaymentInfo {
 }
 
 export interface ExpenseReportDocument extends Document {
+  type?: ExpenseReportType
   title: string
   description: string
   budget: number
@@ -129,7 +147,6 @@ export interface ExpenseReportDocument extends Document {
   pendingBalanceFromReportId?: Types.ObjectId
   /** Monto heredado desde la rendición de origen. */
   pendingBalanceAmount?: number
-  // New fields
   accountNumber?: string
   idDocument?: string
   peopleNames?: string[]
@@ -148,10 +165,38 @@ export interface ExpenseReportDocument extends Document {
   contabilidadApprovedAt?: Date
   contabilidadApprovedBy?: Types.ObjectId
   reopenHistory?: ReopenRecord[]
+  // Campos exclusivos de viático
+  viaticoAmount?: number
+  viaticoRequiredLevels?: number
+  viaticoApprovalLevel?: number
+  viaticoApprovalHistory?: ApprovalEntry[]
+  viaticoPaidAmount?: number
+  viaticoPayments?: AdvancePayment[]
+  viaticoPaymentInfo?: PaymentInfo
+  viaticoLines?: AdvanceLineItem[]
+  viaticoPlace?: string
+  viaticoLat?: number
+  viaticoLng?: number
+  viaticoStartDate?: Date
+  viaticoEndDate?: Date
+  viaticoObservations?: string
+  viaticoSolicitudVersion?: number
+  viaticoCoordinatorNotification?: CoordinatorNotificationLog
+  viaticoReturnRecord?: ReturnRecord
+  viaticoBudgetCommitmentRecorded?: boolean
+  viaticoRejectedBy?: string
+  viaticoRejectionReason?: string
 }
 
 @Schema({ timestamps: true })
 export class ExpenseReport {
+  @Prop({
+    required: false,
+    default: 'rendicion',
+    enum: ['rendicion', 'viatico', 'directa', 'caja_chica'],
+  })
+  type?: ExpenseReportType
+
   @Prop({ required: false })
   title: string
 
@@ -184,7 +229,14 @@ export class ExpenseReport {
   @Prop({ required: true, type: Types.ObjectId, ref: 'Client' })
   clientId: Types.ObjectId
 
-  @Prop({ default: 'open' })
+  @Prop({
+    default: 'open',
+    enum: [
+      'solicited', 'open', 'submitted', 'pending_accounting',
+      'approved', 'rejected', 'reimbursed', 'closed', 'cancelled',
+      'pending_l1', 'pending_l2', 'viatico_approved', 'partially_paid', 'paid', 'settled', 'returned',
+    ],
+  })
   status: ExpenseReportStatus
 
   /** Motivo cuando el administrador rechaza la rendición (visible para el colaborador) */
@@ -393,12 +445,125 @@ export class ExpenseReport {
 
   @Prop({ required: false })
   pendingBalanceAmount?: number
+
+  // ─── Campos exclusivos de viático ────────────────────────────────────────────
+
+  @Prop({ type: Number, required: false })
+  viaticoAmount?: number
+
+  @Prop({ type: Number, default: 1 })
+  viaticoRequiredLevels?: number
+
+  @Prop({ type: Number, default: 0 })
+  viaticoApprovalLevel?: number
+
+  @Prop({
+    type: [
+      {
+        level: { type: Number },
+        approvedBy: { type: String },
+        action: { type: String, enum: ['approved', 'rejected', 'resubmitted'] },
+        notes: { type: String },
+        date: { type: Date },
+        _id: false,
+      },
+    ],
+    default: [],
+  })
+  viaticoApprovalHistory?: ApprovalEntry[]
+
+  @Prop({ type: Number, required: false })
+  viaticoPaidAmount?: number
+
+  @Prop({
+    type: [
+      {
+        amount: { type: Number, required: true },
+        method: { type: String, enum: ['transferencia_bancaria', 'efectivo', 'cheque'] },
+        bankName: { type: String },
+        accountNumber: { type: String },
+        cci: { type: String },
+        transferDate: { type: Date },
+        reference: { type: String },
+        paymentReceiptUrl: { type: String, required: true },
+        paymentReceiptFileName: { type: String },
+        paymentReceiptMimeType: { type: String },
+        paymentReceiptSizeBytes: { type: Number },
+        scannedAmount: { type: Number },
+        scannedTitular: { type: String },
+        operationNumber: { type: String },
+        operationDate: { type: String },
+        operationTime: { type: String },
+        createdAt: { type: Date },
+        _id: false,
+      },
+    ],
+    default: undefined,
+  })
+  viaticoPayments?: AdvancePayment[]
+
+  @Prop({ type: Object, required: false })
+  viaticoPaymentInfo?: PaymentInfo
+
+  @Prop({
+    type: [
+      {
+        categoryId: { type: Types.ObjectId, ref: 'Category', required: true },
+        detalle: { type: String },
+        importe: { type: Number, required: true },
+        peopleCount: { type: Number, required: true },
+        glpPerDay: { type: Number, required: true },
+        days: { type: Number, required: true },
+        lineTotal: { type: Number, required: true },
+        _id: false,
+      },
+    ],
+    default: undefined,
+  })
+  viaticoLines?: AdvanceLineItem[]
+
+  @Prop({ required: false })
+  viaticoPlace?: string
+
+  @Prop({ required: false })
+  viaticoLat?: number
+
+  @Prop({ required: false })
+  viaticoLng?: number
+
+  @Prop({ type: Date, required: false })
+  viaticoStartDate?: Date
+
+  @Prop({ type: Date, required: false })
+  viaticoEndDate?: Date
+
+  @Prop({ required: false })
+  viaticoObservations?: string
+
+  @Prop({ type: Number, default: 1 })
+  viaticoSolicitudVersion?: number
+
+  @Prop({ type: Object, required: false })
+  viaticoCoordinatorNotification?: CoordinatorNotificationLog
+
+  @Prop({ type: Object, required: false })
+  viaticoReturnRecord?: ReturnRecord
+
+  @Prop({ type: Boolean, default: false })
+  viaticoBudgetCommitmentRecorded?: boolean
+
+  @Prop({ type: String, required: false })
+  viaticoRejectedBy?: string
+
+  @Prop({ type: String, required: false })
+  viaticoRejectionReason?: string
 }
 
 export const ExpenseReportSchema = SchemaFactory.createForClass(ExpenseReport)
 
-// Código de rendición directa: único por empresa (sparse: solo aplica a las que lo tienen).
+// Código de rendición directa: único por empresa, solo cuando codigo es un string (no null/absent).
+// partialFilterExpression es más robusto que sparse:true porque excluye también los null explícitos.
 ExpenseReportSchema.index(
   { clientId: 1, codigo: 1 },
-  { unique: true, sparse: true }
+  { unique: true, partialFilterExpression: { codigo: { $type: 'string' } } }
 )

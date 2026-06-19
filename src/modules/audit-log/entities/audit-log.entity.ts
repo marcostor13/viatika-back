@@ -61,6 +61,13 @@ export type AuditAction =
   | 'upsert_accounting_config'
   | 'download_accounting_entries'
   | 'update_expense_desglose'
+  | 'create_viatico'
+  | 'approve_viatico_l1'
+  | 'approve_viatico_l2'
+  | 'reject_viatico'
+  | 'resubmit_viatico'
+  | 'register_viatico_payment'
+  | 'cancel_viatico'
 
 @Schema({ timestamps: true })
 export class AuditLog {

@@ -1944,7 +1944,7 @@ export class ExpenseReportService implements OnModuleInit {
     const reports = await this.expenseReportModel
       .find(query)
       .select(
-        '_id codigo userId title motivo gestion budget status createdAt createdBy directaDeposit expenseIds pendingBalanceFromReportId pendingBalanceAmount saldoIds'
+        '_id codigo userId title motivo gestion budget status createdAt createdBy directaDeposit expenseIds pendingBalanceFromReportId pendingBalanceAmount saldoIds pendingBalanceUsedInRendicionId pendingBalanceUsedInAdvanceId returnVoucher'
       )
       .populate('userId', 'name email')
       .populate({
@@ -1994,6 +1994,12 @@ export class ExpenseReportService implements OnModuleInit {
         title: r.title ?? null,
         motivo: r.motivo ?? null,
         status: r.status ?? null,
+        // Cerrada (a efectos de label): saldo trasladado a otra rendición/anticipo o devuelto.
+        effectivelyClosed:
+          r.status === 'closed' ||
+          !!r.pendingBalanceUsedInRendicionId ||
+          !!r.pendingBalanceUsedInAdvanceId ||
+          !!r.returnVoucher,
         createdAt: r.createdAt,
         hasDeposit: hasFunds,
         deposited,

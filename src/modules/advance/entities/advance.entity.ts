@@ -68,7 +68,7 @@ export interface PaymentInfo {
   cci?: string
   transferDate: Date
   reference?: string
-  paymentReceiptUrl: string
+  paymentReceiptUrl?: string
   paymentReceiptFileName?: string
   paymentReceiptMimeType?: string
   paymentReceiptSizeBytes?: number
@@ -87,7 +87,7 @@ export interface AdvancePayment {
   cci?: string
   transferDate: Date
   reference?: string
-  paymentReceiptUrl: string
+  paymentReceiptUrl?: string
   paymentReceiptFileName?: string
   paymentReceiptMimeType?: string
   paymentReceiptSizeBytes?: number
@@ -298,7 +298,9 @@ export class Advance {
       cci: { type: String },
       transferDate: { type: Date },
       reference: { type: String },
-      paymentReceiptUrl: { type: String, required: true },
+      // Opcional: en pagos en efectivo no hay comprobante. La obligatoriedad
+      // para transferencia/cheque se valida en advance.service.registerPayment.
+      paymentReceiptUrl: { type: String },
       paymentReceiptFileName: { type: String },
       paymentReceiptMimeType: { type: String },
       paymentReceiptSizeBytes: { type: Number },
@@ -320,7 +322,9 @@ export class Advance {
         cci: { type: String },
         transferDate: { type: Date },
         reference: { type: String },
-        paymentReceiptUrl: { type: String, required: true },
+        // Opcional: efectivo no lleva comprobante; transferencia/cheque se
+        // valida en advance.service.registerPayment.
+        paymentReceiptUrl: { type: String },
         paymentReceiptFileName: { type: String },
         paymentReceiptMimeType: { type: String },
         paymentReceiptSizeBytes: { type: Number },

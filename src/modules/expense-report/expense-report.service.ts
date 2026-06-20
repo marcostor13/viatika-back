@@ -2143,12 +2143,16 @@ export class ExpenseReportService implements OnModuleInit {
     if (!report?.isDirecta || (!hasBolsa && !hasInherited)) {
       return
     }
-    // Si esta rendición ya entregó su sobrante a otra (saldo trasladado a una nueva
-    // rendición o anticipo), no debe volver a publicarlo en la bolsa: ese sobrante ya
-    // está representado como presupuesto de la rendición destino. Evita doble conteo.
+    // El sobrante no debe (re)publicarse en la bolsa si ya tuvo otro destino:
+    // - trasladado a otra rendición/anticipo (pendingBalanceUsedIn*): ya está
+    //   representado como presupuesto de la rendición destino.
+    // - devuelto a contabilidad (returnVoucher): el dinero regresó a la empresa,
+    //   no puede seguir en la bolsa del colaborador.
+    // En ambos casos, evita el doble conteo.
     if (
       report?.pendingBalanceUsedInRendicionId ||
-      report?.pendingBalanceUsedInAdvanceId
+      report?.pendingBalanceUsedInAdvanceId ||
+      report?.returnVoucher
     ) {
       return
     }

@@ -127,7 +127,8 @@ export class SaldoService {
    * Devuelve el monto descontado.
    */
   async removeRemnantBySourceReport(
-    sourceReportId: string | Types.ObjectId
+    sourceReportId: string | Types.ObjectId,
+    consumedByReportId?: string | Types.ObjectId
   ): Promise<number> {
     const remnant = await this.saldoModel
       .findOne({
@@ -138,6 +139,9 @@ export class SaldoService {
     if (!remnant) return 0
     remnant.status = 'consumed'
     remnant.consumedAt = new Date()
+    if (consumedByReportId) {
+      remnant.consumedByReportId = new Types.ObjectId(String(consumedByReportId))
+    }
     await remnant.save()
     return Number(remnant.amount) || 0
   }

@@ -337,6 +337,21 @@ export class ExpenseReportService implements OnModuleInit {
           pendingBalanceUsedInRendicionId: savedReport._id,
         })
         .exec()
+
+      // Si la rendición fuente había dejado su sobrante en la bolsa, consumirlo: el
+      // dinero se trasladó al presupuesto de esta nueva rendición. Evita el doble
+      // conteo (el saldo seguía mostrándose como disponible).
+      try {
+        await this.saldoService.removeRemnantBySourceReport(
+          createExpenseReportDto.pendingBalanceFromReportId,
+          String(savedReport._id)
+        )
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.logger.error(
+          `Consumir remanente de bolsa al heredar saldo de ${createExpenseReportDto.pendingBalanceFromReportId}: ${msg}`
+        )
+      }
     }
 
     console.log(

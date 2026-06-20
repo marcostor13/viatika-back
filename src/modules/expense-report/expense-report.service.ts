@@ -2132,8 +2132,15 @@ export class ExpenseReportService implements OnModuleInit {
     report: any,
     ownerId: string
   ): Promise<void> {
-    const saldoIds = report?.saldoIds
-    if (!report?.isDirecta || !Array.isArray(saldoIds) || saldoIds.length === 0) {
+    // El sobrante regresa a la bolsa cuando los fondos venían del propio colaborador:
+    // saldos de la bolsa (saldoIds) o saldo heredado de otra rendición
+    // (pendingBalanceFromReportId). Las directas con depósito de contabilidad
+    // mantienen su flujo de devolución y no entran aquí.
+    const hasBolsa = Array.isArray(report?.saldoIds) && report.saldoIds.length > 0
+    const hasInherited =
+      !!report?.pendingBalanceFromReportId &&
+      Number(report?.pendingBalanceAmount ?? 0) > 0
+    if (!report?.isDirecta || (!hasBolsa && !hasInherited)) {
       return
     }
     const budget = Number(report?.budget ?? 0)
@@ -2185,11 +2192,13 @@ export class ExpenseReportService implements OnModuleInit {
     report: any
   ): Promise<void> {
     const status = report?.status
-    const saldoIds = report?.saldoIds
+    const hasBolsa = Array.isArray(report?.saldoIds) && report.saldoIds.length > 0
+    const hasInherited =
+      !!report?.pendingBalanceFromReportId &&
+      Number(report?.pendingBalanceAmount ?? 0) > 0
     if (
       !report?.isDirecta ||
-      !Array.isArray(saldoIds) ||
-      saldoIds.length === 0 ||
+      (!hasBolsa && !hasInherited) ||
       (status !== 'approved' && status !== 'closed') ||
       report?.settlement
     ) {

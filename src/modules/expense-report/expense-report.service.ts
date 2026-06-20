@@ -2143,6 +2143,15 @@ export class ExpenseReportService implements OnModuleInit {
     if (!report?.isDirecta || (!hasBolsa && !hasInherited)) {
       return
     }
+    // Si esta rendición ya entregó su sobrante a otra (saldo trasladado a una nueva
+    // rendición o anticipo), no debe volver a publicarlo en la bolsa: ese sobrante ya
+    // está representado como presupuesto de la rendición destino. Evita doble conteo.
+    if (
+      report?.pendingBalanceUsedInRendicionId ||
+      report?.pendingBalanceUsedInAdvanceId
+    ) {
+      return
+    }
     const budget = Number(report?.budget ?? 0)
     const populated = await this.expenseReportModel
       .findById(reportId)

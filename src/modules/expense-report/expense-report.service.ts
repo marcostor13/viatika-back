@@ -846,6 +846,20 @@ export class ExpenseReportService implements OnModuleInit {
         (normalized as unknown as { isCajaChica?: boolean }).isCajaChica === true
           ? await this.isLockedByFinalizedCajaChica(id)
           : false
+    // Código de la rendición de origen del saldo heredado, para mostrar en el detalle
+    // y el reporte "de qué rendición proviene el saldo" (en vez de un genérico).
+    const fromId = (report as unknown as { pendingBalanceFromReportId?: unknown })
+      .pendingBalanceFromReportId
+    if (fromId) {
+      const src = await this.expenseReportModel
+        .findById(String(fromId))
+        .select('codigo')
+        .lean()
+        .exec()
+        ; (
+          normalized as unknown as { pendingBalanceFromCodigo?: string }
+        ).pendingBalanceFromCodigo = (src as { codigo?: string } | null)?.codigo
+    }
     return normalized
   }
 

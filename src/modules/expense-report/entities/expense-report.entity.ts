@@ -490,7 +490,9 @@ export class ExpenseReport {
         cci: { type: String },
         transferDate: { type: Date },
         reference: { type: String },
-        paymentReceiptUrl: { type: String, required: true },
+        // No requerido: los pagos en efectivo no llevan comprobante. La obligatoriedad
+        // para transferencia/cheque se valida en el servicio (registerViaticoPayment).
+        paymentReceiptUrl: { type: String },
         paymentReceiptFileName: { type: String },
         paymentReceiptMimeType: { type: String },
         paymentReceiptSizeBytes: { type: Number },

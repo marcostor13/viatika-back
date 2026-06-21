@@ -65,4 +65,10 @@ export class CreateViaticoExpenseReportDto {
   @Min(0)
   @IsOptional()
   additionalAmount?: number
+
+  /** Saldos de la bolsa (mismo centro de costo) que prefinancian el viático. */
+  @IsArray()
+  @IsMongoId({ each: true })
+  @IsOptional()
+  saldoIds?: string[]
 }

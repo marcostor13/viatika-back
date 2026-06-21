@@ -3513,6 +3513,25 @@ export class ExpenseReportService implements OnModuleInit {
       await this.markPendingBalanceUsed(dto.pendingBalanceFromReportId, String((report as any)._id))
     }
 
+    // Financiamiento con saldos de la bolsa (mismo centro de costo): el saldo
+    // prefinancia el viático. Se registra como ya pagado (viaticoPaidAmount), de modo
+    // que contabilidad solo deposite la diferencia (viaticoAmount - saldo) y la
+    // liquidación cuadre. consume valida dueño, disponibilidad y centro de costo.
+    const saldoIds = Array.isArray(dto.saldoIds) ? dto.saldoIds : []
+    if (saldoIds.length > 0) {
+      const reportId = String((report as any)._id)
+      const saldoTotal = await this.saldoService.consume(saldoIds, {
+        userId,
+        clientId,
+        context: 'viatico',
+        projectId: dto.projectId,
+        reportId,
+      })
+      report.saldoIds = saldoIds.map(sid => new Types.ObjectId(sid))
+      report.viaticoPaidAmount = Math.round(saldoTotal * 100) / 100
+      await report.save()
+    }
+
     void this.notifyViaticoCoordinator(report as ExpenseReportDocument, userId, clientId)
 
     return this.findOne(String((report as any)._id)) as Promise<ExpenseReportDocument>

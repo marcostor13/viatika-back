@@ -3667,6 +3667,7 @@ export class ExpenseReportService implements OnModuleInit {
     report.status = 'rejected'
     report.viaticoRejectedBy = opts.rejectedBy
     report.viaticoRejectionReason = opts.rejectionReason
+    await this.revertViaticoSaldoFinancing(report)
     await report.save()
 
     this.notificationsService.create({ userId: report.userId.toString(), title: 'Solicitud de viáticos rechazada', message: `Tu solicitud por S/ ${this.viaticoFormatMoney(report.viaticoAmount ?? 0)} fue rechazada. Motivo: ${opts.rejectionReason}`, type: 'error', actionUrl: '/mis-rendiciones' }).catch(() => {})
@@ -3810,8 +3811,36 @@ export class ExpenseReportService implements OnModuleInit {
     if (report.userId.toString() !== userId) throw new ForbiddenException('Solo el colaborador solicitante puede cancelar esta solicitud.')
     if (report.status !== 'pending_l1') throw new BadRequestException('Solo se puede cancelar una solicitud en estado pendiente de aprobación.')
     report.status = 'cancelled'
+    await this.revertViaticoSaldoFinancing(report)
     await report.save()
     return this.findOne(id) as Promise<ExpenseReportDocument>
+  }
+
+  /**
+   * Devuelve a la bolsa los saldos que prefinanciaban un viático que ya no
+   * continuará (rechazado/cancelado) y limpia su financiamiento, evitando que el
+   * colaborador pierda ese saldo. Reject/cancel ocurren antes del pago de
+   * contabilidad, por lo que viaticoPaidAmount = saldo; tras restaurar queda en 0.
+   */
+  private async revertViaticoSaldoFinancing(
+    report: ExpenseReportDocument
+  ): Promise<void> {
+    try {
+      const restored = await this.saldoService.restoreByConsumer({
+        reportId: String((report as any)._id),
+      })
+      if (restored > 0) {
+        report.viaticoPaidAmount = Math.max(
+          0,
+          Math.round(((report.viaticoPaidAmount ?? 0) - restored) * 100) / 100
+        )
+        report.saldoIds = undefined
+      }
+    } catch (err: unknown) {
+      this.logger.error(
+        `Revertir saldo viático ${(report as any)._id}: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
   }
 
   async findViaticos(opts: { requesterId: string; requesterRole: string; requesterPermissions?: any; clientId: string; status?: string; dateFrom?: string; dateTo?: string }) {

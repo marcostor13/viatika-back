@@ -146,6 +146,36 @@ export class SaldoService {
     return Number(remnant.amount) || 0
   }
 
+  /**
+   * Devuelve a la bolsa (status `available`) los saldos que había consumido un
+   * documento (rendición/viático o anticipo) que luego se rechazó/canceló/eliminó.
+   * Limpia los campos de consumo. Devuelve la suma restaurada.
+   */
+  async restoreByConsumer(opts: {
+    reportId?: string | Types.ObjectId
+    advanceId?: string | Types.ObjectId
+  }): Promise<number> {
+    const filter: Record<string, unknown> = { status: 'consumed' }
+    if (opts.reportId) {
+      filter.consumedByReportId = new Types.ObjectId(String(opts.reportId))
+    } else if (opts.advanceId) {
+      filter.consumedByAdvanceId = new Types.ObjectId(String(opts.advanceId))
+    } else {
+      return 0
+    }
+    const saldos = await this.saldoModel.find(filter).exec()
+    let total = 0
+    for (const s of saldos) {
+      s.status = 'available'
+      s.consumedAt = undefined
+      s.consumedByReportId = undefined
+      s.consumedByAdvanceId = undefined
+      await s.save()
+      total += Number(s.amount) || 0
+    }
+    return total
+  }
+
   /** Rendiciones que originaron estos saldos (solo los remanentes tienen `sourceReportId`). */
   async getSourceReportIds(saldoIds: string[]): Promise<string[]> {
     const ids = (saldoIds || [])

@@ -1707,6 +1707,15 @@ export class ExpenseReportService implements OnModuleInit {
       await this.expenseModel.deleteMany({ _id: { $in: expenseIds } }).exec()
     }
 
+    // Devolver a la bolsa los saldos que esta rendición había consumido (si los
+    // hubo), para que el colaborador no los pierda al eliminarla.
+    try {
+      await this.saldoService.restoreByConsumer({ reportId: id })
+    } catch (err: unknown) {
+      this.logger.error(
+        `Revertir saldos al eliminar ${id}: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
     await this.expenseReportModel.findByIdAndDelete(id).exec()
     return report
   }

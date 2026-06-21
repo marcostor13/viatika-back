@@ -1516,6 +1516,15 @@ export class AdvanceService {
     advance.rejectedBy = dto.rejectedBy
     advance.rejectionReason = dto.rejectionReason
 
+    // Devolver a la bolsa los saldos que financiaban este viático rechazado.
+    try {
+      await this.saldoService.restoreByConsumer({ advanceId: id })
+    } catch (err: unknown) {
+      this.logger.error(
+        `Revertir saldos al rechazar advance ${id}: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+
     const saved = await advance.save()
     this.notifyCollaboratorViaticoRejected(
       saved as AdvanceDocument,
@@ -2357,6 +2366,14 @@ export class AdvanceService {
       }
     }
 
+    // Devolver a la bolsa los saldos que este viático había consumido (si los hubo).
+    try {
+      await this.saldoService.restoreByConsumer({ advanceId: id })
+    } catch (err: unknown) {
+      this.logger.error(
+        `Revertir saldos al eliminar advance ${id}: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
     await this.advanceModel.findByIdAndDelete(id).exec()
     return advance
   }

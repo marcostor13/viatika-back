@@ -51,4 +51,10 @@ export class ResubmitViaticoDto {
   @IsString()
   @IsOptional()
   observations?: string
+
+  /** Saldos de la bolsa re-seleccionados al corregir (si el viático no tiene ya uno). */
+  @IsArray()
+  @IsMongoId({ each: true })
+  @IsOptional()
+  saldoIds?: string[]
 }

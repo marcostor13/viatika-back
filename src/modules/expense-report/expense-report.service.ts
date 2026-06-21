@@ -3721,6 +3721,23 @@ export class ExpenseReportService implements OnModuleInit {
     report.viaticoObservations = dto.observations?.trim()
     report.viaticoAmount = roundedSum
     report.budget = roundedSum
+    // Re-aplicar saldo de la bolsa si la corrección lo selecciona y el viático no
+    // tiene ya uno aplicado (caso típico: fue rechazado y su saldo se devolvió a la
+    // bolsa). Si ya tenía saldo (edición antes de aprobación), se conserva intacto.
+    const alreadyHasSaldo =
+      Array.isArray(report.saldoIds) && report.saldoIds.length > 0
+    const reselectedSaldos = Array.isArray(dto.saldoIds) ? dto.saldoIds : []
+    if (!alreadyHasSaldo && reselectedSaldos.length > 0) {
+      const saldoTotal = await this.saldoService.consume(reselectedSaldos, {
+        userId: actingUserId,
+        clientId,
+        context: 'viatico',
+        projectId: dto.projectId,
+        reportId: id,
+      })
+      report.saldoIds = reselectedSaldos.map(sid => new Types.ObjectId(sid))
+      report.viaticoPaidAmount = Math.round(saldoTotal * 100) / 100
+    }
     report.description = description
     report.status = 'pending_l1'
     report.viaticoApprovalLevel = 0

@@ -1719,6 +1719,11 @@ export class ExpenseReportService implements OnModuleInit {
     try {
       await this.saldoService.removeViaticoChangeByReport(id)
       await this.saldoService.restoreByConsumer({ reportId: id })
+      // Saldo heredado: libera la rendición de origen para que su saldo vuelva a estar
+      // disponible (en el caso típico no dejó remanente en la bolsa que restaurar).
+      if (report.pendingBalanceFromReportId) {
+        await this.unmarkPendingBalanceUsed(String(report.pendingBalanceFromReportId), id)
+      }
     } catch (err: unknown) {
       this.logger.error(
         `Revertir saldos al eliminar ${id}: ${err instanceof Error ? err.message : String(err)}`
@@ -2123,6 +2128,34 @@ export class ExpenseReportService implements OnModuleInit {
         {
           $set: {
             pendingBalanceUsedInAdvanceId: new Types.ObjectId(advanceId),
+          },
+        },
+        { new: true }
+      )
+      .exec()
+  }
+
+  /**
+   * Revierte la marca de "saldo trasladado" en la rendición de origen cuando el
+   * documento que heredó su saldo (viático/anticipo) se rechaza, cancela o elimina, de
+   * modo que ese saldo vuelva a estar disponible para reutilizarse. Solo actúa si la
+   * marca apunta a ese mismo documento consumidor (no pisa un traslado posterior).
+   */
+  async unmarkPendingBalanceUsed(sourceReportId: string, consumerId: string) {
+    const consumer = new Types.ObjectId(consumerId)
+    return await this.expenseReportModel
+      .findOneAndUpdate(
+        {
+          _id: new Types.ObjectId(sourceReportId),
+          $or: [
+            { pendingBalanceUsedInAdvanceId: consumer },
+            { pendingBalanceUsedInRendicionId: consumer },
+          ],
+        },
+        {
+          $unset: {
+            pendingBalanceUsedInAdvanceId: '',
+            pendingBalanceUsedInRendicionId: '',
           },
         },
         { new: true }
@@ -3486,15 +3519,13 @@ export class ExpenseReportService implements OnModuleInit {
     }
 
     const pendingAmt = Number(dto.pendingBalanceAmount ?? 0)
-    const linesAmount = Math.round((dto.amount - pendingAmt) * 100) / 100
 
+    // `dto.amount` es el costo del viático (suma de líneas). El saldo heredado NO se
+    // suma al anticipo: prefinancia ese costo igual que un saldo de la bolsa.
     const { lineDocs, roundedSum, description, requiredLevels } = await this.validateViaticoLines(
-      { place: dto.place, startDate: dto.startDate, endDate: dto.endDate, projectId: dto.projectId, lines: dto.lines, observations: dto.observations, amount: linesAmount },
+      { place: dto.place, startDate: dto.startDate, endDate: dto.endDate, projectId: dto.projectId, lines: dto.lines, observations: dto.observations, amount: dto.amount },
       clientId
     )
-
-    const totalAmount = Math.round((roundedSum + pendingAmt) * 100) / 100
-    const totalRequiredLevels = totalAmount > ADVANCE_THRESHOLDS.L1_MAX ? 2 : 1
 
     const report = await this.expenseReportModel.create({
       type: 'viatico',
@@ -3505,9 +3536,9 @@ export class ExpenseReportService implements OnModuleInit {
       description,
       status: 'pending_l1',
       expenseIds: [],
-      budget: totalAmount,
-      viaticoAmount: totalAmount,
-      viaticoRequiredLevels: totalRequiredLevels,
+      budget: roundedSum,
+      viaticoAmount: roundedSum,
+      viaticoRequiredLevels: requiredLevels,
       viaticoApprovalLevel: 0,
       viaticoApprovalHistory: [],
       viaticoSolicitudVersion: 1,
@@ -3526,8 +3557,16 @@ export class ExpenseReportService implements OnModuleInit {
       }),
     })
 
+    // Financiamiento con saldo heredado de otra rendición (mismo centro de costo).
     if (pendingAmt > 0 && dto.pendingBalanceFromReportId) {
-      await this.markPendingBalanceUsed(dto.pendingBalanceFromReportId, String((report as any)._id))
+      await this.applyViaticoPendingFinancing(report, {
+        userId,
+        clientId,
+        projectId: dto.projectId,
+        pendingAmt,
+        fromReportId: dto.pendingBalanceFromReportId,
+      })
+      await report.save()
     }
 
     // Financiamiento con saldos de la bolsa (mismo centro de costo).
@@ -3578,6 +3617,58 @@ export class ExpenseReportService implements OnModuleInit {
 
     // Sobrante: el saldo seleccionado superó el total → vuelve ya mismo a la bolsa.
     const excess = Math.round((saldoTotal - viaticoAmount) * 100) / 100
+    if (excess > 0.01) {
+      await this.saldoService.createViaticoChange({
+        userId: opts.userId,
+        clientId: opts.clientId,
+        projectId: opts.projectId,
+        changeFromReportId: reportId,
+        amount: excess,
+      })
+    }
+  }
+
+  /**
+   * Financia un viático con el saldo heredado (`pendingBalance`) de otra rendición del
+   * mismo centro de costo. Funciona igual que el financiamiento con saldos de la bolsa:
+   * el saldo prefinancia el costo (`viaticoPaidAmount`), de modo que contabilidad solo
+   * deposite la diferencia (viaticoAmount − saldo aplicado). Si el saldo heredado SUPERA
+   * el costo del viático, solo se usa lo necesario y el sobrante vuelve de inmediato a la
+   * bolsa como saldo disponible del mismo centro de costo (contabilidad no deposita nada).
+   * Marca la rendición de origen como trasladada y consume su remanente en la bolsa (si
+   * lo dejó) para evitar el doble conteo del mismo dinero. No persiste el documento.
+   */
+  private async applyViaticoPendingFinancing(
+    report: ExpenseReportDocument,
+    opts: {
+      userId: string
+      clientId: string
+      projectId: string
+      pendingAmt: number
+      fromReportId: string
+    }
+  ): Promise<void> {
+    const reportId = String((report as any)._id)
+    const viaticoAmount = Number(report.viaticoAmount ?? 0)
+
+    // El saldo heredado nunca cubre más que el costo del viático.
+    report.viaticoPaidAmount =
+      Math.round(Math.min(opts.pendingAmt, viaticoAmount) * 100) / 100
+
+    // Marca la rendición de origen como "saldo trasladado" y consume el remanente que
+    // hubiera dejado en la bolsa, para que ese dinero no se cuente dos veces.
+    await this.markPendingBalanceUsed(opts.fromReportId, reportId)
+    try {
+      await this.saldoService.removeRemnantBySourceReport(opts.fromReportId, reportId)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      this.logger.error(
+        `Consumir remanente de bolsa al heredar saldo de ${opts.fromReportId}: ${msg}`
+      )
+    }
+
+    // Sobrante: el saldo heredado superó el costo → vuelve ya mismo a la bolsa.
+    const excess = Math.round((opts.pendingAmt - viaticoAmount) * 100) / 100
     if (excess > 0.01) {
       await this.saldoService.createViaticoChange({
         userId: opts.userId,
@@ -3812,6 +3903,25 @@ export class ExpenseReportService implements OnModuleInit {
         projectId: dto.projectId,
       })
     }
+    // Re-financia el saldo heredado: el costo pudo cambiar en la corrección, así que se
+    // recalcula cuánto prefinancia (viaticoPaidAmount) y el sobrante que vuelve a la
+    // bolsa. Se neutraliza primero el vuelto anterior para no contarlo dos veces.
+    const pendingAmt = Number(report.pendingBalanceAmount ?? 0)
+    if (pendingAmt > 0 && report.pendingBalanceFromReportId) {
+      await this.saldoService.removeViaticoChangeByReport(id)
+      report.viaticoPaidAmount =
+        Math.round(Math.min(pendingAmt, roundedSum) * 100) / 100
+      const excess = Math.round((pendingAmt - roundedSum) * 100) / 100
+      if (excess > 0.01) {
+        await this.saldoService.createViaticoChange({
+          userId: actingUserId,
+          clientId,
+          projectId: dto.projectId,
+          changeFromReportId: id,
+          amount: excess,
+        })
+      }
+    }
     report.description = description
     report.status = 'pending_l1'
     report.viaticoApprovalLevel = 0
@@ -3936,6 +4046,16 @@ export class ExpenseReportService implements OnModuleInit {
       if (restored > 0) {
         report.viaticoPaidAmount = 0
         report.saldoIds = undefined
+      }
+      // Saldo heredado de otra rendición: libera la fuente (su saldo vuelve a estar
+      // disponible) y resetea el prefinanciamiento. En el caso típico la fuente no dejó
+      // remanente en la bolsa, así que `restored` es 0 y hay que limpiarlo explícitamente.
+      if (report.pendingBalanceFromReportId) {
+        await this.unmarkPendingBalanceUsed(
+          String(report.pendingBalanceFromReportId),
+          reportId
+        )
+        report.viaticoPaidAmount = 0
       }
     } catch (err: unknown) {
       this.logger.error(

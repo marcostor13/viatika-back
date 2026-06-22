@@ -83,7 +83,7 @@ export class ExchangeRateService {
     ]
     for (const url of urls) {
       try {
-        const res = await fetch(url)
+        const res = await fetch(url, { signal: AbortSignal.timeout(5000) })
         if (!res.ok) continue
         const json: any = await res.json()
         const pen = json?.usd?.pen

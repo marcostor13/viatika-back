@@ -105,6 +105,13 @@ export class AdvanceController {
     return this.advanceService.getStats(clientId)
   }
 
+  /** Advances sin ExpenseReport vinculado — para vista unificada de rendiciones */
+  @Get('orphaned/client/:clientId')
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)
+  findOrphaned(@Param('clientId') clientId: string) {
+    return this.advanceService.findOrphaned(clientId)
+  }
+
   /** Detalle de un anticipo */
   @Get(':id')
   @Roles(ROLES.COLABORADOR, ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD)

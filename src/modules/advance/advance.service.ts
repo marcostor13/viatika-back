@@ -32,6 +32,7 @@ import { UserService } from '../user/user.service'
 import { UserPermissions } from '../user/schemas/user.schema'
 import { EmailService } from '../email/email.service'
 import { NotificationsService } from '../notifications/notifications.service'
+import { SaldoService } from '../saldo/saldo.service'
 
 @Injectable()
 export class AdvanceService {
@@ -46,7 +47,8 @@ export class AdvanceService {
     private readonly categoryService: CategoryService,
     private readonly userService: UserService,
     private readonly emailService: EmailService,
-    private readonly notificationsService: NotificationsService
+    private readonly notificationsService: NotificationsService,
+    private readonly saldoService: SaldoService
   ) {}
 
   async create(dto: CreateAdvanceDto): Promise<Advance> {
@@ -59,11 +61,29 @@ export class AdvanceService {
       )
     }
 
-    if (this.isViaticoSolicitud(dto)) {
-      return this.createViaticoSolicitud(dto)
+    const advance = this.isViaticoSolicitud(dto)
+      ? await this.createViaticoSolicitud(dto)
+      : await this.createSimpleAdvance(dto)
+
+    // Solicitud financiada con saldos de la bolsa (mismo centro de costo, consumo completo).
+    const saldoIds = Array.isArray(dto.saldoIds) ? dto.saldoIds : []
+    if (saldoIds.length > 0) {
+      const advId = (advance as any)._id.toString()
+      await this.saldoService.consume(saldoIds, {
+        userId: dto.userId!,
+        clientId: dto.clientId!,
+        context: 'viatico',
+        projectId: dto.projectId,
+        advanceId: advId,
+      })
+      await this.advanceModel
+        .findByIdAndUpdate(advId, {
+          saldoIds: saldoIds.map(id => new Types.ObjectId(id)),
+        })
+        .exec()
     }
 
-    return this.createSimpleAdvance(dto)
+    return advance
   }
 
   /**
@@ -1221,6 +1241,19 @@ export class AdvanceService {
       .exec()
   }
 
+  /** Advances sin ExpenseReport vinculado (modelo legado sin fase de gastos iniciada). */
+  async findOrphaned(clientId: string) {
+    return this.advanceModel
+      .find({
+        clientId: new Types.ObjectId(clientId),
+        expenseReportId: { $exists: false },
+      })
+      .populate('userId', 'name email')
+      .populate('projectId', 'code name')
+      .sort({ createdAt: -1 })
+      .exec()
+  }
+
   async findForViaticosPage(opts: {
     requesterId: string
     requesterRole: string
@@ -1483,6 +1516,15 @@ export class AdvanceService {
     advance.rejectedBy = dto.rejectedBy
     advance.rejectionReason = dto.rejectionReason
 
+    // Devolver a la bolsa los saldos que financiaban este viático rechazado.
+    try {
+      await this.saldoService.restoreByConsumer({ advanceId: id })
+    } catch (err: unknown) {
+      this.logger.error(
+        `Revertir saldos al rechazar advance ${id}: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+
     const saved = await advance.save()
     this.notifyCollaboratorViaticoRejected(
       saved as AdvanceDocument,
@@ -1728,9 +1770,15 @@ export class AdvanceService {
    * Fase 6 — Al aprobar la rendición: liquida en bloque los anticipos pagados vinculados,
    * guarda el settlement en la rendición y avisa a contabilidad si corresponde reembolso al colaborador.
    */
-  async liquidateExpenseReport(reportId: string): Promise<void> {
+  async liquidateExpenseReport(reportId: string, fromClose = false): Promise<void> {
     const report = await this.expenseReportService.findOneWithAdvances(reportId)
     if (!report || report.status !== 'approved') {
+      return
+    }
+
+    // Rendiciones de tipo viático se liquidan con su propio método (no tienen Advance externo).
+    if ((report as any).type === 'viatico') {
+      await this.expenseReportService.liquidateViaticoReport(reportId, fromClose)
       return
     }
 
@@ -1851,6 +1899,25 @@ export class AdvanceService {
     }
 
     await this.expenseReportService.updateSettlement(reportId, reportSettlement)
+
+    // Remanente positivo (devolución): el saldo no gastado queda disponible para
+    // el colaborador en su bolsa de "Saldo" (idempotente por sourceReportId).
+    if (type === 'devolucion' && difference > 0.01) {
+      try {
+        const ownerId = (report.userId as any)?._id ?? report.userId
+        await this.saldoService.createFromRemnant({
+          userId: ownerId,
+          clientId: report.clientId,
+          projectId: (report as any).projectId ?? null,
+          sourceReportId: reportId,
+          amount: difference,
+          type: (report as any).isDirecta ? 'rendicion_directa' : 'rendicion',
+        })
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.logger.error(`Crear saldo remanente ${reportId}: ${msg}`)
+      }
+    }
 
     const doc = report as any
     const alreadyNotified = !!doc.reimbursementAccountingNotifiedAt
@@ -2299,6 +2366,14 @@ export class AdvanceService {
       }
     }
 
+    // Devolver a la bolsa los saldos que este viático había consumido (si los hubo).
+    try {
+      await this.saldoService.restoreByConsumer({ advanceId: id })
+    } catch (err: unknown) {
+      this.logger.error(
+        `Revertir saldos al eliminar advance ${id}: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
     await this.advanceModel.findByIdAndDelete(id).exec()
     return advance
   }

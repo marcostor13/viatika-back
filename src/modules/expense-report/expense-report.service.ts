@@ -4,6 +4,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  OnModuleInit,
   forwardRef,
 } from '@nestjs/common'
 import { InjectModel } from '@nestjs/mongoose'
@@ -33,6 +34,15 @@ import { AdvanceService } from '../advance/advance.service'
 import { ROLES } from '../auth/enums/roles.enum'
 import { applyFechaEmisionDisplayToExpenses } from '../expense/utils/fecha-emision.util'
 import { UploadService } from '../upload/upload.service'
+import { ProjectService } from '../project/project.service'
+import { CategoryService } from '../category/category.service'
+import { ADVANCE_THRESHOLDS } from '../advance/entities/advance.entity'
+import { CreateViaticoExpenseReportDto } from './dto/create-viatico-expense-report.dto'
+import { PayViaticoDto } from './dto/pay-viatico.dto'
+import { ResubmitViaticoDto } from './dto/resubmit-viatico.dto'
+import { CreateAdvanceLineDto } from '../advance/dto/create-advance.dto'
+import { SaldoService } from '../saldo/saldo.service'
+import { Logger } from '@nestjs/common'
 
 /** Contexto del usuario que solicita eliminar una solicitud. */
 export interface SolicitudDeleteActor {
@@ -41,7 +51,9 @@ export interface SolicitudDeleteActor {
 }
 
 @Injectable()
-export class ExpenseReportService {
+export class ExpenseReportService implements OnModuleInit {
+  private readonly logger = new Logger(ExpenseReportService.name)
+
   constructor(
     @InjectModel(ExpenseReport.name)
     private readonly expenseReportModel: Model<ExpenseReportDocument>,
@@ -54,8 +66,30 @@ export class ExpenseReportService {
     private readonly userService: UserService,
     @Inject(forwardRef(() => AdvanceService))
     private readonly advanceService: AdvanceService,
-    private readonly uploadService: UploadService
+    private readonly uploadService: UploadService,
+    private readonly projectService: ProjectService,
+    private readonly categoryService: CategoryService,
+    private readonly saldoService: SaldoService
   ) { }
+
+  async onModuleInit() {
+    const col = this.expenseReportModel.collection
+    try {
+      await col.dropIndex('clientId_1_codigo_1')
+      this.logger.log('Dropped old sparse index clientId_1_codigo_1')
+    } catch {
+      // Index didn't exist or was already replaced — safe to ignore
+    }
+    try {
+      await col.createIndex(
+        { clientId: 1, codigo: 1 },
+        { unique: true, partialFilterExpression: { codigo: { $type: 'string' } }, background: true }
+      )
+      this.logger.log('Created partialFilterExpression index for clientId+codigo')
+    } catch (e) {
+      this.logger.warn(`Index create skipped: ${(e as Error).message}`)
+    }
+  }
 
   private validatePaymentReceipt(
     mimeType?: string,
@@ -224,6 +258,19 @@ export class ExpenseReportService {
       ? await this.generateDirectaCodigo(createExpenseReportDto.clientId)
       : undefined
 
+    // Saldos de la bolsa seleccionados (rendición directa financiada con saldo).
+    const saldoIds = Array.isArray(createExpenseReportDto.saldoIds)
+      ? createExpenseReportDto.saldoIds
+      : []
+    const hasSaldos = saldoIds.length > 0
+    const saldoBudget = hasSaldos
+      ? await this.saldoService.sumAmounts(
+        saldoIds,
+        createExpenseReportDto.userId,
+        createExpenseReportDto.clientId
+      )
+      : 0
+
     const report = new this.expenseReportModel({
       ...createExpenseReportDto,
       title,
@@ -240,10 +287,16 @@ export class ExpenseReportService {
             createExpenseReportDto.pendingBalanceFromReportId
           )
           : undefined,
-      // Rendición directa creada desde saldo: el presupuesto es el saldo heredado
-      budget: createExpenseReportDto.pendingBalanceFromReportId
-        ? (createExpenseReportDto.pendingBalanceAmount ?? 0)
-        : (createExpenseReportDto.budget ?? 0),
+      // Presupuesto: si se financia con saldos de la bolsa = suma de saldos;
+      // si hereda saldo pendiente = monto heredado; caso normal = budget recibido.
+      budget: hasSaldos
+        ? saldoBudget
+        : createExpenseReportDto.pendingBalanceFromReportId
+          ? (createExpenseReportDto.pendingBalanceAmount ?? 0)
+          : (createExpenseReportDto.budget ?? 0),
+      saldoIds: hasSaldos
+        ? saldoIds.map(id => new Types.ObjectId(id))
+        : undefined,
       // Caja chica y rendición directa: siempre open desde el inicio
       status:
         isDirecta || isCajaChica
@@ -255,6 +308,28 @@ export class ExpenseReportService {
     })
     const savedReport = await report.save()
 
+    // Consumir (completo) los saldos de la bolsa que financian esta rendición directa.
+    if (hasSaldos) {
+      await this.saldoService.consume(saldoIds, {
+        userId: createExpenseReportDto.userId,
+        clientId: createExpenseReportDto.clientId,
+        context: 'rendicion_directa',
+        reportId: String(savedReport._id),
+      })
+
+      // Las rendiciones que originaron los remanentes consumidos quedan resueltas
+      // ("saldo trasladado a esta nueva rendición") → se muestran como cerradas.
+      const sourceReportIds =
+        await this.saldoService.getSourceReportIds(saldoIds)
+      for (const srcId of sourceReportIds) {
+        await this.expenseReportModel
+          .findByIdAndUpdate(srcId, {
+            pendingBalanceUsedInRendicionId: savedReport._id,
+          })
+          .exec()
+      }
+    }
+
     // Si se creó desde saldo de otra rendición directa, marcar la rendición fuente
     if (createExpenseReportDto.pendingBalanceFromReportId) {
       await this.expenseReportModel
@@ -262,6 +337,21 @@ export class ExpenseReportService {
           pendingBalanceUsedInRendicionId: savedReport._id,
         })
         .exec()
+
+      // Si la rendición fuente había dejado su sobrante en la bolsa, consumirlo: el
+      // dinero se trasladó al presupuesto de esta nueva rendición. Evita el doble
+      // conteo (el saldo seguía mostrándose como disponible).
+      try {
+        await this.saldoService.removeRemnantBySourceReport(
+          createExpenseReportDto.pendingBalanceFromReportId,
+          String(savedReport._id)
+        )
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.logger.error(
+          `Consumir remanente de bolsa al heredar saldo de ${createExpenseReportDto.pendingBalanceFromReportId}: ${msg}`
+        )
+      }
     }
 
     console.log(
@@ -730,11 +820,23 @@ export class ExpenseReportService {
       .populate('createdBy', 'name email')
       .populate('approvedBy', 'name email')
       .populate('projectId', 'name')
+      .populate({
+        path: 'saldoIds',
+        select: 'type amount concepto deposit sourceReportId createdAt',
+        populate: { path: 'sourceReportId', select: 'codigo title gestion' },
+      })
       .exec()
 
     if (!report) {
       throw new NotFoundException(`Expense report with ID ${id} not found`)
     }
+    // Auto-sanado (lazy, idempotente): directa financiada con bolsa ya aprobada cuyo
+    // sobrante aún no se reflejó en la bolsa (aprobadas antes de esta funcionalidad).
+    // Se corrige sola al abrir el detalle, una rendición a la vez, sin barrido global.
+    await this.ensureDirectaBolsaRemnant(id, report).catch(() => undefined)
+    // Auto-sanado (lazy): si el remanente de esta rendición ya fue consumido por otra
+    // pero la fuente no quedó marcada como "trasladada", se corrige al abrirla.
+    await this.ensureSourceMarkedIfRemnantConsumed(id, report).catch(() => undefined)
     const normalized = this.normalizeReportExpenseDates(report)
       // Flag derivado para el front: si la caja chica fue finalizada, el
       // colaborador ya no puede subir gastos (botón "Añadir Gasto" oculto).
@@ -744,6 +846,20 @@ export class ExpenseReportService {
         (normalized as unknown as { isCajaChica?: boolean }).isCajaChica === true
           ? await this.isLockedByFinalizedCajaChica(id)
           : false
+    // Código de la rendición de origen del saldo heredado, para mostrar en el detalle
+    // y el reporte "de qué rendición proviene el saldo" (en vez de un genérico).
+    const fromId = (report as unknown as { pendingBalanceFromReportId?: unknown })
+      .pendingBalanceFromReportId
+    if (fromId) {
+      const src = await this.expenseReportModel
+        .findById(String(fromId))
+        .select('codigo')
+        .lean()
+        .exec()
+        ; (
+          normalized as unknown as { pendingBalanceFromCodigo?: string }
+        ).pendingBalanceFromCodigo = (src as { codigo?: string } | null)?.codigo
+    }
     return normalized
   }
 
@@ -1023,6 +1139,10 @@ export class ExpenseReportService {
     if (dto.status === 'approved') {
       const owner = fullyUpdatedReport.userId as any
       const ownerId = owner?._id ? String(owner._id) : String(owner)
+
+      // Directa financiada con la bolsa: el sobrante regresa a la bolsa del colaborador.
+      await this.settleDirectaFinanciadaConBolsa(id, fullyUpdatedReport, ownerId)
+
       const reportTitle = fullyUpdatedReport.title
       const budgetDisplay =
         await this.computeReportBudgetDisplay(fullyUpdatedReport)
@@ -1166,6 +1286,7 @@ export class ExpenseReportService {
           err
         )
       }
+
     }
 
     // Rendición enviada (submitted)
@@ -1586,6 +1707,17 @@ export class ExpenseReportService {
       await this.expenseModel.deleteMany({ _id: { $in: expenseIds } }).exec()
     }
 
+    // Devolver a la bolsa los saldos que esta rendición había consumido (si los
+    // hubo), para que el colaborador no los pierda al eliminarla. Si devolvió un
+    // "vuelto" (saldo > total), se neutraliza primero para no contarlo dos veces.
+    try {
+      await this.saldoService.removeViaticoChangeByReport(id)
+      await this.saldoService.restoreByConsumer({ reportId: id })
+    } catch (err: unknown) {
+      this.logger.error(
+        `Revertir saldos al eliminar ${id}: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
     await this.expenseReportModel.findByIdAndDelete(id).exec()
     return report
   }
@@ -1851,7 +1983,9 @@ export class ExpenseReportService {
 
     const reports = await this.expenseReportModel
       .find(query)
-      .select('_id codigo userId title motivo gestion budget status createdAt createdBy directaDeposit expenseIds pendingBalanceFromReportId pendingBalanceAmount')
+      .select(
+        '_id codigo userId title motivo gestion budget status createdAt createdBy directaDeposit expenseIds pendingBalanceFromReportId pendingBalanceAmount saldoIds pendingBalanceUsedInRendicionId pendingBalanceUsedInAdvanceId returnVoucher'
+      )
       .populate('userId', 'name email')
       .populate({
         path: 'createdBy',
@@ -1875,15 +2009,24 @@ export class ExpenseReportService {
         origin = 'colaborador'
       }
       const expenses = (r.expenseIds as any[]) || []
-      const totalGastado = expenses.reduce((s, e) => s + (Number(e?.total) || 0), 0)
+      const totalGastado = expenses.reduce(
+        (s, e) => s + (Number(e?.total) || 0),
+        0
+      )
       // Rendición directa creada desde el saldo de otra (saldo heredado): no tiene
       // `directaDeposit`, pero su presupuesto disponible es el saldo trasladado.
       const hasInheritedBalance =
-        !!r.pendingBalanceFromReportId && Number(r.pendingBalanceAmount ?? 0) > 0
+        !!r.pendingBalanceFromReportId &&
+        Number(r.pendingBalanceAmount ?? 0) > 0
+      // Rendición directa financiada con saldos de la bolsa: su presupuesto disponible
+      // es el `budget` (suma de los saldos consumidos).
+      const hasSaldoFinancing =
+        Array.isArray(r.saldoIds) && r.saldoIds.length > 0
       const deposited = Number(
         r.directaDeposit?.amount ?? r.pendingBalanceAmount ?? r.budget ?? 0
       )
-      const hasFunds = !!r.directaDeposit || hasInheritedBalance
+      const hasFunds =
+        !!r.directaDeposit || hasInheritedBalance || hasSaldoFinancing
       return {
         _id: String(r._id),
         codigo: r.codigo ?? null,
@@ -1891,6 +2034,12 @@ export class ExpenseReportService {
         title: r.title ?? null,
         motivo: r.motivo ?? null,
         status: r.status ?? null,
+        // Cerrada (a efectos de label): saldo trasladado a otra rendición/anticipo o devuelto.
+        effectivelyClosed:
+          r.status === 'closed' ||
+          !!r.pendingBalanceUsedInRendicionId ||
+          !!r.pendingBalanceUsedInAdvanceId ||
+          !!r.returnVoucher,
         createdAt: r.createdAt,
         hasDeposit: hasFunds,
         deposited,
@@ -1979,6 +2128,149 @@ export class ExpenseReportService {
     return await this.expenseReportModel
       .findByIdAndUpdate(reportId, { $set: { settlement } }, { new: true })
       .exec()
+  }
+
+  /**
+   * Fondos entregados al colaborador en una rendición directa: depósito de
+   * contabilidad, saldo heredado de otra rendición, o financiamiento con la bolsa
+   * de saldos (`saldoIds` → presupuesto). Base para calcular devolución vs reembolso.
+   */
+  private directaFundsGiven(report: any): number {
+    const deposit = Number(report?.directaDeposit?.amount ?? 0)
+    if (deposit > 0) return deposit
+    const inherited = Number(report?.pendingBalanceAmount ?? 0)
+    if (report?.pendingBalanceFromReportId && inherited > 0) return inherited
+    if (Array.isArray(report?.saldoIds) && report.saldoIds.length > 0) {
+      return Number(report?.budget ?? 0)
+    }
+    return 0
+  }
+
+  /**
+   * Al aprobar una rendición directa financiada con la bolsa de saldos, el
+   * sobrante (presupuesto − gastado) regresa automáticamente a la bolsa del
+   * colaborador como saldo remanente (`rendicion_directa`). Si luego decide
+   * devolverlo a contabilidad, ese remanente se descuenta. Idempotente por rendición.
+   */
+  private async settleDirectaFinanciadaConBolsa(
+    reportId: string,
+    report: any,
+    ownerId: string
+  ): Promise<void> {
+    // El sobrante regresa a la bolsa cuando los fondos venían del propio colaborador:
+    // saldos de la bolsa (saldoIds) o saldo heredado de otra rendición
+    // (pendingBalanceFromReportId). Las directas con depósito de contabilidad
+    // mantienen su flujo de devolución y no entran aquí.
+    const hasBolsa = Array.isArray(report?.saldoIds) && report.saldoIds.length > 0
+    const hasInherited =
+      !!report?.pendingBalanceFromReportId &&
+      Number(report?.pendingBalanceAmount ?? 0) > 0
+    if (!report?.isDirecta || (!hasBolsa && !hasInherited)) {
+      return
+    }
+    // El sobrante no debe (re)publicarse en la bolsa si ya tuvo otro destino:
+    // - trasladado a otra rendición/anticipo (pendingBalanceUsedIn*): ya está
+    //   representado como presupuesto de la rendición destino.
+    // - devuelto a contabilidad (returnVoucher): el dinero regresó a la empresa,
+    //   no puede seguir en la bolsa del colaborador.
+    // En ambos casos, evita el doble conteo.
+    if (
+      report?.pendingBalanceUsedInRendicionId ||
+      report?.pendingBalanceUsedInAdvanceId ||
+      report?.returnVoucher
+    ) {
+      return
+    }
+    const budget = Number(report?.budget ?? 0)
+    const populated = await this.expenseReportModel
+      .findById(reportId)
+      .populate('expenseIds', 'total')
+      .lean()
+      .exec()
+    const gastado = (((populated as any)?.expenseIds as any[]) ?? []).reduce(
+      (s, e) => s + (Number(e?.total) || 0),
+      0
+    )
+    const difference = budget - gastado
+    if (Math.abs(difference) >= 0.01) {
+      await this.updateSettlement(reportId, {
+        advanceTotal: budget,
+        expenseTotal: gastado,
+        difference,
+        type: difference > 0 ? 'devolucion' : 'reembolso',
+        settledAt: new Date(),
+        // El sobrante quedó disponible en la bolsa (no exige comprobante para cerrar).
+        toBolsa: difference > 0,
+      })
+    }
+    if (difference > 0.01) {
+      try {
+        await this.saldoService.createFromRemnant({
+          userId: ownerId,
+          clientId: report.clientId,
+          projectId: report?.projectId ?? null,
+          sourceReportId: reportId,
+          amount: difference,
+          type: 'rendicion_directa',
+        })
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.logger.error(`Remanente directa-bolsa ${reportId}: ${msg}`)
+      }
+    }
+  }
+
+  /**
+   * Garantiza (perezosamente, al abrir el detalle) que una directa financiada con
+   * bolsa ya aprobada con sobrante tenga su remanente en la bolsa. Solo actúa si aún
+   * no fue liquidada (`!settlement`) y hay sobrante; idempotente y no bloqueante.
+   */
+  private async ensureDirectaBolsaRemnant(
+    reportId: string,
+    report: any
+  ): Promise<void> {
+    const status = report?.status
+    const hasBolsa = Array.isArray(report?.saldoIds) && report.saldoIds.length > 0
+    const hasInherited =
+      !!report?.pendingBalanceFromReportId &&
+      Number(report?.pendingBalanceAmount ?? 0) > 0
+    if (
+      !report?.isDirecta ||
+      (!hasBolsa && !hasInherited) ||
+      (status !== 'approved' && status !== 'closed') ||
+      report?.settlement
+    ) {
+      return
+    }
+    const budget = Number(report?.budget ?? 0)
+    const gastado = ((report?.expenseIds as any[]) ?? []).reduce(
+      (s, e) => s + (Number(e?.total) || 0),
+      0
+    )
+    if (budget - gastado <= 0.01) return
+    const owner = report.userId
+    const ownerId = owner?._id ? String(owner._id) : String(owner)
+    await this.settleDirectaFinanciadaConBolsa(reportId, report, ownerId)
+  }
+
+  /**
+   * Si el remanente que originó esta rendición directa ya fue consumido por otra
+   * (financiándola con la bolsa) pero la fuente no quedó marcada como "trasladada",
+   * la marca al abrir el detalle. Idempotente y no bloqueante.
+   */
+  private async ensureSourceMarkedIfRemnantConsumed(
+    reportId: string,
+    report: any
+  ): Promise<void> {
+    if (!report?.isDirecta || report?.pendingBalanceUsedInRendicionId) return
+    const consumer = await this.saldoService.findRemnantConsumer(reportId)
+    if (!consumer) return
+    await this.expenseReportModel
+      .findByIdAndUpdate(reportId, {
+        pendingBalanceUsedInRendicionId: new Types.ObjectId(consumer),
+      })
+      .exec()
+    report.pendingBalanceUsedInRendicionId = new Types.ObjectId(consumer)
   }
 
   async setApprovedBy(reportId: string, userId: string) {
@@ -2247,7 +2539,7 @@ export class ExpenseReportService {
       )
       // Si no hay anticipos activos, el colaborador gastó de su propio bolsillo (saldo = 0 - gastos).
       // Excepción: en una rendición directa con depósito de Contabilidad, ese depósito funciona como anticipo.
-      const depositTotal = Number((report as any).directaDeposit?.amount ?? 0)
+      const depositTotal = this.directaFundsGiven(report)
       const advanceTotal =
         activeAdvances.reduce(
           (s: number, a: any) =>
@@ -2470,7 +2762,7 @@ export class ExpenseReportService {
         const activeAdvances = linkedAdvances.filter((a: any) =>
           ['approved', 'partially_paid', 'paid', 'settled'].includes(a.status)
         )
-        const depositTotal = Number((report as any).directaDeposit?.amount ?? 0)
+        const depositTotal = this.directaFundsGiven(report)
         const advanceTotal =
           activeAdvances.reduce(
             (s: number, a: any) =>
@@ -2487,7 +2779,8 @@ export class ExpenseReportService {
       }
       if (
         effectiveSettlementType === 'devolucion' &&
-        !(report as any).returnVoucher
+        !(report as any).returnVoucher &&
+        !(report as any).settlement?.toBolsa
       ) {
         errors.push(
           'El colaborador debe adjuntar el comprobante de devolución antes de cerrar la rendición.'
@@ -2508,6 +2801,12 @@ export class ExpenseReportService {
 
   /** Cierra definitivamente la rendición. Bloquea toda edición posterior. */
   async close(id: string, closedBy: string): Promise<ExpenseReportDocument> {
+    // Para viáticos: recomputar settlement antes de validar (corrige datos stale o mal calculados).
+    try {
+      await this.liquidateViaticoReport(id, /* fromClose= */ true)
+    } catch (err) {
+      console.error(`[close] Pre-validation viatico liquidation error for ${id}:`, err)
+    }
     const errors = await this.validateClosureConditions(id)
     if (errors.length > 0) {
       throw new BadRequestException(errors.join(' | '))
@@ -2515,7 +2814,7 @@ export class ExpenseReportService {
     // Compute settlement before closing in case it was skipped at approval time
     // (liquidateExpenseReport requires status === 'approved', which is still true here)
     try {
-      await this.advanceService.liquidateExpenseReport(id)
+      await this.advanceService.liquidateExpenseReport(id, /* fromClose= */ true)
     } catch (err) {
       console.error(`[close] Pre-close liquidation error for ${id}:`, err)
     }
@@ -2716,6 +3015,15 @@ export class ExpenseReportService {
     await this.expenseReportModel
       .findByIdAndUpdate(id, { $set: { returnVoucher: voucher } })
       .exec()
+
+    // Si el sobrante había quedado en la bolsa (directa financiada con saldo) y el
+    // colaborador decide devolverlo a contabilidad, se descuenta de la bolsa.
+    try {
+      await this.saldoService.removeRemnantBySourceReport(id)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      this.logger.error(`Descontar remanente al devolver ${id}: ${msg}`)
+    }
 
     const amountFormatted = Math.abs(
       Number(notifySettlement.difference ?? 0)
@@ -3066,6 +3374,712 @@ export class ExpenseReportService {
       throw new ForbiddenException(
         'La rendición está cerrada y no permite modificaciones'
       )
+    }
+  }
+
+  // ─── VIÁTICOS UNIFICADOS (type = 'viatico') ──────────────────────────────────
+
+  private viaticoStartOfDay(d: Date): Date {
+    const x = new Date(d)
+    x.setHours(0, 0, 0, 0)
+    return x
+  }
+
+  private viaticoFormatMoney(value: number): string {
+    if (!Number.isFinite(value)) return '0.00'
+    return value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  }
+
+  private viaticoEscapeHtml(value: string): string {
+    return String(value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  }
+
+  private computeViaticoLineTotal(line: CreateAdvanceLineDto): number {
+    const imp = Number(line.importe) || 0
+    const glp = Number(line.glpPerDay) || 0
+    const d = Number(line.days) || 0
+    const p = Number(line.peopleCount) || 0
+    const raw = glp > 0 ? imp * glp * d : imp * p * d
+    return Math.round(raw * 100) / 100
+  }
+
+  private isValidViaticoReceipt(mimeType?: string, fileName?: string, sizeBytes?: number) {
+    const allowedMimes = ['application/pdf', 'image/jpeg', 'image/png']
+    const allowedExt = ['.pdf', '.jpg', '.jpeg', '.png']
+    const mime = (mimeType ?? '').toLowerCase().trim()
+    const name = (fileName ?? '').toLowerCase().trim()
+    if (!allowedMimes.includes(mime) && !allowedExt.some(e => name.endsWith(e))) {
+      return { ok: false, reason: 'Formato inválido. Solo se permite PDF, JPG o PNG.' }
+    }
+    if (typeof sizeBytes === 'number' && sizeBytes > 10 * 1024 * 1024) {
+      return { ok: false, reason: 'El comprobante excede 10MB.' }
+    }
+    return { ok: true }
+  }
+
+  private addViaticoBusinessDays(date: Date, days: number): Date {
+    const result = new Date(date)
+    let added = 0
+    while (added < days) {
+      result.setDate(result.getDate() + 1)
+      const dow = result.getDay()
+      if (dow !== 0 && dow !== 6) added++
+    }
+    return result
+  }
+
+  private async validateViaticoLines(
+    dto: { place: string; startDate: string; endDate: string; projectId: string; lines: CreateAdvanceLineDto[]; observations?: string; amount: number },
+    clientId: string
+  ) {
+    const start = this.viaticoStartOfDay(new Date(dto.startDate))
+    const end = this.viaticoStartOfDay(new Date(dto.endDate))
+    if (end < start) throw new BadRequestException('La fecha fin debe ser mayor o igual a la fecha inicio.')
+
+    const today = this.viaticoStartOfDay(new Date())
+    if (start < today && (dto.observations?.trim() ?? '').length < 10) {
+      throw new BadRequestException('Las fechas de inicio en el pasado requieren observaciones con al menos 10 caracteres.')
+    }
+
+    await this.projectService.findOne(dto.projectId, clientId)
+
+    const lineDocs: { categoryId: Types.ObjectId; detalle?: string; importe: number; peopleCount: number; glpPerDay: number; days: number; lineTotal: number }[] = []
+    let sum = 0
+    for (const line of dto.lines) {
+      const cat = await this.categoryService.findOne(line.categoryId, clientId)
+      if (!cat.isActive) throw new BadRequestException(`La categoría "${cat.name}" está inactiva.`)
+      const expected = this.computeViaticoLineTotal(line)
+      if (Math.abs(line.lineTotal - expected) > 0.02) {
+        throw new BadRequestException(`Total de línea inconsistente. Esperado S/ ${expected.toFixed(2)}, recibido S/ ${line.lineTotal.toFixed(2)}.`)
+      }
+      sum += line.lineTotal
+      const det = line.detalle?.trim()
+      lineDocs.push({ categoryId: new Types.ObjectId(line.categoryId), detalle: det?.length ? det : undefined, importe: line.importe, peopleCount: line.peopleCount, glpPerDay: line.glpPerDay, days: line.days, lineTotal: line.lineTotal })
+    }
+
+    const roundedSum = Math.round(sum * 100) / 100
+    if (Math.abs(roundedSum - dto.amount) > 0.02) {
+      throw new BadRequestException(`El monto total (S/ ${dto.amount}) debe coincidir con la suma de líneas (S/ ${roundedSum}).`)
+    }
+
+    const startFmt = this.emailService.formatDateDDMMYYYY(dto.startDate as any)
+    const endFmt = this.emailService.formatDateDDMMYYYY(dto.endDate as any)
+    const description = dto.observations?.trim()
+      ? `Viático: ${dto.place.trim()} (${startFmt} → ${endFmt}) | ${dto.observations.trim()}`
+      : `Viático: ${dto.place.trim()} (${startFmt} → ${endFmt})`
+
+    return { lineDocs, roundedSum, description, requiredLevels: roundedSum > ADVANCE_THRESHOLDS.L1_MAX ? 2 : 1 }
+  }
+
+  async createViatico(dto: CreateViaticoExpenseReportDto, userId: string, clientId: string): Promise<ExpenseReportDocument> {
+    const profile = await this.userService.findTransactionalProfile(userId)
+    if (!profile?.signature?.trim()) {
+      throw new ForbiddenException('Debe registrar su firma digital en el perfil antes de solicitar viáticos.')
+    }
+
+    const pendingAmt = Number(dto.pendingBalanceAmount ?? 0)
+    const linesAmount = Math.round((dto.amount - pendingAmt) * 100) / 100
+
+    const { lineDocs, roundedSum, description, requiredLevels } = await this.validateViaticoLines(
+      { place: dto.place, startDate: dto.startDate, endDate: dto.endDate, projectId: dto.projectId, lines: dto.lines, observations: dto.observations, amount: linesAmount },
+      clientId
+    )
+
+    const totalAmount = Math.round((roundedSum + pendingAmt) * 100) / 100
+    const totalRequiredLevels = totalAmount > ADVANCE_THRESHOLDS.L1_MAX ? 2 : 1
+
+    const report = await this.expenseReportModel.create({
+      type: 'viatico',
+      userId: new Types.ObjectId(userId),
+      clientId: new Types.ObjectId(clientId),
+      createdBy: new Types.ObjectId(userId),
+      projectId: new Types.ObjectId(dto.projectId),
+      description,
+      status: 'pending_l1',
+      expenseIds: [],
+      budget: totalAmount,
+      viaticoAmount: totalAmount,
+      viaticoRequiredLevels: totalRequiredLevels,
+      viaticoApprovalLevel: 0,
+      viaticoApprovalHistory: [],
+      viaticoSolicitudVersion: 1,
+      viaticoBudgetCommitmentRecorded: false,
+      viaticoPlace: dto.place.trim(),
+      ...(dto.lat != null && { viaticoLat: dto.lat }),
+      ...(dto.lng != null && { viaticoLng: dto.lng }),
+      viaticoStartDate: new Date(dto.startDate),
+      viaticoEndDate: new Date(dto.endDate),
+      viaticoLines: lineDocs,
+      viaticoObservations: dto.observations?.trim(),
+      coordinatorId: profile.coordinatorId ?? undefined,
+      ...(pendingAmt > 0 && dto.pendingBalanceFromReportId && {
+        pendingBalanceFromReportId: new Types.ObjectId(dto.pendingBalanceFromReportId),
+        pendingBalanceAmount: pendingAmt,
+      }),
+    })
+
+    if (pendingAmt > 0 && dto.pendingBalanceFromReportId) {
+      await this.markPendingBalanceUsed(dto.pendingBalanceFromReportId, String((report as any)._id))
+    }
+
+    // Financiamiento con saldos de la bolsa (mismo centro de costo).
+    const saldoIds = Array.isArray(dto.saldoIds) ? dto.saldoIds : []
+    if (saldoIds.length > 0) {
+      await this.applyViaticoSaldoFinancing(report, saldoIds, {
+        userId,
+        clientId,
+        projectId: dto.projectId,
+      })
+      await report.save()
+    }
+
+    void this.notifyViaticoCoordinator(report as ExpenseReportDocument, userId, clientId)
+
+    return this.findOne(String((report as any)._id)) as Promise<ExpenseReportDocument>
+  }
+
+  /**
+   * Financia un viático con saldos de la bolsa (mismo centro de costo). El saldo
+   * prefinancia el anticipo: se registra como ya pagado (`viaticoPaidAmount`), de modo
+   * que contabilidad solo deposite la diferencia (viaticoAmount − saldo aplicado).
+   *
+   * El saldo nunca paga más que el total del viático: si el saldo seleccionado SUPERA
+   * el total, solo se usa lo necesario y el sobrante ("vuelto") vuelve de inmediato a
+   * la bolsa como saldo disponible del mismo centro de costo. En ese caso contabilidad
+   * no deposita nada. `consume` valida dueño, disponibilidad y centro de costo. No
+   * persiste el documento (lo hace quien llama).
+   */
+  private async applyViaticoSaldoFinancing(
+    report: ExpenseReportDocument,
+    saldoIds: string[],
+    opts: { userId: string; clientId: string; projectId: string }
+  ): Promise<void> {
+    const reportId = String((report as any)._id)
+    const saldoTotal = await this.saldoService.consume(saldoIds, {
+      userId: opts.userId,
+      clientId: opts.clientId,
+      context: 'viatico',
+      projectId: opts.projectId,
+      reportId,
+    })
+    report.saldoIds = saldoIds.map(sid => new Types.ObjectId(sid))
+
+    const viaticoAmount = Number(report.viaticoAmount ?? 0)
+    // El saldo nunca cubre más que el total del viático.
+    report.viaticoPaidAmount = Math.round(Math.min(saldoTotal, viaticoAmount) * 100) / 100
+
+    // Sobrante: el saldo seleccionado superó el total → vuelve ya mismo a la bolsa.
+    const excess = Math.round((saldoTotal - viaticoAmount) * 100) / 100
+    if (excess > 0.01) {
+      await this.saldoService.createViaticoChange({
+        userId: opts.userId,
+        clientId: opts.clientId,
+        projectId: opts.projectId,
+        changeFromReportId: reportId,
+        amount: excess,
+      })
+    }
+  }
+
+  private async notifyViaticoCoordinator(report: ExpenseReportDocument, collaboratorUserId: string, clientId: string): Promise<void> {
+    const reportId = String((report as any)._id)
+    const collaborator = await this.userService.findEmailNameClient(collaboratorUserId)
+    const profile = await this.userService.findTransactionalProfile(collaboratorUserId)
+    const coordId = profile?.coordinatorId
+    if (!coordId) {
+      await this.expenseReportModel.updateOne({ _id: (report as any)._id }, { $set: { viaticoCoordinatorNotification: { status: 'skipped', sentAt: new Date(), errorMessage: 'Sin coordinador asignado' } } })
+      return
+    }
+    const coordinator = await this.userService.findEmailNameClient(coordId.toString())
+    if (!coordinator || !collaborator) {
+      await this.expenseReportModel.updateOne({ _id: (report as any)._id }, { $set: { viaticoCoordinatorNotification: { recipientUserId: coordId, status: 'skipped', sentAt: new Date(), errorMessage: 'Coordinador o colaborador no encontrado' } } })
+      return
+    }
+    if (coordinator.clientId && collaborator.clientId && coordinator.clientId.toString() !== collaborator.clientId.toString()) {
+      await this.expenseReportModel.updateOne({ _id: (report as any)._id }, { $set: { viaticoCoordinatorNotification: { recipientUserId: coordId, status: 'skipped', sentAt: new Date(), errorMessage: 'Coordinador de distinta empresa' } } })
+      return
+    }
+
+    try {
+      await this.notificationsService.create({ userId: coordId.toString(), title: 'Nueva solicitud de viáticos pendiente', message: `${collaborator.name} solicitó viáticos — S/ ${this.viaticoFormatMoney(report.viaticoAmount ?? 0)}. Ingresa a Aprobaciones para revisar.`, type: 'info', actionUrl: '/viaticos', metadata: { reportId, collaboratorUserId, event: 'viatico_submitted' } })
+    } catch (err: unknown) { this.logger.error(`In-app notif viático ${reportId}: ${err instanceof Error ? err.message : String(err)}`) }
+
+    const coordEmailEnabled = await this.userService.isEmailEnabled(coordId.toString())
+    if (!coordEmailEnabled) {
+      await this.expenseReportModel.updateOne({ _id: (report as any)._id }, { $set: { viaticoCoordinatorNotification: { recipientUserId: coordId, status: 'skipped', sentAt: new Date(), errorMessage: 'Notificaciones por correo deshabilitadas' } } })
+      return
+    }
+
+    try {
+      const project = await this.projectService.findOne(report.projectId!.toString(), clientId)
+      const projectLabel = `[${project.code} - ${project.name}]`
+      const startStr = report.viaticoStartDate instanceof Date ? report.viaticoStartDate.toISOString().slice(0, 10) : String(report.viaticoStartDate ?? '').slice(0, 10)
+      const endStr = report.viaticoEndDate instanceof Date ? report.viaticoEndDate.toISOString().slice(0, 10) : String(report.viaticoEndDate ?? '').slice(0, 10)
+      await this.emailService.sendViaticoSolicitudToCoordinator(coordinator.email, {
+        clientId, coordinatorName: coordinator.name, collaboratorName: collaborator.name,
+        place: report.viaticoPlace ?? '', startDate: startStr, endDate: endStr,
+        totalFormatted: this.viaticoFormatMoney(report.viaticoAmount ?? 0),
+        projectLabel, platformUrl: this.emailService.buildAppUrl('/viaticos'),
+      })
+      await this.expenseReportModel.updateOne({ _id: (report as any)._id }, { $set: { viaticoCoordinatorNotification: { recipientUserId: coordId, status: 'sent', sentAt: new Date() } } })
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      this.logger.error(`Correo coordinador viático ${reportId}: ${msg}`)
+      await this.expenseReportModel.updateOne({ _id: (report as any)._id }, { $set: { viaticoCoordinatorNotification: { recipientUserId: coordId, status: 'failed', sentAt: new Date(), errorMessage: msg } } })
+    }
+  }
+
+  async approveViaticoL1(id: string, opts: { approvedBy: string; notes?: string }, userRole: string, userPermissions?: any): Promise<ExpenseReportDocument> {
+    const report = await this.expenseReportModel.findById(id)
+    if (!report) throw new NotFoundException(`Viático ${id} no encontrado`)
+    if (report.type !== 'viatico') throw new BadRequestException('Esta rendición no es de tipo viático')
+    if (report.status !== 'pending_l1') throw new BadRequestException(`El viático no está en pending_l1 (estado actual: ${report.status})`)
+
+    const canApprove = [ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(userRole as ROLES) || userPermissions?.canApproveL1 === true
+    if (!canApprove) throw new ForbiddenException('No tienes permiso para aprobar en nivel 1')
+
+    ;(report.viaticoApprovalHistory ?? []).push({ level: 1, approvedBy: opts.approvedBy, action: 'approved', notes: opts.notes, date: new Date() })
+    report.viaticoApprovalLevel = 1
+
+    const isSingleLevel = (report.viaticoRequiredLevels ?? 1) === 1
+    let autoOpenedBySaldo = false
+    if (isSingleLevel) {
+      report.status = 'viatico_approved'
+      await report.save()
+      autoOpenedBySaldo = await this.onViaticoFullyApproved(report as ExpenseReportDocument)
+    } else {
+      report.status = 'pending_l2'
+      await report.save()
+      this.notificationsService.create({ userId: report.userId.toString(), title: 'Solicitud de viáticos en revisión', message: `Tu solicitud por S/ ${this.viaticoFormatMoney(report.viaticoAmount ?? 0)} fue aprobada en nivel 1 y está pendiente de aprobación final.`, type: 'info', actionUrl: '/mis-rendiciones' }).catch(() => {})
+    }
+
+    // Si quedó cubierto 100% con saldo (status 'open'), onViaticoFullyApproved ya
+    // notificó al colaborador; evitamos el mensaje genérico de "pago en proceso".
+    if (!autoOpenedBySaldo) {
+      this.notificationsService.create({ userId: report.userId.toString(), title: isSingleLevel ? 'Solicitud de viáticos aprobada' : 'Solicitud en revisión', message: isSingleLevel ? `Tu solicitud por S/ ${this.viaticoFormatMoney(report.viaticoAmount ?? 0)} fue aprobada. El pago está siendo procesado.` : `Tu solicitud por S/ ${this.viaticoFormatMoney(report.viaticoAmount ?? 0)} fue aprobada en nivel 1.`, type: 'success', actionUrl: '/mis-rendiciones' }).catch(() => {})
+    }
+
+    return this.findOne(id) as Promise<ExpenseReportDocument>
+  }
+
+  async approveViaticoL2(id: string, opts: { approvedBy: string; notes?: string }, userRole: string, userPermissions?: any): Promise<ExpenseReportDocument> {
+    const report = await this.expenseReportModel.findById(id)
+    if (!report) throw new NotFoundException(`Viático ${id} no encontrado`)
+    if (report.type !== 'viatico') throw new BadRequestException('Esta rendición no es de tipo viático')
+    if (report.status !== 'pending_l2') throw new BadRequestException(`El viático no está en pending_l2 (estado actual: ${report.status})`)
+
+    const canApprove = userRole === ROLES.SUPER_ADMIN || userPermissions?.canApproveL2 === true
+    if (!canApprove) throw new ForbiddenException('No tienes permiso para aprobar en nivel 2')
+
+    ;(report.viaticoApprovalHistory ?? []).push({ level: 2, approvedBy: opts.approvedBy, action: 'approved', notes: opts.notes, date: new Date() })
+    report.viaticoApprovalLevel = 2
+    report.status = 'viatico_approved'
+    await report.save()
+
+    const autoOpenedBySaldo = await this.onViaticoFullyApproved(report as ExpenseReportDocument)
+    // Si quedó cubierto 100% con saldo (status 'open'), onViaticoFullyApproved ya
+    // notificó al colaborador; evitamos el mensaje genérico de "pago en proceso".
+    if (!autoOpenedBySaldo) {
+      this.notificationsService.create({ userId: report.userId.toString(), title: 'Solicitud de viáticos aprobada', message: `Tu solicitud por S/ ${this.viaticoFormatMoney(report.viaticoAmount ?? 0)} fue aprobada. El pago está siendo procesado.`, type: 'success', actionUrl: '/mis-rendiciones' }).catch(() => {})
+    }
+
+    return this.findOne(id) as Promise<ExpenseReportDocument>
+  }
+
+  /** Devuelve `true` si el viático quedó cubierto 100% con saldo y se abrió sin pago. */
+  private async onViaticoFullyApproved(report: ExpenseReportDocument): Promise<boolean> {
+    // Viático cubierto 100% con saldo de la bolsa: no hay desembolso de contabilidad
+    // (la diferencia es 0). No pasa por tesorería: se abre directamente para que el
+    // colaborador registre sus gastos, igual que tras un pago totalmente liquidado.
+    const fullyFundedBySaldo =
+      Array.isArray(report.saldoIds) &&
+      report.saldoIds.length > 0 &&
+      Number(report.viaticoPaidAmount ?? 0) >= Number(report.viaticoAmount ?? 0) - 0.01
+    if (fullyFundedBySaldo) {
+      await this.expenseReportModel.updateOne(
+        { _id: (report as any)._id },
+        { $set: { status: 'open' } }
+      )
+      report.status = 'open'
+      this.notificationsService.create({
+        userId: report.userId.toString(),
+        title: 'Viático aprobado y cubierto con tu saldo',
+        message: `Tu viático por S/ ${this.viaticoFormatMoney(report.viaticoAmount ?? 0)} fue aprobado y quedó cubierto con tu saldo. Contabilidad no realiza ningún depósito. Ya puedes registrar tus gastos.`,
+        type: 'success',
+        actionUrl: `/mis-rendiciones/${String((report as any)._id)}/detalle`,
+      }).catch(() => {})
+      return true
+    }
+
+    if (report.projectId && !report.viaticoBudgetCommitmentRecorded) {
+      try {
+        await this.projectService.adjustCommittedAdvanceTotal(report.projectId.toString(), report.clientId.toString(), report.viaticoAmount ?? 0)
+        await this.expenseReportModel.updateOne({ _id: (report as any)._id }, { $set: { viaticoBudgetCommitmentRecorded: true } })
+      } catch (err: unknown) { this.logger.error(`Compromiso presupuestal viático ${(report as any)._id}: ${err instanceof Error ? err.message : String(err)}`) }
+    }
+    try {
+      const recipients = await this.userService.findViaticoAccountingNotifyRecipients(report.clientId.toString())
+      const collaborator = await this.userService.findEmailNameClient(report.userId.toString())
+      for (const r of recipients) {
+        await this.emailService.sendViaticoAprobacionContabilidad(r.email, {
+          clientId: report.clientId.toString(), recipientName: r.name, urgent: false, urgentBanner: '', emailTitle: 'Solicitud de viáticos aprobada',
+          detailBody: `<p>Viático por S/ ${this.viaticoEscapeHtml(this.viaticoFormatMoney(report.viaticoAmount ?? 0))} de ${this.viaticoEscapeHtml(collaborator?.name ?? '')} aprobado y listo para pago.</p>`,
+          projectLabel: '', platformUrl: this.emailService.buildAppUrl('/tesoreria'),
+        }).catch(() => {})
+      }
+    } catch (err: unknown) { this.logger.error(`Notificación contabilidad viático ${(report as any)._id}: ${err instanceof Error ? err.message : String(err)}`) }
+    return false
+  }
+
+  async rejectViatico(id: string, opts: { rejectedBy: string; rejectionReason: string }, userRole: string, userPermissions?: any): Promise<ExpenseReportDocument> {
+    const report = await this.expenseReportModel.findById(id)
+    if (!report) throw new NotFoundException(`Viático ${id} no encontrado`)
+    if (report.type !== 'viatico') throw new BadRequestException('Esta rendición no es de tipo viático')
+    if (!['pending_l1', 'pending_l2'].includes(report.status)) throw new BadRequestException(`No se puede rechazar en estado "${report.status}"`)
+
+    const canReject = [ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(userRole as ROLES) || userPermissions?.canApproveL1 === true || userPermissions?.canApproveL2 === true
+    if (!canReject) throw new ForbiddenException('No tienes permiso para rechazar viáticos')
+
+    if ((opts.rejectionReason?.trim() ?? '').length < 10) throw new BadRequestException('El motivo de rechazo debe tener al menos 10 caracteres.')
+
+    ;(report.viaticoApprovalHistory ?? []).push({ level: report.status === 'pending_l2' ? 2 : 1, approvedBy: opts.rejectedBy, action: 'rejected', notes: opts.rejectionReason, date: new Date() })
+    report.status = 'rejected'
+    report.viaticoRejectedBy = opts.rejectedBy
+    report.viaticoRejectionReason = opts.rejectionReason
+    await this.revertViaticoSaldoFinancing(report)
+    await report.save()
+
+    this.notificationsService.create({ userId: report.userId.toString(), title: 'Solicitud de viáticos rechazada', message: `Tu solicitud por S/ ${this.viaticoFormatMoney(report.viaticoAmount ?? 0)} fue rechazada. Motivo: ${opts.rejectionReason}`, type: 'error', actionUrl: '/mis-rendiciones' }).catch(() => {})
+
+    const collaborator = await this.userService.findEmailNameClient(report.userId.toString())
+    if (collaborator?.email && await this.userService.isEmailEnabled(report.userId.toString())) {
+      this.emailService.sendViaticoRechazoColaborador(collaborator.email, {
+        clientId: report.clientId.toString(), collaboratorName: collaborator.name,
+        collaboratorDocument: '', collaboratorArea: '', collaboratorCargo: '',
+        projectLabel: '', rejectionReason: opts.rejectionReason,
+        platformUrl: this.emailService.buildAppUrl(`/mis-rendiciones`),
+      }).catch(() => {})
+    }
+
+    return this.findOne(id) as Promise<ExpenseReportDocument>
+  }
+
+  async resubmitViatico(id: string, dto: ResubmitViaticoDto, actingUserId: string, clientId: string): Promise<ExpenseReportDocument> {
+    const report = await this.expenseReportModel.findById(id)
+    if (!report) throw new NotFoundException(`Viático ${id} no encontrado`)
+    if (report.type !== 'viatico') throw new BadRequestException('Esta rendición no es de tipo viático')
+    if (!['rejected', 'pending_l1'].includes(report.status)) throw new BadRequestException('Solo pueden reenviarse solicitudes rechazadas o pendientes de aprobación.')
+    if (report.userId.toString() !== actingUserId) throw new ForbiddenException('Solo el colaborador solicitante puede corregir y reenviar esta solicitud.')
+    if (report.clientId.toString() !== clientId) throw new ForbiddenException('La solicitud no pertenece a su organización.')
+
+    const profile = await this.userService.findTransactionalProfile(actingUserId)
+    if (!profile?.signature?.trim()) throw new ForbiddenException('Debe registrar su firma digital en el perfil antes de reenviar viáticos.')
+
+    const { lineDocs, roundedSum, description, requiredLevels } = await this.validateViaticoLines(
+      { place: dto.place, startDate: dto.startDate, endDate: dto.endDate, projectId: dto.projectId, lines: dto.lines, observations: dto.observations, amount: dto.amount },
+      clientId
+    )
+
+    const wasEditing = report.status === 'pending_l1'
+    report.viaticoPlace = dto.place.trim()
+    if (dto.lat != null) report.viaticoLat = dto.lat
+    if (dto.lng != null) report.viaticoLng = dto.lng
+    report.viaticoStartDate = new Date(dto.startDate)
+    report.viaticoEndDate = new Date(dto.endDate)
+    report.projectId = new Types.ObjectId(dto.projectId)
+    report.viaticoLines = lineDocs
+    report.viaticoObservations = dto.observations?.trim()
+    report.viaticoAmount = roundedSum
+    report.budget = roundedSum
+    // Re-aplicar saldo de la bolsa si la corrección lo selecciona y el viático no
+    // tiene ya uno aplicado (caso típico: fue rechazado y su saldo se devolvió a la
+    // bolsa). Si ya tenía saldo (edición antes de aprobación), se conserva intacto.
+    const alreadyHasSaldo =
+      Array.isArray(report.saldoIds) && report.saldoIds.length > 0
+    const reselectedSaldos = Array.isArray(dto.saldoIds) ? dto.saldoIds : []
+    if (!alreadyHasSaldo && reselectedSaldos.length > 0) {
+      await this.applyViaticoSaldoFinancing(report, reselectedSaldos, {
+        userId: actingUserId,
+        clientId,
+        projectId: dto.projectId,
+      })
+    }
+    report.description = description
+    report.status = 'pending_l1'
+    report.viaticoApprovalLevel = 0
+    report.viaticoRequiredLevels = requiredLevels
+    report.viaticoRejectedBy = undefined
+    report.viaticoRejectionReason = undefined
+    report.viaticoBudgetCommitmentRecorded = false
+    report.viaticoSolicitudVersion = (report.viaticoSolicitudVersion ?? 1) + 1
+    ;(report.viaticoApprovalHistory ?? []).push({ level: 0, approvedBy: actingUserId, action: 'resubmitted', notes: wasEditing ? 'Solicitud editada antes de aprobación' : 'Solicitud corregida y reenviada tras rechazo', date: new Date() })
+    await report.save()
+
+    void this.notifyViaticoCoordinator(report as ExpenseReportDocument, actingUserId, clientId)
+
+    return this.findOne(id) as Promise<ExpenseReportDocument>
+  }
+
+  async registerViaticoPayment(id: string, dto: PayViaticoDto, userRole: string, userPermissions?: any): Promise<ExpenseReportDocument> {
+    const report = await this.expenseReportModel.findById(id)
+    if (!report) throw new NotFoundException(`Viático ${id} no encontrado`)
+    if (report.type !== 'viatico') throw new BadRequestException('Esta rendición no es de tipo viático')
+    if (!['viatico_approved', 'partially_paid'].includes(report.status)) {
+      throw new BadRequestException(`Solo se puede registrar pago de viáticos aprobados (estado actual: ${report.status})`)
+    }
+
+    const canPay = [ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD].includes(userRole as ROLES) || userPermissions?.canApproveL2 === true
+    if (!canPay) throw new ForbiddenException('No tienes permiso para registrar pagos')
+
+    if (dto.method !== 'efectivo' && !dto.paymentReceiptUrl) throw new BadRequestException('El comprobante es obligatorio para pagos por transferencia o cheque.')
+    if (dto.paymentReceiptUrl) {
+      const v = this.isValidViaticoReceipt(dto.paymentReceiptMimeType, dto.paymentReceiptFileName, dto.paymentReceiptSizeBytes)
+      if (!v.ok) throw new BadRequestException(v.reason)
+    }
+
+    const prevPaid = Number(report.viaticoPaidAmount ?? 0)
+    const isFirstPayment = !report.viaticoPayments || report.viaticoPayments.length === 0
+    const paymentAmount = Number(dto.amount ?? Math.max((report.viaticoAmount ?? 0) - prevPaid, 0))
+    if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) throw new BadRequestException('El monto del pago debe ser mayor a 0.')
+
+    if (isFirstPayment && report.viaticoBudgetCommitmentRecorded && report.projectId) {
+      try {
+        await this.projectService.adjustCommittedAdvanceTotal(report.projectId.toString(), report.clientId.toString(), -(report.viaticoAmount ?? 0))
+      } catch (err: unknown) { this.logger.error(`Libera compromiso viático ${id}: ${err instanceof Error ? err.message : String(err)}`) }
+      report.viaticoBudgetCommitmentRecorded = false
+    }
+
+    const paymentRecord = {
+      amount: paymentAmount, method: dto.method, bankName: dto.bankName, accountNumber: dto.accountNumber,
+      cci: dto.cci, transferDate: new Date(dto.transferDate), reference: dto.reference,
+      paymentReceiptUrl: dto.paymentReceiptUrl ?? '', paymentReceiptFileName: dto.paymentReceiptFileName,
+      paymentReceiptMimeType: dto.paymentReceiptMimeType, paymentReceiptSizeBytes: dto.paymentReceiptSizeBytes,
+      scannedAmount: dto.scannedAmount, scannedTitular: dto.scannedTitular, operationNumber: dto.operationNumber,
+      operationDate: dto.operationDate, operationTime: dto.operationTime, createdAt: new Date(),
+    }
+    report.viaticoPayments = [...(report.viaticoPayments ?? []), paymentRecord]
+    report.viaticoPaidAmount = prevPaid + paymentAmount
+
+    if (isFirstPayment) {
+      report.viaticoPaymentInfo = { method: dto.method, bankName: dto.bankName, accountNumber: dto.accountNumber, cci: dto.cci, transferDate: new Date(dto.transferDate), reference: dto.reference, paymentReceiptUrl: dto.paymentReceiptUrl ?? '', paymentReceiptFileName: dto.paymentReceiptFileName, paymentReceiptMimeType: dto.paymentReceiptMimeType, paymentReceiptSizeBytes: dto.paymentReceiptSizeBytes }
+    }
+
+    const fullyPaid = report.viaticoPaidAmount >= (report.viaticoAmount ?? 0)
+    report.status = fullyPaid ? 'paid' : 'partially_paid'
+
+    // Al quedar pagado, la rendición pasa a abierta para registrar gastos
+    if (fullyPaid) {
+      report.status = 'open'
+    }
+
+    await report.save()
+
+    const collaborator = await this.userService.findEmailNameClient(report.userId.toString())
+    const reportId = String((report as any)._id)
+    const fullyPaidMsg = fullyPaid
+      ? `Se registró el pago de tu viático por S/ ${this.viaticoFormatMoney(paymentAmount)}. Ya puedes registrar tus gastos.`
+      : `Se registró un pago parcial de tu viático por S/ ${this.viaticoFormatMoney(paymentAmount)} (total pagado S/ ${this.viaticoFormatMoney(report.viaticoPaidAmount ?? 0)} de S/ ${this.viaticoFormatMoney(report.viaticoAmount ?? 0)}).`
+
+    this.notificationsService.create({ userId: report.userId.toString(), title: fullyPaid ? 'Pago de viático registrado' : 'Pago parcial de viático registrado', message: fullyPaidMsg, type: 'success', actionUrl: `/mis-rendiciones/${reportId}/detalle` }).catch(() => {})
+
+    if (collaborator?.email && await this.userService.isEmailEnabled(report.userId.toString())) {
+      this.emailService.sendViaticoPagoRealizado(collaborator.email, {
+        clientId: report.clientId.toString(), recipientName: collaborator.name, collaboratorName: collaborator.name,
+        amountFormatted: this.viaticoFormatMoney(report.viaticoAmount ?? 0),
+        transferDate: new Date(dto.transferDate).toISOString().slice(0, 10),
+        reference: dto.reference ?? '—', paymentMethod: dto.method,
+        paymentReceiptUrl: dto.paymentReceiptUrl ?? '', paymentReceiptFileName: dto.paymentReceiptFileName ?? 'comprobante.pdf',
+        platformUrl: this.emailService.buildAppUrl('/mis-rendiciones'), projectLabel: '', coordinatorName: undefined,
+      }).catch(() => {})
+    }
+
+    return this.findOne(id) as Promise<ExpenseReportDocument>
+  }
+
+  async cancelViatico(id: string, userId: string): Promise<ExpenseReportDocument> {
+    const report = await this.expenseReportModel.findById(id)
+    if (!report) throw new NotFoundException(`Viático ${id} no encontrado`)
+    if (report.type !== 'viatico') throw new BadRequestException('Esta rendición no es de tipo viático')
+    if (report.userId.toString() !== userId) throw new ForbiddenException('Solo el colaborador solicitante puede cancelar esta solicitud.')
+    if (report.status !== 'pending_l1') throw new BadRequestException('Solo se puede cancelar una solicitud en estado pendiente de aprobación.')
+    report.status = 'cancelled'
+    await this.revertViaticoSaldoFinancing(report)
+    await report.save()
+    return this.findOne(id) as Promise<ExpenseReportDocument>
+  }
+
+  /**
+   * Devuelve a la bolsa los saldos que prefinanciaban un viático que ya no
+   * continuará (rechazado/cancelado) y limpia su financiamiento, evitando que el
+   * colaborador pierda ese saldo. Reject/cancel ocurren antes del pago de
+   * contabilidad, por lo que tras restaurar viaticoPaidAmount queda en 0.
+   *
+   * Si al crear se devolvió un "vuelto" a la bolsa (saldo seleccionado > total), se
+   * neutraliza primero para no contarlo dos veces al restaurar los saldos originales.
+   */
+  private async revertViaticoSaldoFinancing(
+    report: ExpenseReportDocument
+  ): Promise<void> {
+    try {
+      const reportId = String((report as any)._id)
+      // Neutraliza el vuelto antes de restaurar los saldos completos (evita doble conteo).
+      await this.saldoService.removeViaticoChangeByReport(reportId)
+      const restored = await this.saldoService.restoreByConsumer({ reportId })
+      if (restored > 0) {
+        report.viaticoPaidAmount = 0
+        report.saldoIds = undefined
+      }
+    } catch (err: unknown) {
+      this.logger.error(
+        `Revertir saldo viático ${(report as any)._id}: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+  }
+
+  async findViaticos(opts: { requesterId: string; requesterRole: string; requesterPermissions?: any; clientId: string; status?: string; dateFrom?: string; dateTo?: string }) {
+    const isAdmin = [ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD].includes(opts.requesterRole as ROLES)
+    const isApprover = !isAdmin && opts.requesterPermissions?.canApproveL1 === true
+    const filter: Record<string, unknown> = { type: 'viatico', clientId: new Types.ObjectId(opts.clientId) }
+
+    if (isApprover) filter['coordinatorId'] = new Types.ObjectId(opts.requesterId)
+    else if (!isAdmin) filter['userId'] = new Types.ObjectId(opts.requesterId)
+
+    if (opts.status && opts.status !== 'all') filter['status'] = opts.status
+    if (opts.dateFrom || opts.dateTo) {
+      const dateFilter: Record<string, Date> = {}
+      if (opts.dateFrom) dateFilter['$gte'] = new Date(opts.dateFrom)
+      if (opts.dateTo) { const to = new Date(opts.dateTo); to.setHours(23, 59, 59, 999); dateFilter['$lte'] = to }
+      filter['createdAt'] = dateFilter
+    }
+
+    return this.expenseReportModel.find(filter)
+      .populate('userId', 'name email bankAccount dni')
+      .populate('projectId', 'code name')
+      .sort({ viaticoStartDate: -1, createdAt: -1 })
+      .exec()
+  }
+
+  async findMyViaticos(userId: string, clientId: string) {
+    return this.expenseReportModel.find({
+      type: 'viatico',
+      userId: new Types.ObjectId(userId),
+      clientId: new Types.ObjectId(clientId),
+    })
+      .populate('userId', 'name email')
+      .populate('projectId', 'code name')
+      .sort({ createdAt: -1 })
+      .exec()
+  }
+
+  async initiateViaticoReturnTracking(id: string): Promise<ExpenseReportDocument> {
+    const report = await this.expenseReportModel.findById(id)
+    if (!report) throw new NotFoundException(`Viático ${id} no encontrado`)
+    if (report.type !== 'viatico') throw new BadRequestException('Esta rendición no es de tipo viático')
+    if (report.status !== 'settled') throw new BadRequestException('Solo se puede iniciar devolución desde estado liquidado')
+    if (!report.settlement || report.settlement.type !== 'devolucion') throw new BadRequestException('Este viático no tiene saldo a devolver')
+
+    const dueDate = this.addViaticoBusinessDays(new Date(), 10)
+    await this.expenseReportModel.findByIdAndUpdate(id, {
+      $set: { viaticoReturnRecord: { status: 'pending', amountDue: report.settlement.difference, dueDate, isOverdue: false, remindersSent: 0 } },
+    })
+    const collaborator = await this.userService.findEmailNameClient(report.userId.toString())
+    if (collaborator?.email) {
+      this.emailService.sendDevolucionPendiente(collaborator.email, {
+        clientId: report.clientId.toString(), recipientName: collaborator.name,
+        amountDue: this.viaticoFormatMoney(report.settlement.difference),
+        dueDate: this.emailService.formatDateDDMMYYYY(dueDate), advanceId: id,
+      }).catch(() => {})
+    }
+    return this.findOne(id) as Promise<ExpenseReportDocument>
+  }
+
+  async uploadViaticoReturnProof(id: string, proof: { depositDate: Date; amountReturned: number; bankOrigin: string; operationNumber: string; fileUrl: string; fileKey?: string; note?: string; scannedAmount?: number; operationDate?: string; operationTime?: string; titular?: string }): Promise<ExpenseReportDocument> {
+    const report = await this.expenseReportModel.findById(id)
+    if (!report) throw new NotFoundException(`Viático ${id} no encontrado`)
+    if (report.type !== 'viatico') throw new BadRequestException('Esta rendición no es de tipo viático')
+    const rr = (report as any).viaticoReturnRecord
+    if (!rr || rr.status !== 'pending') throw new BadRequestException('No hay devolución pendiente de comprobante')
+    if (proof.amountReturned < rr.amountDue) throw new BadRequestException(`El monto devuelto (${proof.amountReturned}) es menor al monto adeudado (${rr.amountDue})`)
+    await this.expenseReportModel.findByIdAndUpdate(id, { $set: { viaticoReturnRecord: { ...rr, status: 'proof_uploaded', proof: { ...proof, uploadedAt: new Date() } } } })
+    return this.findOne(id) as Promise<ExpenseReportDocument>
+  }
+
+  async validateViaticoReturn(id: string, approved: boolean, validatedBy: string, rejectionReason?: string): Promise<ExpenseReportDocument> {
+    const report = await this.expenseReportModel.findById(id)
+    if (!report) throw new NotFoundException(`Viático ${id} no encontrado`)
+    if (report.type !== 'viatico') throw new BadRequestException('Esta rendición no es de tipo viático')
+    const rr = (report as any).viaticoReturnRecord
+    if (!rr || rr.status !== 'proof_uploaded') throw new BadRequestException('No hay comprobante pendiente de validación')
+    if (!approved && (!rejectionReason || rejectionReason.trim().length < 50)) throw new BadRequestException('El motivo de rechazo debe tener al menos 50 caracteres')
+
+    const validation = { validatedBy, validatedAt: new Date(), approved, rejectionReason }
+    const updates: any = { viaticoReturnRecord: { ...rr, status: approved ? 'validated' : 'rejected', validation } }
+    if (approved) updates.status = 'returned'
+    await this.expenseReportModel.findByIdAndUpdate(id, { $set: updates })
+
+    const collaborator = await this.userService.findEmailNameClient(report.userId.toString())
+    if (collaborator?.email && await this.userService.isEmailEnabled(report.userId.toString())) {
+      const sendFn = approved ? this.emailService.sendDevolucionValidada.bind(this.emailService) : this.emailService.sendDevolucionRechazada.bind(this.emailService)
+      sendFn(collaborator.email, { clientId: report.clientId.toString(), recipientName: collaborator.name, amountDue: this.viaticoFormatMoney(rr.amountDue), rejectionReason, advanceId: id }).catch(() => {})
+    }
+    return this.findOne(id) as Promise<ExpenseReportDocument>
+  }
+
+  async findViaticosPendingReturns(clientId: string) {
+    return this.expenseReportModel.find({
+      type: 'viatico',
+      clientId: new Types.ObjectId(clientId),
+      'viaticoReturnRecord.status': { $in: ['pending', 'proof_uploaded', 'rejected'] },
+    })
+      .populate('userId', 'name email bankAccount dni')
+      .exec()
+  }
+
+  /** Liquidación para rendiciones de tipo viático (sin Advance externo). */
+  async liquidateViaticoReport(reportId: string, fromClose = false): Promise<void> {
+    const report = await this.expenseReportModel.findById(reportId).populate('expenseIds').exec()
+    if (!report || report.type !== 'viatico' || report.status !== 'approved') return
+
+    const expenses = (report.expenseIds as any[]) || []
+    const expenseTotal = expenses.reduce((sum, e) => {
+      if (String(e?.status ?? '').toLowerCase() !== 'approved') return sum
+      return sum + (Number(e.total) || 0)
+    }, 0)
+
+    const advanceTotal = Number(report.viaticoPaidAmount ?? 0)
+    // Solo omitir si ambos son cero (nada que liquidar).
+    if (advanceTotal <= 0 && expenseTotal <= 0) return
+
+    const difference = advanceTotal - expenseTotal
+    const type: 'reembolso' | 'devolucion' | 'equilibrado' =
+      Math.abs(difference) < 0.01 ? 'equilibrado' : difference > 0 ? 'devolucion' : 'reembolso'
+
+    await this.updateSettlement(reportId, { advanceTotal, expenseTotal, difference, type, settledAt: new Date() })
+
+    // Remanente positivo (devolución): el saldo no gastado queda disponible para
+    // el colaborador en su bolsa de "Saldo" (tipo `rendicion`, con su centro de costo).
+    if (type === 'devolucion' && difference > 0.01) {
+      try {
+        await this.saldoService.createFromRemnant({
+          userId: report.userId,
+          clientId: report.clientId,
+          projectId: report.projectId ?? null,
+          sourceReportId: reportId,
+          amount: difference,
+          type: 'rendicion',
+        })
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.logger.error(`Crear saldo remanente viático ${reportId}: ${msg}`)
+      }
+    }
+
+    // Auto-cierre inmediato cuando el viático queda equilibrado.
+    // fromClose=true indica que esta llamada viene desde close() — evita recursión.
+    if (!fromClose && type === 'equilibrado') {
+      await this.close(reportId, 'sistema')
     }
   }
 }

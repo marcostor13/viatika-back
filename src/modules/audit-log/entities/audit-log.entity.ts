@@ -13,6 +13,7 @@ export type AuditAction =
   | 'create_other_expense'
   | 'create_rendicion'
   | 'create_rendicion_directa_deposito'
+  | 'create_saldo_pago'
   | 'delete_rendicion'
   | 'update_rendicion_status'
   | 'reopen_rendicion'
@@ -61,6 +62,13 @@ export type AuditAction =
   | 'upsert_accounting_config'
   | 'download_accounting_entries'
   | 'update_expense_desglose'
+  | 'create_viatico'
+  | 'approve_viatico_l1'
+  | 'approve_viatico_l2'
+  | 'reject_viatico'
+  | 'resubmit_viatico'
+  | 'register_viatico_payment'
+  | 'cancel_viatico'
 
 @Schema({ timestamps: true })
 export class AuditLog {

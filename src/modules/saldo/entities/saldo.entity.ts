@@ -41,6 +41,7 @@ export interface SaldoDocument extends Document {
   concepto?: string
   projectId?: Types.ObjectId
   sourceReportId?: Types.ObjectId
+  changeFromReportId?: Types.ObjectId
   deposit?: SaldoDepositInfo
   consumedByReportId?: Types.ObjectId
   consumedByAdvanceId?: Types.ObjectId
@@ -82,6 +83,14 @@ export class Saldo {
   /** Rendición que originó el saldo (rendicion / rendicion_directa). */
   @Prop({ type: Types.ObjectId, ref: 'ExpenseReport', required: false })
   sourceReportId?: Types.ObjectId
+
+  /**
+   * Viático cuyo saldo seleccionado superó el total: el sobrante (vuelto) volvió a
+   * la bolsa como este saldo. Se usa en lugar de `sourceReportId` para no chocar con
+   * su índice único (la liquidación de ese mismo viático puede crear otro remanente).
+   */
+  @Prop({ type: Types.ObjectId, ref: 'ExpenseReport', required: false })
+  changeFromReportId?: Types.ObjectId
 
   @Prop({
     type: {

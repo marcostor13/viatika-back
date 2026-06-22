@@ -147,6 +147,85 @@ export class SaldoService {
   }
 
   /**
+   * Devuelve a la bolsa el sobrante ("vuelto") de un saldo que prefinanció un viático
+   * cuando el saldo seleccionado superaba el total del viático: el saldo se consume
+   * completo, pero solo se usa lo necesario y este sobrante regresa de inmediato como
+   * un saldo `rendicion` disponible del mismo centro de costo (reutilizable). Se enlaza
+   * por `changeFromReportId` (no `sourceReportId`, que tiene índice único y lo usa la
+   * liquidación del propio viático). Idempotente: si ya hay un vuelto disponible para
+   * ese viático, no duplica.
+   */
+  async createViaticoChange(input: {
+    userId: Types.ObjectId | string
+    clientId: Types.ObjectId | string
+    projectId?: Types.ObjectId | string | null
+    changeFromReportId: Types.ObjectId | string
+    amount: number
+    createdBy?: Types.ObjectId | string
+  }): Promise<SaldoDocument | null> {
+    if (!input.amount || input.amount <= 0.01) return null
+
+    const changeFromReportId = new Types.ObjectId(String(input.changeFromReportId))
+    const existing = await this.saldoModel
+      .findOne({ changeFromReportId, status: 'available' })
+      .exec()
+    if (existing) return existing
+
+    const userId = new Types.ObjectId(String(input.userId))
+    const saldo = await this.saldoModel.create({
+      clientId: new Types.ObjectId(String(input.clientId)),
+      userId,
+      type: 'rendicion',
+      amount: input.amount,
+      status: 'available',
+      projectId: input.projectId
+        ? new Types.ObjectId(String(input.projectId))
+        : undefined,
+      changeFromReportId,
+      concepto: 'Saldo no utilizado de una solicitud de viáticos',
+      createdBy: input.createdBy
+        ? new Types.ObjectId(String(input.createdBy))
+        : userId,
+    })
+
+    try {
+      await this.notificationsService.create({
+        userId: String(userId),
+        title: 'Saldo devuelto a tu bolsa',
+        message: `Tu solicitud de viáticos usó solo parte de tu saldo. S/ ${input.amount.toFixed(2)} volvieron a tu Saldo y ya están disponibles.`,
+        type: 'info',
+        actionUrl: '/saldo',
+      })
+    } catch (error) {
+      this.logger.error('Error notificando vuelto de viático', error)
+    }
+
+    return saldo
+  }
+
+  /**
+   * Neutraliza (status `consumed`) el vuelto que un viático devolvió a la bolsa.
+   * Se usa al revertir el financiamiento (rechazo/cancelación) para no contar dos
+   * veces el sobrante al restaurar los saldos originales. Solo actúa si el vuelto
+   * sigue disponible (si el colaborador ya lo gastó, no se toca). Devuelve el monto.
+   */
+  async removeViaticoChangeByReport(
+    changeFromReportId: string | Types.ObjectId
+  ): Promise<number> {
+    const change = await this.saldoModel
+      .findOne({
+        changeFromReportId: new Types.ObjectId(String(changeFromReportId)),
+        status: 'available',
+      })
+      .exec()
+    if (!change) return 0
+    change.status = 'consumed'
+    change.consumedAt = new Date()
+    await change.save()
+    return Number(change.amount) || 0
+  }
+
+  /**
    * Devuelve a la bolsa (status `available`) los saldos que había consumido un
    * documento (rendición/viático o anticipo) que luego se rechazó/canceló/eliminó.
    * Limpia los campos de consumo. Devuelve la suma restaurada.

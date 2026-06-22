@@ -1708,8 +1708,10 @@ export class ExpenseReportService implements OnModuleInit {
     }
 
     // Devolver a la bolsa los saldos que esta rendición había consumido (si los
-    // hubo), para que el colaborador no los pierda al eliminarla.
+    // hubo), para que el colaborador no los pierda al eliminarla. Si devolvió un
+    // "vuelto" (saldo > total), se neutraliza primero para no contarlo dos veces.
     try {
+      await this.saldoService.removeViaticoChangeByReport(id)
       await this.saldoService.restoreByConsumer({ reportId: id })
     } catch (err: unknown) {
       this.logger.error(
@@ -3522,28 +3524,63 @@ export class ExpenseReportService implements OnModuleInit {
       await this.markPendingBalanceUsed(dto.pendingBalanceFromReportId, String((report as any)._id))
     }
 
-    // Financiamiento con saldos de la bolsa (mismo centro de costo): el saldo
-    // prefinancia el viático. Se registra como ya pagado (viaticoPaidAmount), de modo
-    // que contabilidad solo deposite la diferencia (viaticoAmount - saldo) y la
-    // liquidación cuadre. consume valida dueño, disponibilidad y centro de costo.
+    // Financiamiento con saldos de la bolsa (mismo centro de costo).
     const saldoIds = Array.isArray(dto.saldoIds) ? dto.saldoIds : []
     if (saldoIds.length > 0) {
-      const reportId = String((report as any)._id)
-      const saldoTotal = await this.saldoService.consume(saldoIds, {
+      await this.applyViaticoSaldoFinancing(report, saldoIds, {
         userId,
         clientId,
-        context: 'viatico',
         projectId: dto.projectId,
-        reportId,
       })
-      report.saldoIds = saldoIds.map(sid => new Types.ObjectId(sid))
-      report.viaticoPaidAmount = Math.round(saldoTotal * 100) / 100
       await report.save()
     }
 
     void this.notifyViaticoCoordinator(report as ExpenseReportDocument, userId, clientId)
 
     return this.findOne(String((report as any)._id)) as Promise<ExpenseReportDocument>
+  }
+
+  /**
+   * Financia un viático con saldos de la bolsa (mismo centro de costo). El saldo
+   * prefinancia el anticipo: se registra como ya pagado (`viaticoPaidAmount`), de modo
+   * que contabilidad solo deposite la diferencia (viaticoAmount − saldo aplicado).
+   *
+   * El saldo nunca paga más que el total del viático: si el saldo seleccionado SUPERA
+   * el total, solo se usa lo necesario y el sobrante ("vuelto") vuelve de inmediato a
+   * la bolsa como saldo disponible del mismo centro de costo. En ese caso contabilidad
+   * no deposita nada. `consume` valida dueño, disponibilidad y centro de costo. No
+   * persiste el documento (lo hace quien llama).
+   */
+  private async applyViaticoSaldoFinancing(
+    report: ExpenseReportDocument,
+    saldoIds: string[],
+    opts: { userId: string; clientId: string; projectId: string }
+  ): Promise<void> {
+    const reportId = String((report as any)._id)
+    const saldoTotal = await this.saldoService.consume(saldoIds, {
+      userId: opts.userId,
+      clientId: opts.clientId,
+      context: 'viatico',
+      projectId: opts.projectId,
+      reportId,
+    })
+    report.saldoIds = saldoIds.map(sid => new Types.ObjectId(sid))
+
+    const viaticoAmount = Number(report.viaticoAmount ?? 0)
+    // El saldo nunca cubre más que el total del viático.
+    report.viaticoPaidAmount = Math.round(Math.min(saldoTotal, viaticoAmount) * 100) / 100
+
+    // Sobrante: el saldo seleccionado superó el total → vuelve ya mismo a la bolsa.
+    const excess = Math.round((saldoTotal - viaticoAmount) * 100) / 100
+    if (excess > 0.01) {
+      await this.saldoService.createViaticoChange({
+        userId: opts.userId,
+        clientId: opts.clientId,
+        projectId: opts.projectId,
+        changeFromReportId: reportId,
+        amount: excess,
+      })
+    }
   }
 
   private async notifyViaticoCoordinator(report: ExpenseReportDocument, collaboratorUserId: string, clientId: string): Promise<void> {
@@ -3606,17 +3643,23 @@ export class ExpenseReportService implements OnModuleInit {
     ;(report.viaticoApprovalHistory ?? []).push({ level: 1, approvedBy: opts.approvedBy, action: 'approved', notes: opts.notes, date: new Date() })
     report.viaticoApprovalLevel = 1
 
-    if ((report.viaticoRequiredLevels ?? 1) === 1) {
+    const isSingleLevel = (report.viaticoRequiredLevels ?? 1) === 1
+    let autoOpenedBySaldo = false
+    if (isSingleLevel) {
       report.status = 'viatico_approved'
       await report.save()
-      await this.onViaticoFullyApproved(report as ExpenseReportDocument)
+      autoOpenedBySaldo = await this.onViaticoFullyApproved(report as ExpenseReportDocument)
     } else {
       report.status = 'pending_l2'
       await report.save()
       this.notificationsService.create({ userId: report.userId.toString(), title: 'Solicitud de viáticos en revisión', message: `Tu solicitud por S/ ${this.viaticoFormatMoney(report.viaticoAmount ?? 0)} fue aprobada en nivel 1 y está pendiente de aprobación final.`, type: 'info', actionUrl: '/mis-rendiciones' }).catch(() => {})
     }
 
-    this.notificationsService.create({ userId: report.userId.toString(), title: report.status === 'viatico_approved' ? 'Solicitud de viáticos aprobada' : 'Solicitud en revisión', message: report.status === 'viatico_approved' ? `Tu solicitud por S/ ${this.viaticoFormatMoney(report.viaticoAmount ?? 0)} fue aprobada. El pago está siendo procesado.` : `Tu solicitud por S/ ${this.viaticoFormatMoney(report.viaticoAmount ?? 0)} fue aprobada en nivel 1.`, type: 'success', actionUrl: '/mis-rendiciones' }).catch(() => {})
+    // Si quedó cubierto 100% con saldo (status 'open'), onViaticoFullyApproved ya
+    // notificó al colaborador; evitamos el mensaje genérico de "pago en proceso".
+    if (!autoOpenedBySaldo) {
+      this.notificationsService.create({ userId: report.userId.toString(), title: isSingleLevel ? 'Solicitud de viáticos aprobada' : 'Solicitud en revisión', message: isSingleLevel ? `Tu solicitud por S/ ${this.viaticoFormatMoney(report.viaticoAmount ?? 0)} fue aprobada. El pago está siendo procesado.` : `Tu solicitud por S/ ${this.viaticoFormatMoney(report.viaticoAmount ?? 0)} fue aprobada en nivel 1.`, type: 'success', actionUrl: '/mis-rendiciones' }).catch(() => {})
+    }
 
     return this.findOne(id) as Promise<ExpenseReportDocument>
   }
@@ -3635,13 +3678,41 @@ export class ExpenseReportService implements OnModuleInit {
     report.status = 'viatico_approved'
     await report.save()
 
-    await this.onViaticoFullyApproved(report as ExpenseReportDocument)
-    this.notificationsService.create({ userId: report.userId.toString(), title: 'Solicitud de viáticos aprobada', message: `Tu solicitud por S/ ${this.viaticoFormatMoney(report.viaticoAmount ?? 0)} fue aprobada. El pago está siendo procesado.`, type: 'success', actionUrl: '/mis-rendiciones' }).catch(() => {})
+    const autoOpenedBySaldo = await this.onViaticoFullyApproved(report as ExpenseReportDocument)
+    // Si quedó cubierto 100% con saldo (status 'open'), onViaticoFullyApproved ya
+    // notificó al colaborador; evitamos el mensaje genérico de "pago en proceso".
+    if (!autoOpenedBySaldo) {
+      this.notificationsService.create({ userId: report.userId.toString(), title: 'Solicitud de viáticos aprobada', message: `Tu solicitud por S/ ${this.viaticoFormatMoney(report.viaticoAmount ?? 0)} fue aprobada. El pago está siendo procesado.`, type: 'success', actionUrl: '/mis-rendiciones' }).catch(() => {})
+    }
 
     return this.findOne(id) as Promise<ExpenseReportDocument>
   }
 
-  private async onViaticoFullyApproved(report: ExpenseReportDocument): Promise<void> {
+  /** Devuelve `true` si el viático quedó cubierto 100% con saldo y se abrió sin pago. */
+  private async onViaticoFullyApproved(report: ExpenseReportDocument): Promise<boolean> {
+    // Viático cubierto 100% con saldo de la bolsa: no hay desembolso de contabilidad
+    // (la diferencia es 0). No pasa por tesorería: se abre directamente para que el
+    // colaborador registre sus gastos, igual que tras un pago totalmente liquidado.
+    const fullyFundedBySaldo =
+      Array.isArray(report.saldoIds) &&
+      report.saldoIds.length > 0 &&
+      Number(report.viaticoPaidAmount ?? 0) >= Number(report.viaticoAmount ?? 0) - 0.01
+    if (fullyFundedBySaldo) {
+      await this.expenseReportModel.updateOne(
+        { _id: (report as any)._id },
+        { $set: { status: 'open' } }
+      )
+      report.status = 'open'
+      this.notificationsService.create({
+        userId: report.userId.toString(),
+        title: 'Viático aprobado y cubierto con tu saldo',
+        message: `Tu viático por S/ ${this.viaticoFormatMoney(report.viaticoAmount ?? 0)} fue aprobado y quedó cubierto con tu saldo. Contabilidad no realiza ningún depósito. Ya puedes registrar tus gastos.`,
+        type: 'success',
+        actionUrl: `/mis-rendiciones/${String((report as any)._id)}/detalle`,
+      }).catch(() => {})
+      return true
+    }
+
     if (report.projectId && !report.viaticoBudgetCommitmentRecorded) {
       try {
         await this.projectService.adjustCommittedAdvanceTotal(report.projectId.toString(), report.clientId.toString(), report.viaticoAmount ?? 0)
@@ -3659,6 +3730,7 @@ export class ExpenseReportService implements OnModuleInit {
         }).catch(() => {})
       }
     } catch (err: unknown) { this.logger.error(`Notificación contabilidad viático ${(report as any)._id}: ${err instanceof Error ? err.message : String(err)}`) }
+    return false
   }
 
   async rejectViatico(id: string, opts: { rejectedBy: string; rejectionReason: string }, userRole: string, userPermissions?: any): Promise<ExpenseReportDocument> {
@@ -3728,15 +3800,11 @@ export class ExpenseReportService implements OnModuleInit {
       Array.isArray(report.saldoIds) && report.saldoIds.length > 0
     const reselectedSaldos = Array.isArray(dto.saldoIds) ? dto.saldoIds : []
     if (!alreadyHasSaldo && reselectedSaldos.length > 0) {
-      const saldoTotal = await this.saldoService.consume(reselectedSaldos, {
+      await this.applyViaticoSaldoFinancing(report, reselectedSaldos, {
         userId: actingUserId,
         clientId,
-        context: 'viatico',
         projectId: dto.projectId,
-        reportId: id,
       })
-      report.saldoIds = reselectedSaldos.map(sid => new Types.ObjectId(sid))
-      report.viaticoPaidAmount = Math.round(saldoTotal * 100) / 100
     }
     report.description = description
     report.status = 'pending_l1'
@@ -3846,20 +3914,21 @@ export class ExpenseReportService implements OnModuleInit {
    * Devuelve a la bolsa los saldos que prefinanciaban un viático que ya no
    * continuará (rechazado/cancelado) y limpia su financiamiento, evitando que el
    * colaborador pierda ese saldo. Reject/cancel ocurren antes del pago de
-   * contabilidad, por lo que viaticoPaidAmount = saldo; tras restaurar queda en 0.
+   * contabilidad, por lo que tras restaurar viaticoPaidAmount queda en 0.
+   *
+   * Si al crear se devolvió un "vuelto" a la bolsa (saldo seleccionado > total), se
+   * neutraliza primero para no contarlo dos veces al restaurar los saldos originales.
    */
   private async revertViaticoSaldoFinancing(
     report: ExpenseReportDocument
   ): Promise<void> {
     try {
-      const restored = await this.saldoService.restoreByConsumer({
-        reportId: String((report as any)._id),
-      })
+      const reportId = String((report as any)._id)
+      // Neutraliza el vuelto antes de restaurar los saldos completos (evita doble conteo).
+      await this.saldoService.removeViaticoChangeByReport(reportId)
+      const restored = await this.saldoService.restoreByConsumer({ reportId })
       if (restored > 0) {
-        report.viaticoPaidAmount = Math.max(
-          0,
-          Math.round(((report.viaticoPaidAmount ?? 0) - restored) * 100) / 100
-        )
+        report.viaticoPaidAmount = 0
         report.saldoIds = undefined
       }
     } catch (err: unknown) {

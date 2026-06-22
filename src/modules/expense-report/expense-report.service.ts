@@ -511,6 +511,9 @@ export class ExpenseReportService implements OnModuleInit {
       })
       .populate('userId', 'name email signature bankAccount')
       .populate('createdBy', 'name email')
+      // Nombre de la categoría de cada línea de viático, para mostrar el detalle
+      // por categoría al aprobar (la list no traía categoryId poblado).
+      .populate('viaticoLines.categoryId', 'name')
       .sort({ createdAt: -1 })
       .exec()
   }
@@ -528,6 +531,8 @@ export class ExpenseReportService implements OnModuleInit {
       })
       .populate('userId', 'name email signature bankAccount')
       .populate('createdBy', 'name email')
+      // Nombre de categoría por línea de viático (para el detalle al aprobar).
+      .populate('viaticoLines.categoryId', 'name')
       .sort({ createdAt: -1 })
       .exec()
   }
@@ -541,6 +546,7 @@ export class ExpenseReportService implements OnModuleInit {
       })
       .populate('expenseIds', 'total approvalCoord approvalCont')
       .populate('createdBy', 'name email')
+      .populate('viaticoLines.categoryId', 'name')
       .sort({ createdAt: -1 })
       .lean()
       .exec()

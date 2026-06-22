@@ -141,45 +141,56 @@ export class AccountingEntriesService {
       this.buildCategoryMap(expenses, clientId),
     ])
 
-    // Ejercicio/periodo: de la fecha de inicio de la solicitud (anticipo) o, en su
-    // defecto, de la rendición. Es constante para todas las líneas del lote.
     const periodDate = this.resolvePeriodDate(report, advances)
 
-    // Prefetch del tipo de cambio de todas las fechas involucradas, para que TODAS
-    // las filas (no solo el primer comprobante) tengan ME y cambio de moneda.
-    const rateMap = await this.prefetchRates(report, expenses, advances, config)
+    // prefetchRates (API externa) y resolveAccounts6x (OpenAI) son independientes:
+    // correrlos en paralelo reduce el tiempo de espera de ~40 s a ~20 s.
+    const [rateMap, aiAccountsMap] = await Promise.all([
+      this.prefetchRates(report, expenses, advances, config),
+      tiposToGenerate.includes('compra') && expenses.length > 0
+        ? this.resolveAccounts6x(expenses, categoryMap)
+        : Promise.resolve(new Map<string, { cuenta9x?: string; cuenta6x?: string }>()),
+    ])
 
-    for (const tipo of tiposToGenerate) {
-      const lines = await this.buildLinesForTipo(tipo, {
-        report,
-        config,
-        expenses,
-        advances,
-        colaborador,
-        projectMap,
-        categoryMap,
-        periodDate,
-        rateMap,
-      })
-      if (!lines.length) continue
-      const cuadreErrors = this.validateCuadre(lines)
-      const buffer = await buildContanetWorkbook(lines, 'CONTABILIDAD', tipo)
-      const filename = this.fileName(tipo, report)
-      const asientosCount = this.countAsientos(lines)
-      files.push({
-        tipo,
-        filename,
-        base64: buffer.toString('base64'),
-        asientosCount,
-        cuadreErrors,
-      })
-      await this.persistCache(report, clientId, tipo, fingerprint, {
-        filename,
-        buffer,
-        asientosCount,
-        cuadreErrors,
-      })
-    }
+    // Genera todos los tipos en paralelo (ExcelJS + lógica de líneas son independientes).
+    const generated = (
+      await Promise.all(
+        tiposToGenerate.map(async (tipo) => {
+          const lines = await this.buildLinesForTipo(tipo, {
+            report,
+            config,
+            expenses,
+            advances,
+            colaborador,
+            projectMap,
+            categoryMap,
+            periodDate,
+            rateMap,
+            aiAccountsMap,
+          })
+          if (!lines.length) return null
+          const cuadreErrors = this.validateCuadre(lines)
+          const buffer = await buildContanetWorkbook(lines, 'CONTABILIDAD', tipo)
+          const filename = this.fileName(tipo, report)
+          const asientosCount = this.countAsientos(lines)
+          void this.persistCache(report, clientId, tipo, fingerprint, {
+            filename,
+            buffer,
+            asientosCount,
+            cuadreErrors,
+          })
+          return {
+            tipo,
+            filename,
+            base64: buffer.toString('base64'),
+            asientosCount,
+            cuadreErrors,
+          } as GeneratedFile
+        })
+      )
+    ).filter((f): f is GeneratedFile => f !== null)
+
+    files.push(...generated)
     return this.orderFiles(files, tipos)
   }
 
@@ -337,6 +348,7 @@ export class AccountingEntriesService {
       categoryMap: Map<string, any>
       periodDate: Date
       rateMap: Map<string, number>
+      aiAccountsMap: Map<string, { cuenta9x?: string; cuenta6x?: string }>
     }
   ): Promise<ContanetLine[]> {
     switch (tipo) {
@@ -632,12 +644,15 @@ export class AccountingEntriesService {
     const prompt = buildPcgeAccountsPrompt(contexts)
 
     try {
-      const completion = await this.openai.chat.completions.create({
-        model: this.aiModel,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0,
-        max_tokens: 512,
-      })
+      const completion = await this.openai.chat.completions.create(
+        {
+          model: this.aiModel,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0,
+          max_tokens: 512,
+        },
+        { timeout: 20000 }
+      )
 
       const raw = (completion.choices[0]?.message?.content || '').trim()
       const parsed: Array<{
@@ -684,6 +699,7 @@ export class AccountingEntriesService {
     categoryMap: Map<string, any>
     periodDate: Date
     rateMap: Map<string, number>
+    aiAccountsMap: Map<string, { cuenta9x?: string; cuenta6x?: string }>
   }): Promise<ContanetLine[]> {
     const {
       config,
@@ -693,13 +709,11 @@ export class AccountingEntriesService {
       categoryMap,
       periodDate,
       rateMap,
+      aiAccountsMap,
     } = ctx
     const lines: ContanetLine[] = []
     let relacionado = 1
     let correlativo = 1
-
-    // Resuelve cuentas 9X/6X via IA (un solo request para toda la rendición)
-    const aiAccountsMap = await this.resolveAccounts6x(expenses, categoryMap)
 
     for (const expense of expenses) {
       const data = this.parseData(expense)

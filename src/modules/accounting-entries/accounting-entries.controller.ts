@@ -5,6 +5,7 @@ import {
   Query,
   Request,
   UseGuards,
+  UseInterceptors,
   HttpException,
   HttpStatus,
   Logger,
@@ -16,6 +17,10 @@ import { ROLES } from '../auth/enums/roles.enum'
 import { Roles } from '../auth/decorators/roles.decorador'
 import { AuditLogService } from '../audit-log/audit-log.service'
 import { AsientoTipo } from './entities/accounting-entries.types'
+import { TimeoutInterceptor } from '../../common/interceptors/timeout.interceptor'
+
+/** 295 s (5 min − 5 s de margen) — configurable vía REQUEST_TIMEOUT_MS en .env. */
+const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS) || 295_000
 
 const ALL_TIPOS: AsientoTipo[] = [
   'solicitud',
@@ -27,6 +32,7 @@ const ALL_TIPOS: AsientoTipo[] = [
 
 @Controller('accounting-entries')
 @UseGuards(JwtAuthGuard, RolesGuard)
+@UseInterceptors(new TimeoutInterceptor(REQUEST_TIMEOUT_MS))
 export class AccountingEntriesController {
   private readonly logger = new Logger(AccountingEntriesController.name)
 

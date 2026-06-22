@@ -35,7 +35,11 @@ import { SaldoModule } from './modules/saldo/saldo.module'
     ConfigModule.forRoot({
       isGlobal: true,
     }),
-    MongooseModule.forRoot(process.env.MONGO_URI as string),
+    MongooseModule.forRoot(process.env.MONGO_URI as string, {
+      serverSelectionTimeoutMS: 8000,
+      connectTimeoutMS: 10000,
+      socketTimeoutMS: 45000,
+    }),
     AuthModule,
     UserModule,
     RoleModule,

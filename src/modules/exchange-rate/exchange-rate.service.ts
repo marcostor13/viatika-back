@@ -71,31 +71,29 @@ export class ExchangeRateService {
   }
 
   private async fetchFromApi(fecha: string): Promise<number | null> {
-    // 1) URLs para la fecha exacta (histórica). El endpoint con fecha usa el tag
-    //    de GitHub `exchange-api@{fecha}` (las versiones npm no son fechas).
-    // 2) Si la fecha no existe (p. ej. fecha futura), se cae a la tasa más
-    //    reciente disponible (`latest`) para que SIEMPRE haya un valor.
     const urls = [
       `https://cdn.jsdelivr.net/gh/fawazahmed0/exchange-api@${fecha}/v1/currencies/usd.json`,
       `https://${fecha}.currency-api.pages.dev/v1/currencies/usd.json`,
       `https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json`,
       `https://latest.currency-api.pages.dev/v1/currencies/usd.json`,
     ]
-    for (const url of urls) {
-      try {
-        const res = await fetch(url, { signal: AbortSignal.timeout(5000) })
-        if (!res.ok) continue
-        const json: any = await res.json()
-        const pen = json?.usd?.pen
-        if (typeof pen === 'number' && pen > 0) {
-          return Math.round(pen * 1000) / 1000
-        }
-      } catch (e) {
-        this.logger.warn(
-          `Error obteniendo tipo de cambio (${url}): ${(e as Error).message}`
-        )
-      }
+
+    // Lanza todas las URLs en paralelo y usa la primera que responda correctamente.
+    // Peor caso: 5 s (todas las URLs fallan al mismo tiempo) en vez de 4×5 = 20 s.
+    const tryUrl = async (url: string): Promise<number> => {
+      const res = await fetch(url, { signal: AbortSignal.timeout(5000) })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const json: any = await res.json()
+      const pen = json?.usd?.pen
+      if (typeof pen !== 'number' || pen <= 0) throw new Error('pen inválido')
+      return Math.round(pen * 1000) / 1000
     }
-    return null
+
+    try {
+      return await Promise.any(urls.map(url => tryUrl(url)))
+    } catch {
+      this.logger.warn(`No se pudo obtener tipo de cambio para ${fecha}`)
+      return null
+    }
   }
 }

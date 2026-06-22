@@ -19,8 +19,8 @@ import { AuditLogService } from '../audit-log/audit-log.service'
 import { AsientoTipo } from './entities/accounting-entries.types'
 import { TimeoutInterceptor } from '../../common/interceptors/timeout.interceptor'
 
-/** 55 s — responde antes de que nginx corte la conexión (default proxy_read_timeout: 60 s). */
-const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS) || 55_000
+/** 295 s (5 min − 5 s de margen) — configurable vía REQUEST_TIMEOUT_MS en .env. */
+const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS) || 295_000
 
 const ALL_TIPOS: AsientoTipo[] = [
   'solicitud',

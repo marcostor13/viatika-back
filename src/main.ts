@@ -26,9 +26,9 @@ async function bootstrap() {
   })
   // Configurar timeouts antes de empezar a escuchar conexiones.
   const server = app.getHttpServer()
-  server.setTimeout(120000)
-  server.keepAliveTimeout = 120000
-  server.headersTimeout = 121000
+  server.setTimeout(300000)
+  server.keepAliveTimeout = 300000
+  server.headersTimeout = 301000
   await app.listen(process.env.PORT ?? 3000)
 }
 bootstrap()

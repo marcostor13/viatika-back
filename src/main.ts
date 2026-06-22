@@ -25,5 +25,9 @@ async function bootstrap() {
     allowedHeaders: ['Content-Type', 'Authorization'],
   })
   await app.listen(process.env.PORT ?? 3000)
+  const server = app.getHttpServer()
+  server.setTimeout(120000)
+  server.keepAliveTimeout = 120000
+  server.headersTimeout = 121000
 }
 bootstrap()

@@ -132,6 +132,7 @@ describe('AccountingEntriesService — asiento de compra', () => {
       categoryMap,
       periodDate: new Date('2026-03-01'),
       rateMap,
+      aiAccountsMap: new Map(),
     })
   })
 

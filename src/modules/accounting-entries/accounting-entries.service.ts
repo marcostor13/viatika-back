@@ -142,13 +142,15 @@ export class AccountingEntriesService {
     ])
 
     const periodDate = this.resolvePeriodDate(report, advances)
-    const rateMap = await this.prefetchRates(report, expenses, advances, config)
 
-    // Un solo request a OpenAI para todos los comprobantes (solo si hay tipo compra).
-    const aiAccountsMap =
+    // prefetchRates (API externa) y resolveAccounts6x (OpenAI) son independientes:
+    // correrlos en paralelo reduce el tiempo de espera de ~40 s a ~20 s.
+    const [rateMap, aiAccountsMap] = await Promise.all([
+      this.prefetchRates(report, expenses, advances, config),
       tiposToGenerate.includes('compra') && expenses.length > 0
-        ? await this.resolveAccounts6x(expenses, categoryMap)
-        : new Map<string, { cuenta9x?: string; cuenta6x?: string }>()
+        ? this.resolveAccounts6x(expenses, categoryMap)
+        : Promise.resolve(new Map<string, { cuenta9x?: string; cuenta6x?: string }>()),
+    ])
 
     // Genera todos los tipos en paralelo (ExcelJS + lógica de líneas son independientes).
     const generated = (

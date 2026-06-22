@@ -1242,12 +1242,26 @@ export class AdvanceService {
   }
 
   /** Advances sin ExpenseReport vinculado (modelo legado sin fase de gastos iniciada). */
-  async findOrphaned(clientId: string) {
+  async findOrphaned(
+    clientId: string,
+    actor?: { userId: string; role: string }
+  ) {
+    const filter: Record<string, unknown> = {
+      clientId: new Types.ObjectId(clientId),
+      expenseReportId: { $exists: false },
+    }
+    // Un coordinador solo debe ver los anticipos huérfanos de los colaboradores
+    // que tiene asignados — mismo criterio que las rendiciones
+    // (findAllByCoordinator). Sin esto, veía los de todo el cliente.
+    if (actor?.role === ROLES.COORDINADOR) {
+      const userIds = await this.userService.findUserIdsByCoordinator(
+        actor.userId,
+        clientId
+      )
+      filter.userId = { $in: userIds }
+    }
     return this.advanceModel
-      .find({
-        clientId: new Types.ObjectId(clientId),
-        expenseReportId: { $exists: false },
-      })
+      .find(filter)
       .populate('userId', 'name email')
       .populate('projectId', 'code name')
       .sort({ createdAt: -1 })

@@ -40,7 +40,7 @@ interface AnalyticPortion {
 export class AccountingEntriesService {
   private readonly logger = new Logger(AccountingEntriesService.name)
   private readonly openai: OpenAI
-  private readonly aiModel = 'gpt-4o-mini'
+  private readonly aiModel = 'deepseek-chat'
 
   constructor(
     @InjectModel(ExpenseReport.name)
@@ -61,9 +61,9 @@ export class AccountingEntriesService {
     private exchangeRateService: ExchangeRateService,
     private configService: ConfigService
   ) {
-    const apiKey = this.configService.get<string>('OPENAI_API_KEY')
-    if (!apiKey) throw new Error('OPENAI_API_KEY no configurada')
-    this.openai = new OpenAI({ apiKey })
+    const apiKey = this.configService.get<string>('DEEPSEEK_API_KEY')
+    if (!apiKey) throw new Error('DEEPSEEK_API_KEY no configurada')
+    this.openai = new OpenAI({ apiKey, baseURL: 'https://api.deepseek.com' })
   }
 
   // ----------------------------------------------------------------------
@@ -608,12 +608,12 @@ export class AccountingEntriesService {
   }
 
   // ----------------------------------------------------------------------
-  // AI — Resolución de cuentas 9X/6X via PCGE Peru (OpenAI)
+  // AI — Resolución de cuentas 9X/6X via PCGE Peru (DeepSeek)
   // ----------------------------------------------------------------------
 
   /**
    * Determina las cuentas PCGE 91.x (analítica) y 63.x (destino) para cada gasto usando IA.
-   * Envía un único request a OpenAI con todos los comprobantes de la rendición.
+   * Envía un único request a DeepSeek con todos los comprobantes de la rendición.
    * Si el AI falla, retorna el mapa vacío y se usarán los fallbacks de categoría/config.
    */
   private async resolveAccounts6x(

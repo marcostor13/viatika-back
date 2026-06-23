@@ -14,11 +14,16 @@ export type SaldoStatus = 'available' | 'consumed'
 /** Contexto de consumo: define qué tipos de saldo son elegibles. */
 export type SaldoContext = 'rendicion_directa' | 'viatico'
 
+/** Forma en que Contabilidad entregó el dinero. */
+export type MetodoPago = 'deposito' | 'efectivo'
+
 /** Datos del comprobante del pago directo de Contabilidad (solo type `pago`). */
 export interface SaldoDepositInfo {
   amount: number
+  /** Forma de pago; por defecto `deposito`. En `efectivo` el comprobante es opcional. */
+  metodoPago?: MetodoPago
   scannedAmount?: number
-  receiptUrl: string
+  receiptUrl?: string
   receiptFileName?: string
   receiptMimeType?: string
   receiptSizeBytes?: number
@@ -95,8 +100,9 @@ export class Saldo {
   @Prop({
     type: {
       amount: { type: Number, required: true },
+      metodoPago: { type: String, enum: ['deposito', 'efectivo'], default: 'deposito' },
       scannedAmount: { type: Number },
-      receiptUrl: { type: String, required: true },
+      receiptUrl: { type: String, required: false },
       receiptFileName: { type: String },
       receiptMimeType: { type: String },
       receiptSizeBytes: { type: Number },

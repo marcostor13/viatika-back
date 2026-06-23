@@ -40,6 +40,7 @@ export class SaldoService {
       concepto: dto.concepto?.trim() || undefined,
       deposit: {
         amount: dto.amount,
+        metodoPago: dto.metodoPago || 'deposito',
         scannedAmount: dto.scannedAmount,
         receiptUrl: dto.receiptUrl,
         receiptFileName: dto.receiptFileName,

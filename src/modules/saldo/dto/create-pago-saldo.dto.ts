@@ -1,4 +1,7 @@
-import { IsString, IsNumber, IsOptional, IsMongoId, Min } from 'class-validator'
+import { IsString, IsNumber, IsOptional, IsMongoId, Min, IsIn } from 'class-validator'
+
+/** Forma en que Contabilidad entregó el dinero. */
+export type MetodoPago = 'deposito' | 'efectivo'
 
 /**
  * Registro de un pago directo de Contabilidad. Genera un Saldo tipo `pago`
@@ -20,8 +23,13 @@ export class CreatePagoSaldoDto {
   @IsOptional()
   concepto?: string // gestión / motivo libre del pago (opcional)
 
+  @IsIn(['deposito', 'efectivo'])
+  @IsOptional()
+  metodoPago?: MetodoPago // forma de pago; por defecto `deposito`
+
   @IsString()
-  receiptUrl: string
+  @IsOptional()
+  receiptUrl?: string // comprobante; opcional (p. ej. pagos en efectivo)
 
   @IsString()
   @IsOptional()

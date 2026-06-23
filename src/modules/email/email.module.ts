@@ -7,20 +7,39 @@ import { join } from 'path'
 import { HandlebarsAdapter } from '@nestjs-modules/mailer/adapters/handlebars.adapter'
 import { Client, ClientSchema } from '../client/entities/client.entity'
 
+const SMTP_PROVIDERS: Record<string, object> = {
+  gmail: {
+    host: 'smtp.gmail.com',
+    port: 587,
+    secure: false,
+    auth: {
+      user: process.env.USER_EMAIL,
+      pass: process.env.PASSWORD_EMAIL,
+    },
+  },
+  outlook: {
+    host: 'smtp.office365.com',
+    port: 587,
+    secure: false,
+    requireTLS: true,
+    auth: {
+      user: process.env.USER_EMAIL,
+      pass: process.env.PASSWORD_EMAIL,
+    },
+    tls: { ciphers: 'SSLv3', rejectUnauthorized: false },
+  },
+}
+
 @Module({
   imports: [
     MailerModule.forRootAsync({
       useFactory: () => {
-        const config = {
-          transport: {
-            host: 'smtp.gmail.com',
-            port: 587,
-            secure: false,
-            auth: {
-              user: process.env.USER_EMAIL,
-              pass: process.env.PASSWORD_EMAIL,
-            },
-          },
+        const provider = (process.env.EMAIL_PROVIDER ?? 'gmail').toLowerCase()
+        const transport = SMTP_PROVIDERS[provider] ?? SMTP_PROVIDERS['gmail']
+        const logger = new Logger('EmailModule')
+        logger.log(`Proveedor SMTP: ${provider}`)
+        return {
+          transport,
           defaults: {
             from: process.env.USER_EMAIL,
           },
@@ -32,7 +51,6 @@ import { Client, ClientSchema } from '../client/entities/client.entity'
             },
           },
         }
-        return config
       },
     }),
     MongooseModule.forFeature([{ name: Client.name, schema: ClientSchema }]),

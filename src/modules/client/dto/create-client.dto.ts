@@ -41,7 +41,7 @@ export class CreateClientDto {
   phone?: string
 
   @IsOptional()
-  @ValidateIf((o) => typeof o.email === 'string' && o.email.trim() !== '')
+  @ValidateIf(o => typeof o.email === 'string' && o.email.trim() !== '')
   @IsEmail()
   email?: string
 

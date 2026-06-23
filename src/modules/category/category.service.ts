@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common'
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common'
 import { InjectModel } from '@nestjs/mongoose'
 import { Model, Types } from 'mongoose'
 import { Category, CategoryDocument } from './entities/category.entity'
@@ -20,6 +25,7 @@ export interface ICategoryItem {
   key: string
   description?: string
   cuenta?: string
+  cuentaDestino6x?: string
   observaciones?: string
   isActive: boolean
   limit: number | null
@@ -43,7 +49,9 @@ export class CategoryService {
     private readonly categoryGroupService: CategoryGroupService
   ) {}
 
-  async create(createCategoryDto: CreateCategoryDto): Promise<CategoryDocument> {
+  async create(
+    createCategoryDto: CreateCategoryDto
+  ): Promise<CategoryDocument> {
     const clientIdObject = new Types.ObjectId(createCategoryDto.clientId)
     try {
       if (!createCategoryDto.key && createCategoryDto.name) {
@@ -56,7 +64,10 @@ export class CategoryService {
       })
       return await newCategory.save()
     } catch (error) {
-      this.logger.error(`Error al crear categoría: ${error.message}`, error.stack)
+      this.logger.error(
+        `Error al crear categoría: ${error.message}`,
+        error.stack
+      )
       throw error
     }
   }
@@ -78,9 +89,13 @@ export class CategoryService {
       }
 
       const total = await this.categoryModel.countDocuments(filter).exec()
-      const docs = await this.categoryModel.find(filter).skip(skip).limit(limit).exec()
+      const docs = await this.categoryModel
+        .find(filter)
+        .skip(skip)
+        .limit(limit)
+        .exec()
 
-      const data: ICategoryItem[] = docs.map((doc) => {
+      const data: ICategoryItem[] = docs.map(doc => {
         const d = doc.toObject() as CategoryDocument & { _id: Types.ObjectId }
         return {
           _id: d._id.toString(),
@@ -88,6 +103,7 @@ export class CategoryService {
           key: d.key,
           description: d.description,
           cuenta: d.cuenta,
+          cuentaDestino6x: d.cuentaDestino6x,
           observaciones: d.observaciones,
           isActive: d.isActive,
           limit: d.limit ?? null,
@@ -99,24 +115,35 @@ export class CategoryService {
 
       return { data, total, page, pages: Math.ceil(total / limit), limit }
     } catch (error) {
-      this.logger.error(`Error al obtener categorías: ${error.message}`, error.stack)
+      this.logger.error(
+        `Error al obtener categorías: ${error.message}`,
+        error.stack
+      )
       throw error
     }
   }
 
-  async findAllFlat(clientId: string, filterCategoryIds?: string[]): Promise<CategoryDocument[]> {
+  async findAllFlat(
+    clientId: string,
+    filterCategoryIds?: string[]
+  ): Promise<CategoryDocument[]> {
     const clientIdObject = new Types.ObjectId(clientId)
     try {
       const filter: Record<string, unknown> = { clientId: clientIdObject }
 
       // undefined => sin filtro (todas). Array (incluso vacío) => solo esas (vacío = ninguna).
       if (filterCategoryIds !== undefined) {
-        filter._id = { $in: filterCategoryIds.map((id) => new Types.ObjectId(id)) }
+        filter._id = {
+          $in: filterCategoryIds.map(id => new Types.ObjectId(id)),
+        }
       }
 
       return await this.categoryModel.find(filter).exec()
     } catch (error) {
-      this.logger.error(`Error al obtener categorías (flat): ${error.message}`, error.stack)
+      this.logger.error(
+        `Error al obtener categorías (flat): ${error.message}`,
+        error.stack
+      )
       throw error
     }
   }
@@ -135,7 +162,10 @@ export class CategoryService {
       }
       return category
     } catch (error) {
-      this.logger.error(`Error al obtener categoría: ${error.message}`, error.stack)
+      this.logger.error(
+        `Error al obtener categoría: ${error.message}`,
+        error.stack
+      )
       throw error
     }
   }
@@ -151,7 +181,10 @@ export class CategoryService {
       }
       return category
     } catch (error) {
-      this.logger.error(`Error al obtener categoría por clave: ${error.message}`, error.stack)
+      this.logger.error(
+        `Error al obtener categoría por clave: ${error.message}`,
+        error.stack
+      )
       throw error
     }
   }
@@ -172,7 +205,11 @@ export class CategoryService {
       }
 
       const updatedCategory = await this.categoryModel
-        .findOneAndUpdate({ _id: id, clientId: clientIdObject }, updateCategoryDto, { new: true })
+        .findOneAndUpdate(
+          { _id: id, clientId: clientIdObject },
+          updateCategoryDto,
+          { new: true }
+        )
         .exec()
 
       if (!updatedCategory) {
@@ -181,7 +218,10 @@ export class CategoryService {
 
       return updatedCategory
     } catch (error) {
-      this.logger.error(`Error al actualizar categoría: ${error.message}`, error.stack)
+      this.logger.error(
+        `Error al actualizar categoría: ${error.message}`,
+        error.stack
+      )
       throw error
     }
   }
@@ -196,7 +236,10 @@ export class CategoryService {
         throw new NotFoundException(`Categoría con ID ${id} no encontrada`)
       }
     } catch (error) {
-      this.logger.error(`Error al eliminar categoría: ${error.message}`, error.stack)
+      this.logger.error(
+        `Error al eliminar categoría: ${error.message}`,
+        error.stack
+      )
       throw error
     }
   }
@@ -220,7 +263,10 @@ export class CategoryService {
       const rowNumber = i + 2 // Excel row (1 = header, data starts at 2)
 
       if (!row.name || !row.name.trim()) {
-        result.errors.push({ row: rowNumber, reason: 'El campo Nombre es obligatorio' })
+        result.errors.push({
+          row: rowNumber,
+          reason: 'El campo Nombre es obligatorio',
+        })
         continue
       }
 

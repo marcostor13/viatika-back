@@ -21,7 +21,10 @@ import {
 import { ApproveAdvanceDto, RejectAdvanceDto } from './dto/approve-advance.dto'
 import { PayAdvanceDto } from './dto/pay-advance.dto'
 import { ResubmitAdvanceDto } from './dto/resubmit-advance.dto'
-import { ExpenseReportService } from '../expense-report/expense-report.service'
+import {
+  ExpenseReportService,
+  SolicitudDeleteActor,
+} from '../expense-report/expense-report.service'
 import { ROLES } from '../auth/enums/roles.enum'
 import { ProjectService } from '../project/project.service'
 import { CategoryService } from '../category/category.service'
@@ -29,6 +32,7 @@ import { UserService } from '../user/user.service'
 import { UserPermissions } from '../user/schemas/user.schema'
 import { EmailService } from '../email/email.service'
 import { NotificationsService } from '../notifications/notifications.service'
+import { SaldoService } from '../saldo/saldo.service'
 
 @Injectable()
 export class AdvanceService {
@@ -43,8 +47,9 @@ export class AdvanceService {
     private readonly categoryService: CategoryService,
     private readonly userService: UserService,
     private readonly emailService: EmailService,
-    private readonly notificationsService: NotificationsService
-  ) { }
+    private readonly notificationsService: NotificationsService,
+    private readonly saldoService: SaldoService
+  ) {}
 
   async create(dto: CreateAdvanceDto): Promise<Advance> {
     if (!dto.clientId) throw new BadRequestException('clientId es requerido')
@@ -56,11 +61,29 @@ export class AdvanceService {
       )
     }
 
-    if (this.isViaticoSolicitud(dto)) {
-      return this.createViaticoSolicitud(dto)
+    const advance = this.isViaticoSolicitud(dto)
+      ? await this.createViaticoSolicitud(dto)
+      : await this.createSimpleAdvance(dto)
+
+    // Solicitud financiada con saldos de la bolsa (mismo centro de costo, consumo completo).
+    const saldoIds = Array.isArray(dto.saldoIds) ? dto.saldoIds : []
+    if (saldoIds.length > 0) {
+      const advId = (advance as any)._id.toString()
+      await this.saldoService.consume(saldoIds, {
+        userId: dto.userId!,
+        clientId: dto.clientId!,
+        context: 'viatico',
+        projectId: dto.projectId,
+        advanceId: advId,
+      })
+      await this.advanceModel
+        .findByIdAndUpdate(advId, {
+          saldoIds: saldoIds.map(id => new Types.ObjectId(id)),
+        })
+        .exec()
     }
 
-    return this.createSimpleAdvance(dto)
+    return advance
   }
 
   /**
@@ -189,7 +212,8 @@ export class AdvanceService {
 
   private async createSimpleAdvance(dto: CreateAdvanceDto): Promise<Advance> {
     const hasPendingBalance =
-      dto.pendingBalanceAmount !== undefined && dto.additionalAmount !== undefined
+      dto.pendingBalanceAmount !== undefined &&
+      dto.additionalAmount !== undefined
 
     const amount = hasPendingBalance
       ? Number(dto.pendingBalanceAmount) + Number(dto.additionalAmount)
@@ -309,7 +333,8 @@ export class AdvanceService {
       const detalleTrim = line.detalle?.trim()
       lineDocs.push({
         categoryId: new Types.ObjectId(line.categoryId),
-        detalle: detalleTrim && detalleTrim.length > 0 ? detalleTrim : undefined,
+        detalle:
+          detalleTrim && detalleTrim.length > 0 ? detalleTrim : undefined,
         importe: line.importe,
         peopleCount: line.peopleCount,
         glpPerDay: line.glpPerDay,
@@ -390,11 +415,14 @@ export class AdvanceService {
       approvalHistory: [],
       solicitudVersion: 1,
       budgetCommitmentRecorded: false,
-      ...(pendingAmt > 0 && dto.pendingBalanceFromReportId && {
-        pendingBalanceFromReportId: new Types.ObjectId(dto.pendingBalanceFromReportId),
-        pendingBalanceAmount: pendingAmt,
-        additionalAmount: roundedSum,
-      }),
+      ...(pendingAmt > 0 &&
+        dto.pendingBalanceFromReportId && {
+          pendingBalanceFromReportId: new Types.ObjectId(
+            dto.pendingBalanceFromReportId
+          ),
+          pendingBalanceAmount: pendingAmt,
+          additionalAmount: roundedSum,
+        }),
     })
 
     if (dto.expenseReportId) {
@@ -549,9 +577,16 @@ export class AdvanceService {
       )
     }
 
-    const coordEmailEnabled = await this.userService.isEmailEnabled(coordId.toString())
+    const coordEmailEnabled = await this.userService.isEmailEnabled(
+      coordId.toString()
+    )
     if (!coordEmailEnabled) {
-      await setNotif({ recipientUserId: coordId, status: 'skipped', errorMessage: 'Notificaciones por correo deshabilitadas para el coordinador' })
+      await setNotif({
+        recipientUserId: coordId,
+        status: 'skipped',
+        errorMessage:
+          'Notificaciones por correo deshabilitadas para el coordinador',
+      })
       return
     }
 
@@ -673,8 +708,10 @@ export class AdvanceService {
         cc = `${pr.code ?? '—'} - ${pr.name ?? '—'}`
       }
     }
-    const start = this.emailService.formatDateDDMMYYYY(advance.startDate as any) || '—'
-    const end = this.emailService.formatDateDDMMYYYY(advance.endDate as any) || '—'
+    const start =
+      this.emailService.formatDateDDMMYYYY(advance.startDate as any) || '—'
+    const end =
+      this.emailService.formatDateDDMMYYYY(advance.endDate as any) || '—'
     const lines = advance.lines ?? []
     const categoryTotals = new Map<string, number>()
     for (const row of lines) {
@@ -743,7 +780,10 @@ export class AdvanceService {
         'Documento',
         this.viaticoNotifyField(approverMeta.dni)
       ),
-      this.viaticoEmailKvRow('Área', this.viaticoNotifyField(approverMeta.area)),
+      this.viaticoEmailKvRow(
+        'Área',
+        this.viaticoNotifyField(approverMeta.area)
+      ),
       this.viaticoEmailKvRow(
         'Cargo',
         this.viaticoCargoDisplay(approverMeta.cargo, approverMeta.employeeCode)
@@ -779,10 +819,9 @@ export class AdvanceService {
   private async notifyL2ApproversViaticoAprobadoL1(
     advance: AdvanceDocument
   ): Promise<void> {
-    const recipients =
-      await this.userService.findL2ApprovalNotifyRecipients(
-        advance.clientId.toString()
-      )
+    const recipients = await this.userService.findL2ApprovalNotifyRecipients(
+      advance.clientId.toString()
+    )
     if (!recipients.length) {
       this.logger.warn(
         `Pendiente L2 viático ${advance._id}: sin destinatarios contabilidad/tesorería`
@@ -798,7 +837,11 @@ export class AdvanceService {
     const doc = populated ?? advance
 
     let projectLabelSubject = '— - —'
-    if (doc.projectId && typeof doc.projectId === 'object' && doc.projectId !== null) {
+    if (
+      doc.projectId &&
+      typeof doc.projectId === 'object' &&
+      doc.projectId !== null
+    ) {
       const pr = doc.projectId as { code?: string; name?: string }
       if (pr.code !== undefined || pr.name !== undefined) {
         projectLabelSubject = `${pr.code ?? '—'} - ${pr.name ?? '—'}`
@@ -814,7 +857,9 @@ export class AdvanceService {
       .find(h => h.action === 'approved')
     let approverName = '—'
     if (lastAppr?.approvedBy) {
-      const ap = await this.userService.findEmailNameClient(String(lastAppr.approvedBy))
+      const ap = await this.userService.findEmailNameClient(
+        String(lastAppr.approvedBy)
+      )
       approverName = ap?.name ?? String(lastAppr.approvedBy)
     }
 
@@ -881,8 +926,10 @@ export class AdvanceService {
         cc = `${pr.code ?? '—'} - ${pr.name ?? '—'}`
       }
     }
-    const start = this.emailService.formatDateDDMMYYYY(advance.startDate as any) || '—'
-    const end = this.emailService.formatDateDDMMYYYY(advance.endDate as any) || '—'
+    const start =
+      this.emailService.formatDateDDMMYYYY(advance.startDate as any) || '—'
+    const end =
+      this.emailService.formatDateDDMMYYYY(advance.endDate as any) || '—'
 
     const lines = advance.lines ?? []
     const categoryTotals = new Map<string, number>()
@@ -917,16 +964,31 @@ export class AdvanceService {
 
     const detalleRows = [
       this.viaticoEmailKvRow('Proyecto', cc),
-      this.viaticoEmailKvRow('Lugar', advance.place?.trim() ? advance.place.trim() : '—'),
+      this.viaticoEmailKvRow(
+        'Lugar',
+        advance.place?.trim() ? advance.place.trim() : '—'
+      ),
       this.viaticoEmailKvRow('Fechas del viaje', `${start} al ${end}`),
       this.viaticoEmailKvRow('Monto solicitado', amountStr),
     ].join('')
 
     const solicitanteRows = [
       this.viaticoEmailKvRow('Nombre', collaboratorMeta.name),
-      this.viaticoEmailKvRow('Documento', this.viaticoNotifyField(collaboratorMeta.dni)),
-      this.viaticoEmailKvRow('Área', this.viaticoNotifyField(collaboratorMeta.area)),
-      this.viaticoEmailKvRow('Cargo', this.viaticoCargoDisplay(collaboratorMeta.cargo, collaboratorMeta.employeeCode)),
+      this.viaticoEmailKvRow(
+        'Documento',
+        this.viaticoNotifyField(collaboratorMeta.dni)
+      ),
+      this.viaticoEmailKvRow(
+        'Área',
+        this.viaticoNotifyField(collaboratorMeta.area)
+      ),
+      this.viaticoEmailKvRow(
+        'Cargo',
+        this.viaticoCargoDisplay(
+          collaboratorMeta.cargo,
+          collaboratorMeta.employeeCode
+        )
+      ),
     ].join('')
 
     const aprobadorL1Rows = [
@@ -937,14 +999,20 @@ export class AdvanceService {
     return [
       `<div style="font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;font-size:14px;line-height:1.55;color:#334155;">`,
       `<h2 style="margin:0 0 14px;font-size:16px;color:#0f172a;font-weight:700;">${this.escapeHtmlForEmail('Detalle de la solicitud')}</h2>`,
-      tableOpen, detalleRows, tableClose,
+      tableOpen,
+      detalleRows,
+      tableClose,
       `<p style="margin:14px 0 6px;font-weight:600;color:#0f172a;font-size:13px;">${this.escapeHtmlForEmail('Desglose por categoría')}</p>`,
       breakdownHtml,
       `<p style="margin:0;padding:12px 14px;background-color:#fffbeb;border-radius:6px;border-left:4px solid #f59e0b;font-size:13px;color:#92400e;"><strong>${this.escapeHtmlForEmail('Acción requerida')}</strong><br/>${this.escapeHtmlForEmail('Esta solicitud requiere tu aprobación (Nivel 2) para ser procesada.')}</p>`,
       this.viaticoEmailSectionTitle('Solicitante'),
-      tableOpen, solicitanteRows, tableClose,
+      tableOpen,
+      solicitanteRows,
+      tableClose,
       this.viaticoEmailSectionTitle('Aprobador Nivel 1'),
-      tableOpen, aprobadorL1Rows, tableClose,
+      tableOpen,
+      aprobadorL1Rows,
+      tableClose,
       `</div>`,
     ].join('')
   }
@@ -1003,22 +1071,22 @@ export class AdvanceService {
         await this.userService.findCollaboratorViaticoNotifyProfile(apprId)
       approverMeta = apprProfile
         ? {
-          name:
-            (apprProfile.name ?? '').trim().length > 0
-              ? (apprProfile.name ?? '').trim()
-              : baseName,
-          dni: apprProfile.dni,
-          area: apprProfile.area,
-          cargo: apprProfile.cargo,
-          employeeCode: apprProfile.employeeCode,
-        }
+            name:
+              (apprProfile.name ?? '').trim().length > 0
+                ? (apprProfile.name ?? '').trim()
+                : baseName,
+            dni: apprProfile.dni,
+            area: apprProfile.area,
+            cargo: apprProfile.cargo,
+            employeeCode: apprProfile.employeeCode,
+          }
         : {
-          name: baseName,
-          dni: undefined,
-          area: undefined,
-          cargo: undefined,
-          employeeCode: undefined,
-        }
+            name: baseName,
+            dni: undefined,
+            area: undefined,
+            cargo: undefined,
+            employeeCode: undefined,
+          }
     }
 
     const urgent = this.isViaticoTravelStartUrgent(doc.startDate)
@@ -1173,6 +1241,33 @@ export class AdvanceService {
       .exec()
   }
 
+  /** Advances sin ExpenseReport vinculado (modelo legado sin fase de gastos iniciada). */
+  async findOrphaned(
+    clientId: string,
+    actor?: { userId: string; role: string }
+  ) {
+    const filter: Record<string, unknown> = {
+      clientId: new Types.ObjectId(clientId),
+      expenseReportId: { $exists: false },
+    }
+    // Un coordinador solo debe ver los anticipos huérfanos de los colaboradores
+    // que tiene asignados — mismo criterio que las rendiciones
+    // (findAllByCoordinator). Sin esto, veía los de todo el cliente.
+    if (actor?.role === ROLES.COORDINADOR) {
+      const userIds = await this.userService.findUserIdsByCoordinator(
+        actor.userId,
+        clientId
+      )
+      filter.userId = { $in: userIds }
+    }
+    return this.advanceModel
+      .find(filter)
+      .populate('userId', 'name email')
+      .populate('projectId', 'code name')
+      .sort({ createdAt: -1 })
+      .exec()
+  }
+
   async findForViaticosPage(opts: {
     requesterId: string
     requesterRole: string
@@ -1182,9 +1277,11 @@ export class AdvanceService {
     dateFrom?: string
     dateTo?: string
   }) {
-    const isAdminRole = [ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.CONTABILIDAD].includes(
-      opts.requesterRole as ROLES
-    )
+    const isAdminRole = [
+      ROLES.ADMIN,
+      ROLES.SUPER_ADMIN,
+      ROLES.CONTABILIDAD,
+    ].includes(opts.requesterRole as ROLES)
     // Aprobador/coordinador real: solo quien puede aprobar nivel 1.
     const isApprover =
       !isAdminRole && opts.requesterPermissions?.canApproveL1 === true
@@ -1233,7 +1330,12 @@ export class AdvanceService {
         clientId: new Types.ObjectId(clientId),
         status: { $in: ['partially_paid', 'paid', 'settled', 'returned'] },
         $or: [
-          { 'paymentInfo.paymentReceiptUrl': { $exists: true, $nin: [null, ''] } },
+          {
+            'paymentInfo.paymentReceiptUrl': {
+              $exists: true,
+              $nin: [null, ''],
+            },
+          },
           { 'payments.0': { $exists: true } },
         ],
       })
@@ -1324,22 +1426,28 @@ export class AdvanceService {
     const saved = await advance.save()
     if (saved.status === 'approved') {
       await this.onViaticoAdvanceFullyApproved(saved as AdvanceDocument)
-      this.notificationsService.create({
-        userId: saved.userId.toString(),
-        title: 'Solicitud de viáticos aprobada',
-        message: `Tu solicitud de viáticos por S/ ${this.formatViaticoMoney(saved.amount)} fue aprobada. El pago está siendo procesado.`,
-        type: 'success',
-        actionUrl: '/mis-rendiciones',
-      }).catch(() => { })
+      this.notificationsService
+        .create({
+          userId: saved.userId.toString(),
+          title: 'Solicitud de viáticos aprobada',
+          message: `Tu solicitud de viáticos por S/ ${this.formatViaticoMoney(saved.amount)} fue aprobada. El pago está siendo procesado.`,
+          type: 'success',
+          actionUrl: '/mis-rendiciones',
+        })
+        .catch(() => {})
     } else {
-      this.notificationsService.create({
-        userId: saved.userId.toString(),
-        title: 'Solicitud de viáticos en revisión',
-        message: `Tu solicitud de viáticos por S/ ${this.formatViaticoMoney(saved.amount)} fue aprobada en el primer nivel y está pendiente de aprobación final.`,
-        type: 'info',
-        actionUrl: '/mis-rendiciones',
-      }).catch(() => { })
-      this.notifyL2ApproversViaticoAprobadoL1(saved as AdvanceDocument).catch(() => { })
+      this.notificationsService
+        .create({
+          userId: saved.userId.toString(),
+          title: 'Solicitud de viáticos en revisión',
+          message: `Tu solicitud de viáticos por S/ ${this.formatViaticoMoney(saved.amount)} fue aprobada en el primer nivel y está pendiente de aprobación final.`,
+          type: 'info',
+          actionUrl: '/mis-rendiciones',
+        })
+        .catch(() => {})
+      this.notifyL2ApproversViaticoAprobadoL1(saved as AdvanceDocument).catch(
+        () => {}
+      )
     }
     return this.findOne(id)
   }
@@ -1376,13 +1484,15 @@ export class AdvanceService {
 
     const saved = await advance.save()
     await this.onViaticoAdvanceFullyApproved(saved as AdvanceDocument)
-    this.notificationsService.create({
-      userId: saved.userId.toString(),
-      title: 'Solicitud de viáticos aprobada',
-      message: `Tu solicitud de viáticos por S/ ${this.formatViaticoMoney(saved.amount)} fue aprobada completamente. El pago está siendo procesado.`,
-      type: 'success',
-      actionUrl: '/mis-rendiciones',
-    }).catch(() => { })
+    this.notificationsService
+      .create({
+        userId: saved.userId.toString(),
+        title: 'Solicitud de viáticos aprobada',
+        message: `Tu solicitud de viáticos por S/ ${this.formatViaticoMoney(saved.amount)} fue aprobada completamente. El pago está siendo procesado.`,
+        type: 'success',
+        actionUrl: '/mis-rendiciones',
+      })
+      .catch(() => {})
     return this.findOne(id)
   }
 
@@ -1420,6 +1530,15 @@ export class AdvanceService {
     advance.rejectedBy = dto.rejectedBy
     advance.rejectionReason = dto.rejectionReason
 
+    // Devolver a la bolsa los saldos que financiaban este viático rechazado.
+    try {
+      await this.saldoService.restoreByConsumer({ advanceId: id })
+    } catch (err: unknown) {
+      this.logger.error(
+        `Revertir saldos al rechazar advance ${id}: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+
     const saved = await advance.save()
     this.notifyCollaboratorViaticoRejected(
       saved as AdvanceDocument,
@@ -1428,13 +1547,15 @@ export class AdvanceService {
       const msg = err instanceof Error ? err.message : String(err)
       this.logger.error(`Correo rechazo viático colaborador: ${msg}`)
     })
-    this.notificationsService.create({
-      userId: saved.userId.toString(),
-      title: 'Solicitud de viáticos rechazada',
-      message: `Tu solicitud de viáticos por S/ ${this.formatViaticoMoney(saved.amount)} fue rechazada. Motivo: ${dto.rejectionReason}`,
-      type: 'error',
-      actionUrl: '/mis-rendiciones',
-    }).catch(() => { })
+    this.notificationsService
+      .create({
+        userId: saved.userId.toString(),
+        title: 'Solicitud de viáticos rechazada',
+        message: `Tu solicitud de viáticos por S/ ${this.formatViaticoMoney(saved.amount)} fue rechazada. Motivo: ${dto.rejectionReason}`,
+        type: 'error',
+        actionUrl: '/mis-rendiciones',
+      })
+      .catch(() => {})
     return this.findOne(id)
   }
 
@@ -1450,7 +1571,11 @@ export class AdvanceService {
     // Se permite registrar pagos cuando está aprobado/en espera, o seguir
     // sumando pagos parciales (incluso por encima de lo solicitado) mientras no
     // se haya liquidado/devuelto/cancelado.
-    if (!['approved', 'pending_l2', 'partially_paid', 'paid'].includes(advance.status)) {
+    if (
+      !['approved', 'pending_l2', 'partially_paid', 'paid'].includes(
+        advance.status
+      )
+    ) {
       throw new BadRequestException(
         `Solo se puede registrar pago de viáticos aprobados o en proceso de pago (estado actual: ${advance.status})`
       )
@@ -1464,7 +1589,10 @@ export class AdvanceService {
           advance.expenseReportId.toString()
         )
         const lockedStates = ['approved', 'reimbursed', 'closed']
-        if (linkedReport && lockedStates.includes((linkedReport as any).status)) {
+        if (
+          linkedReport &&
+          lockedStates.includes((linkedReport as any).status)
+        ) {
           throw new BadRequestException(
             `No se puede registrar el pago: la rendición vinculada ya fue liquidada/cerrada (estado: ${(linkedReport as any).status}).`
           )
@@ -1481,13 +1609,22 @@ export class AdvanceService {
     if (!canPay)
       throw new ForbiddenException('No tienes permiso para registrar pagos')
 
-    const receiptValidation = this.isValidPaymentReceipt(
-      dto.paymentReceiptMimeType,
-      dto.paymentReceiptFileName,
-      dto.paymentReceiptSizeBytes
-    )
-    if (!receiptValidation.ok) {
-      throw new BadRequestException(receiptValidation.reason)
+    // El comprobante es obligatorio salvo cuando el pago es en efectivo. Si se
+    // adjunta uno (en cualquier método), se valida formato/tamaño.
+    if (dto.method !== 'efectivo' && !dto.paymentReceiptUrl) {
+      throw new BadRequestException(
+        'El comprobante es obligatorio para pagos por transferencia o cheque.'
+      )
+    }
+    if (dto.paymentReceiptUrl) {
+      const receiptValidation = this.isValidPaymentReceipt(
+        dto.paymentReceiptMimeType,
+        dto.paymentReceiptFileName,
+        dto.paymentReceiptSizeBytes
+      )
+      if (!receiptValidation.ok) {
+        throw new BadRequestException(receiptValidation.reason)
+      }
     }
 
     const prevPaid = Number(advance.paidAmount ?? 0)
@@ -1500,7 +1637,11 @@ export class AdvanceService {
     }
 
     // Libera el compromiso presupuestal una sola vez (al primer pago).
-    if (isFirstPayment && advance.budgetCommitmentRecorded && advance.projectId) {
+    if (
+      isFirstPayment &&
+      advance.budgetCommitmentRecorded &&
+      advance.projectId
+    ) {
       try {
         await this.projectService.adjustCommittedAdvanceTotal(
           advance.projectId.toString(),
@@ -1554,18 +1695,23 @@ export class AdvanceService {
 
     // Con el primer pago ya puede rendir; queda 'paid' cuando el acumulado
     // alcanza (o supera) lo solicitado, sino 'partially_paid'.
-    advance.status = advance.paidAmount >= advance.amount ? 'paid' : 'partially_paid'
+    advance.status =
+      advance.paidAmount >= advance.amount ? 'paid' : 'partially_paid'
 
     // Auto-crear rendición en el primer pago si el viático no tiene una vinculada
     let reportId: string | null = null
     if (!advance.expenseReportId) {
       try {
-        const newReport = await this.expenseReportService.createAutoFromViatico(advance as AdvanceDocument)
+        const newReport = await this.expenseReportService.createAutoFromViatico(
+          advance as AdvanceDocument
+        )
         advance.expenseReportId = newReport._id as Types.ObjectId
         reportId = String(newReport._id)
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err)
-        this.logger.error(`Auto-crear rendición para viático ${advance._id}: ${msg}`)
+        this.logger.error(
+          `Auto-crear rendición para viático ${advance._id}: ${msg}`
+        )
       }
     } else {
       reportId = advance.expenseReportId.toString()
@@ -1585,32 +1731,68 @@ export class AdvanceService {
     const message = fullyPaid
       ? `Se registró el pago de tu viático por S/ ${this.formatViaticoMoney(paymentAmount)} (total pagado S/ ${this.formatViaticoMoney(saved.paidAmount ?? paymentAmount)}). Ya puedes registrar tus gastos.`
       : `Se registró un pago parcial de tu viático por S/ ${this.formatViaticoMoney(paymentAmount)} (total pagado S/ ${this.formatViaticoMoney(saved.paidAmount ?? paymentAmount)} de S/ ${this.formatViaticoMoney(saved.amount)}). Ya puedes registrar tus gastos.`
-    this.notificationsService.create({
-      userId: saved.userId.toString(),
-      title: fullyPaid ? 'Pago de viático registrado' : 'Pago parcial de viático registrado',
-      message,
-      type: 'success',
-      actionUrl,
-    }).catch(() => { })
+    this.notificationsService
+      .create({
+        userId: saved.userId.toString(),
+        title: fullyPaid
+          ? 'Pago de viático registrado'
+          : 'Pago parcial de viático registrado',
+        message,
+        type: 'success',
+        actionUrl,
+      })
+      .catch(() => {})
     return saved
   }
 
-  async findByExpenseReportId(reportId: string, advanceIds: string[] = []): Promise<AdvanceDocument[]> {
+  async findByExpenseReportId(
+    reportId: string,
+    advanceIds: string[] = []
+  ): Promise<AdvanceDocument[]> {
     const oid = new Types.ObjectId(reportId)
     const idList = advanceIds.map(x => new Types.ObjectId(x))
-    const query = idList.length > 0
-      ? { $or: [{ _id: { $in: idList } }, { expenseReportId: oid }] }
-      : { expenseReportId: oid }
+    const query =
+      idList.length > 0
+        ? { $or: [{ _id: { $in: idList } }, { expenseReportId: oid }] }
+        : { expenseReportId: oid }
     return this.advanceModel.find(query).exec() as Promise<AdvanceDocument[]>
+  }
+
+  /**
+   * De una lista de rendiciones, devuelve los IDs de las que tienen al menos un
+   * anticipo vinculado ya aprobado/pagado/liquidado. Sirve para que el front
+   * sepa que el colaborador ya no puede eliminar esas rendiciones de viáticos.
+   */
+  async findApprovedExpenseReportIds(reportIds: string[]): Promise<string[]> {
+    if (!reportIds.length) return []
+    const oids = reportIds
+      .filter(id => Types.ObjectId.isValid(id))
+      .map(id => new Types.ObjectId(id))
+    if (!oids.length) return []
+    const rows = await this.advanceModel
+      .find({
+        expenseReportId: { $in: oids },
+        status: { $in: ['approved', 'partially_paid', 'paid', 'settled'] },
+      })
+      .select('expenseReportId')
+      .lean()
+      .exec()
+    return [...new Set(rows.map(r => String(r.expenseReportId)))]
   }
 
   /**
    * Fase 6 — Al aprobar la rendición: liquida en bloque los anticipos pagados vinculados,
    * guarda el settlement en la rendición y avisa a contabilidad si corresponde reembolso al colaborador.
    */
-  async liquidateExpenseReport(reportId: string): Promise<void> {
+  async liquidateExpenseReport(reportId: string, fromClose = false): Promise<void> {
     const report = await this.expenseReportService.findOneWithAdvances(reportId)
     if (!report || report.status !== 'approved') {
+      return
+    }
+
+    // Rendiciones de tipo viático se liquidan con su propio método (no tienen Advance externo).
+    if ((report as any).type === 'viatico') {
+      await this.expenseReportService.liquidateViaticoReport(reportId, fromClose)
       return
     }
 
@@ -1658,7 +1840,9 @@ export class AdvanceService {
     }, 0)
 
     const paidAdvances = advances.filter(a => a.status === 'paid')
-    const partiallyPaidAdvances = advances.filter(a => a.status === 'partially_paid')
+    const partiallyPaidAdvances = advances.filter(
+      a => a.status === 'partially_paid'
+    )
     const settledAdvances = advances.filter(a => a.status === 'settled')
     const approvedAdvances = advances.filter(a => a.status === 'approved')
 
@@ -1683,10 +1867,13 @@ export class AdvanceService {
       ...approvedAdvances,
     ]
     // Un anticipo 'approved' (aún sin pago) aporta 0; el resto aporta lo realmente pagado.
-    const advanceTotal = activeAdvances.reduce(
-      (s, a) => s + (a.status === 'approved' ? 0 : Number(a.paidAmount ?? a.amount) || 0),
-      0
-    ) + depositTotal
+    const advanceTotal =
+      activeAdvances.reduce(
+        (s, a) =>
+          s +
+          (a.status === 'approved' ? 0 : Number(a.paidAmount ?? a.amount) || 0),
+        0
+      ) + depositTotal
 
     const difference = advanceTotal - expenseTotal
     let type: 'reembolso' | 'devolucion' | 'equilibrado'
@@ -1726,6 +1913,25 @@ export class AdvanceService {
     }
 
     await this.expenseReportService.updateSettlement(reportId, reportSettlement)
+
+    // Remanente positivo (devolución): el saldo no gastado queda disponible para
+    // el colaborador en su bolsa de "Saldo" (idempotente por sourceReportId).
+    if (type === 'devolucion' && difference > 0.01) {
+      try {
+        const ownerId = (report.userId as any)?._id ?? report.userId
+        await this.saldoService.createFromRemnant({
+          userId: ownerId,
+          clientId: report.clientId,
+          projectId: (report as any).projectId ?? null,
+          sourceReportId: reportId,
+          amount: difference,
+          type: (report as any).isDirecta ? 'rendicion_directa' : 'rendicion',
+        })
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.logger.error(`Crear saldo remanente ${reportId}: ${msg}`)
+      }
+    }
 
     const doc = report as any
     const alreadyNotified = !!doc.reimbursementAccountingNotifiedAt
@@ -1858,13 +2064,19 @@ export class AdvanceService {
       fileUrl: string
       fileKey?: string
       note?: string
+      scannedAmount?: number
+      operationDate?: string
+      operationTime?: string
+      titular?: string
     }
   ): Promise<Advance> {
     const advance = await this.advanceModel.findById(id)
     if (!advance) throw new NotFoundException(`Viático ${id} no encontrado`)
     const rr = (advance as any).returnRecord
     if (!rr || rr.status !== 'pending') {
-      throw new BadRequestException('El viático no tiene una devolución pendiente de comprobante')
+      throw new BadRequestException(
+        'El viático no tiene una devolución pendiente de comprobante'
+      )
     }
     if (proof.amountReturned < rr.amountDue) {
       throw new BadRequestException(
@@ -1919,7 +2131,9 @@ export class AdvanceService {
     const collaborator = await this.userService.findEmailNameClient(
       advance.userId.toString()
     )
-    const collabReturnEmailEnabled = await this.userService.isEmailEnabled(advance.userId.toString())
+    const collabReturnEmailEnabled = await this.userService.isEmailEnabled(
+      advance.userId.toString()
+    )
     if (collaborator?.email && collabReturnEmailEnabled) {
       const sendFn = approved
         ? this.emailService.sendDevolucionValidada.bind(this.emailService)
@@ -2105,6 +2319,79 @@ export class AdvanceService {
     return advance
   }
 
+  /**
+   * Elimina una solicitud de viáticos (anticipo) completa. La autorización depende
+   * del estado de aprobación:
+   *  - Sin ninguna aprobación L1/L2: el colaborador propietario, Contabilidad,
+   *    Administrador o Superadmin.
+   *  - Con al menos una aprobación: solo Contabilidad o Superadmin.
+   * Si el anticipo ya tiene una rendición vinculada, ésta se elimina en cascada.
+   */
+  async remove(id: string, actor: SolicitudDeleteActor): Promise<Advance> {
+    const advance = await this.advanceModel.findById(id).exec()
+    if (!advance) throw new NotFoundException(`Viático ${id} no encontrado`)
+
+    const role = actor?.role ?? ''
+    const isSuperAdmin = role === ROLES.SUPER_ADMIN
+    const isContabilidad = role === ROLES.CONTABILIDAD
+    const isColaborador = role === ROLES.COLABORADOR
+
+    const hasApproval =
+      (advance.approvalHistory ?? []).some(e => e.action === 'approved') ||
+      ['approved', 'partially_paid', 'paid', 'settled'].includes(advance.status)
+
+    // El viático ya fue pagado y generó una rendición (representa dinero ya
+    // desembolsado): no puede eliminarse por la app —ni colaborador ni
+    // Contabilidad—. Solo Superadmin (escape técnico). Evita además orfanar la
+    // rendición vía la cascada.
+    if (advance.expenseReportId && !isSuperAdmin) {
+      throw new ForbiddenException(
+        'Este viático ya fue pagado y tiene una rendición asociada; no puede eliminarse.'
+      )
+    }
+
+    if (hasApproval) {
+      if (!isContabilidad && !isSuperAdmin) {
+        throw new ForbiddenException(
+          'Este viático ya tiene una aprobación; solo Contabilidad puede eliminarlo.'
+        )
+      }
+    } else if (
+      isColaborador &&
+      advance.userId.toString() !== String(actor.userId)
+    ) {
+      throw new ForbiddenException(
+        'Solo puedes eliminar tus propias solicitudes.'
+      )
+    }
+
+    // Cascada: si hay rendición vinculada, eliminarla también (incluye sus comprobantes).
+    if (advance.expenseReportId) {
+      try {
+        await this.expenseReportService.remove(
+          advance.expenseReportId.toString(),
+          actor
+        )
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.logger.error(
+          `Error eliminando rendición vinculada al viático ${id}: ${msg}`
+        )
+      }
+    }
+
+    // Devolver a la bolsa los saldos que este viático había consumido (si los hubo).
+    try {
+      await this.saldoService.restoreByConsumer({ advanceId: id })
+    } catch (err: unknown) {
+      this.logger.error(
+        `Revertir saldos al eliminar advance ${id}: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+    await this.advanceModel.findByIdAndDelete(id).exec()
+    return advance
+  }
+
   private async notifyCoordinatorViaticoCancelled(
     advance: AdvanceDocument,
     collaboratorUserId: string
@@ -2128,7 +2415,9 @@ export class AdvanceService {
       coordinator.clientId.toString() !== collaborator.clientId.toString()
     )
       return
-    const coordEmailEnabled = await this.userService.isEmailEnabled(coordId.toString())
+    const coordEmailEnabled = await this.userService.isEmailEnabled(
+      coordId.toString()
+    )
 
     let projectLabel = '—'
     try {
@@ -2142,7 +2431,9 @@ export class AdvanceService {
     }
 
     const totalFormatted = this.formatViaticoMoney(advance.amount)
-    const startStr = this.emailService.formatDateDDMMYYYY(advance.startDate as any)
+    const startStr = this.emailService.formatDateDDMMYYYY(
+      advance.startDate as any
+    )
     const endStr = this.emailService.formatDateDDMMYYYY(advance.endDate as any)
 
     const plainSummary = [
@@ -2155,15 +2446,19 @@ export class AdvanceService {
 
     const platformUrl = this.emailService.buildAppUrl('/tesoreria')
 
-    this.notificationsService.create({
-      userId: coordId.toString(),
-      title: 'Solicitud de viáticos cancelada',
-      message: `${collaborator.name} canceló su solicitud de viáticos para ${projectLabel} — S/ ${totalFormatted}.`,
-      type: 'warning',
-      actionUrl: '/viaticos',
-    }).catch((err: unknown) => {
-      this.logger.error(`In-app notif cancelación viático: ${err instanceof Error ? err.message : String(err)}`)
-    })
+    this.notificationsService
+      .create({
+        userId: coordId.toString(),
+        title: 'Solicitud de viáticos cancelada',
+        message: `${collaborator.name} canceló su solicitud de viáticos para ${projectLabel} — S/ ${totalFormatted}.`,
+        type: 'warning',
+        actionUrl: '/viaticos',
+      })
+      .catch((err: unknown) => {
+        this.logger.error(
+          `In-app notif cancelación viático: ${err instanceof Error ? err.message : String(err)}`
+        )
+      })
 
     if (coordEmailEnabled) {
       await this.emailService.sendViaticoCancelacion(coordinator.email, {
@@ -2215,7 +2510,12 @@ export class AdvanceService {
         },
       },
       // Desembolsado real: usa el acumulado pagado (paidAmount) cuando existe.
-      { $group: { _id: null, total: { $sum: { $ifNull: ['$paidAmount', '$amount'] } } } },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: { $ifNull: ['$paidAmount', '$amount'] } },
+        },
+      },
     ])
 
     return {

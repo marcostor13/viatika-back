@@ -34,7 +34,10 @@ export class ProjectController {
   ) {}
 
   @Post()
-  async create(@Body() createProjectDto: CreateProjectDto, @Request() req: any) {
+  async create(
+    @Body() createProjectDto: CreateProjectDto,
+    @Request() req: any
+  ) {
     const result = await this.projectService.create(createProjectDto)
     this.auditLogService.log({
       userId: req.user._id || req.user.sub,
@@ -82,16 +85,14 @@ export class ProjectController {
     const wb = xlsx.utils.book_new()
     xlsx.utils.book_append_sheet(wb, ws, 'Proyectos')
     const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' })
-    return { file: buffer.toString('base64'), filename: 'plantilla_proyectos.xlsx' }
+    return {
+      file: buffer.toString('base64'),
+      filename: 'plantilla_proyectos.xlsx',
+    }
   }
 
   @Get(':clientId')
-  @Roles(
-    ROLES.SUPER_ADMIN,
-    ROLES.ADMIN,
-    ROLES.COLABORADOR,
-    ROLES.CONTABILIDAD
-  )
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD)
   async findAll(
     @Param('clientId') clientId: string,
     @Request() req: any,
@@ -131,12 +132,7 @@ export class ProjectController {
   }
 
   @Get(':id/:clientId')
-  @Roles(
-    ROLES.SUPER_ADMIN,
-    ROLES.ADMIN,
-    ROLES.COLABORADOR,
-    ROLES.CONTABILIDAD
-  )
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD)
   findOne(@Param('id') id: string, @Param('clientId') clientId: string) {
     return this.projectService.findOne(id, clientId)
   }
@@ -148,8 +144,14 @@ export class ProjectController {
     @Body() updateProjectDto: UpdateProjectDto,
     @Request() req: any
   ) {
-    const before = await this.projectService.findOne(id, clientId).catch(() => null)
-    const result = await this.projectService.update(id, updateProjectDto, clientId)
+    const before = await this.projectService
+      .findOne(id, clientId)
+      .catch(() => null)
+    const result = await this.projectService.update(
+      id,
+      updateProjectDto,
+      clientId
+    )
     this.auditLogService.log({
       userId: req.user._id || req.user.sub,
       userName: req.user.name || req.user.email,
@@ -179,5 +181,4 @@ export class ProjectController {
     })
     return result
   }
-
 }

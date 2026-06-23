@@ -53,7 +53,10 @@ export class CategoryController {
   @Post()
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   @UseGuards(JwtAuthGuard, RolesGuard)
-  async create(@Body() createCategoryDto: CreateCategoryDto, @Request() req: any) {
+  async create(
+    @Body() createCategoryDto: CreateCategoryDto,
+    @Request() req: any
+  ) {
     const result = await this.categoryService.create(createCategoryDto)
     if (createCategoryDto.perfilIds !== undefined) {
       await this.categoryGroupService.setCategoryMembership(
@@ -92,7 +95,10 @@ export class CategoryController {
         if (allowed.includes(file.mimetype) || okExt) {
           cb(null, true)
         } else {
-          cb(new BadRequestException('Solo se permiten archivos Excel (.xlsx)'), false)
+          cb(
+            new BadRequestException('Solo se permiten archivos Excel (.xlsx)'),
+            false
+          )
         }
       },
     })
@@ -108,12 +114,16 @@ export class CategoryController {
     const workbook = XLSX.read(file.buffer, { type: 'buffer' })
     const sheetName = workbook.SheetNames[0]
     const sheet = workbook.Sheets[sheetName]
-    const rows = XLSX.utils.sheet_to_json<Record<string, any>>(sheet, { defval: '' })
+    const rows = XLSX.utils.sheet_to_json<Record<string, any>>(sheet, {
+      defval: '',
+    })
 
-    const mapped = rows.map((row) => ({
+    const mapped = rows.map(row => ({
       name: String(row['Nombre*'] || row['Nombre'] || '').trim(),
       cuenta: String(row['Cuenta'] || '').trim() || undefined,
-      description: String(row['Descripción'] || row['Descripcion'] || '').trim() || undefined,
+      description:
+        String(row['Descripción'] || row['Descripcion'] || '').trim() ||
+        undefined,
       observaciones: String(row['Observaciones'] || '').trim() || undefined,
       limit:
         row['Límite'] != null && row['Límite'] !== ''
@@ -157,7 +167,10 @@ export class CategoryController {
 
   @Get('flat/:clientId')
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD)
-  async findAllFlatLegacy(@Param('clientId') clientId: string, @Request() req: any) {
+  async findAllFlatLegacy(
+    @Param('clientId') clientId: string,
+    @Request() req: any
+  ) {
     const filter = await this.resolveAllowedCategoryIds(req, clientId)
     return this.categoryService.findAllFlat(clientId, filter)
   }
@@ -200,8 +213,14 @@ export class CategoryController {
     @Body() updateCategoryDto: UpdateCategoryDto,
     @Request() req: any
   ) {
-    const before = await this.categoryService.findOne(id, clientId).catch(() => null)
-    const result = await this.categoryService.update(id, updateCategoryDto, clientId)
+    const before = await this.categoryService
+      .findOne(id, clientId)
+      .catch(() => null)
+    const result = await this.categoryService.update(
+      id,
+      updateCategoryDto,
+      clientId
+    )
     if (updateCategoryDto.perfilIds !== undefined) {
       await this.categoryGroupService.setCategoryMembership(
         id,

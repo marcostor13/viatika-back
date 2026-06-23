@@ -78,7 +78,9 @@ export class DashboardService {
           ? 100
           : 0
 
-    const statusMap = (rows: { status: string; amount: number; count: number }[]) =>
+    const statusMap = (
+      rows: { status: string; amount: number; count: number }[]
+    ) =>
       rows.reduce<Record<string, { amount: number; count: number }>>(
         (acc, r) => {
           acc[r.status] = { amount: r.amount, count: r.count }
@@ -121,7 +123,11 @@ export class DashboardService {
       'paid',
       'settled',
     ])
-    const anticipoPagado = sumStatuses(aStatus, ['partially_paid', 'paid', 'settled'])
+    const anticipoPagado = sumStatuses(aStatus, [
+      'partially_paid',
+      'paid',
+      'settled',
+    ])
     const anticipoPendienteAprob = sumStatuses(aStatus, [
       'pending_l1',
       'pending_l2',
@@ -254,11 +260,9 @@ export class DashboardService {
     const effectiveDate = { $ifNull: ['$createdAt', { $toDate: '$_id' }] }
     const match: Record<string, any> = {
       clientId,
+      isCajaChica: { $ne: true },
       $expr: {
-        $and: [
-          { $gte: [effectiveDate, from] },
-          { $lte: [effectiveDate, to] },
-        ],
+        $and: [{ $gte: [effectiveDate, from] }, { $lte: [effectiveDate, to] }],
       },
     }
     if (query.projectId) match.projectId = new Types.ObjectId(query.projectId)
@@ -400,7 +404,10 @@ export class DashboardService {
           _id: 0,
           projectId: '$_id',
           name: {
-            $ifNull: [{ $arrayElemAt: ['$proj.name', 0] }, 'Sin centro de costo'],
+            $ifNull: [
+              { $arrayElemAt: ['$proj.name', 0] },
+              'Sin centro de costo',
+            ],
           },
           amount: 1,
           count: 1,
@@ -514,7 +521,9 @@ export class DashboardService {
           _id: { $ifNull: ['$status', 'pending_l1'] },
           // Monto desembolsado real: usa paidAmount cuando existe (pagos parciales),
           // sino el monto solicitado.
-          amount: { $sum: { $ifNull: ['$paidAmount', { $ifNull: ['$amount', 0] }] } },
+          amount: {
+            $sum: { $ifNull: ['$paidAmount', { $ifNull: ['$amount', 0] }] },
+          },
           count: { $sum: 1 },
         },
       },
@@ -592,7 +601,13 @@ export class DashboardService {
     query: DashboardQueryDto,
     range: ResolvedRange
   ): Promise<
-    { place: string; count: number; amount: number; lat?: number; lng?: number }[]
+    {
+      place: string
+      count: number
+      amount: number
+      lat?: number
+      lng?: number
+    }[]
   > {
     const baseMatch = this.advanceMatch(clientId, query, range.from, range.to)
     const match = { ...baseMatch, place: { $exists: true, $nin: [null, ''] } }
@@ -631,10 +646,10 @@ export class DashboardService {
     anticipo: { month: string; amount: number }[]
   ): { month: string; gasto: number; anticipo: number }[] {
     const map = new Map<string, { gasto: number; anticipo: number }>()
-    gasto.forEach((g) => {
+    gasto.forEach(g => {
       map.set(g.month, { gasto: g.amount, anticipo: 0 })
     })
-    anticipo.forEach((a) => {
+    anticipo.forEach(a => {
       const cur = map.get(a.month) ?? { gasto: 0, anticipo: 0 }
       cur.anticipo = a.amount
       map.set(a.month, cur)

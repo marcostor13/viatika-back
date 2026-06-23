@@ -260,7 +260,10 @@ export class UserService {
     }
   }
 
-  async findUserIdsByCoordinator(coordinatorId: string, clientId: string): Promise<Types.ObjectId[]> {
+  async findUserIdsByCoordinator(
+    coordinatorId: string,
+    clientId: string
+  ): Promise<Types.ObjectId[]> {
     const users = await this.userModel
       .find({
         coordinatorId: new Types.ObjectId(coordinatorId),
@@ -268,7 +271,7 @@ export class UserService {
       })
       .select('_id')
       .exec()
-    return users.map(u => u._id as Types.ObjectId)
+    return users.map(u => u._id)
   }
 
   async findAll(clientId: Types.ObjectId) {
@@ -542,9 +545,14 @@ export class UserService {
    * porque hay flujos que separan notificación in-app del correo).
    * NO incluye usuarios cuyo único vínculo con contabilidad sean permisos de módulo.
    */
-  async findContabilidadUsersForNotif(
-    clientId: string
-  ): Promise<{ _id: string; email: string; name: string; emailNotificationsEnabled: boolean }[]> {
+  async findContabilidadUsersForNotif(clientId: string): Promise<
+    {
+      _id: string
+      email: string
+      name: string
+      emailNotificationsEnabled: boolean
+    }[]
+  > {
     const contabilidadRole = await this.roleService.getByName('Contabilidad')
     if (!contabilidadRole) return []
 
@@ -569,7 +577,12 @@ export class UserService {
       : []
 
     const seen = new Set<string>()
-    const out: { _id: string; email: string; name: string; emailNotificationsEnabled: boolean }[] = []
+    const out: {
+      _id: string
+      email: string
+      name: string
+      emailNotificationsEnabled: boolean
+    }[] = []
     for (const u of [...scopedUsers, ...globalContabilidad]) {
       const em = u.email?.trim().toLowerCase()
       if (!em || seen.has(em)) continue
@@ -601,7 +614,9 @@ export class UserService {
         isActive: true,
         emailNotificationsEnabled: true,
         $or: [
-          ...(contabilidadRole ? [{ roleId: (contabilidadRole as any)._id }] : []),
+          ...(contabilidadRole
+            ? [{ roleId: (contabilidadRole as any)._id }]
+            : []),
           { 'permissions.canApproveL2': true },
         ],
       })
@@ -707,24 +722,55 @@ export class UserService {
 
   /** Alias de encabezados (ES/EN) a los campos canónicos del importador. */
   private static readonly BULK_HEADER_ALIASES: Record<string, string> = {
-    name: 'name', nombre: 'name', nombres: 'name', 'nombre completo': 'name',
-    email: 'email', correo: 'email', 'correo electronico': 'email', 'e-mail': 'email', mail: 'email',
-    dni: 'dni', documento: 'dni', 'nro documento': 'dni', 'numero de documento': 'dni',
-    employeecode: 'employeeCode', codigo: 'employeeCode', 'codigo empleado': 'employeeCode',
-    'codigo de empleado': 'employeeCode', 'codigo colaborador': 'employeeCode',
+    name: 'name',
+    nombre: 'name',
+    nombres: 'name',
+    'nombre completo': 'name',
+    email: 'email',
+    correo: 'email',
+    'correo electronico': 'email',
+    'e-mail': 'email',
+    mail: 'email',
+    dni: 'dni',
+    documento: 'dni',
+    'nro documento': 'dni',
+    'numero de documento': 'dni',
+    employeecode: 'employeeCode',
+    codigo: 'employeeCode',
+    'codigo empleado': 'employeeCode',
+    'codigo de empleado': 'employeeCode',
+    'codigo colaborador': 'employeeCode',
     area: 'area',
-    cargo: 'cargo', puesto: 'cargo',
-    phone: 'phone', telefono: 'phone', celular: 'phone', movil: 'phone',
-    address: 'address', direccion: 'address', domicilio: 'address',
-    role: 'role', rol: 'role', perfil: 'role',
-    coordinatoremail: 'coordinatorEmail', 'email coordinador': 'coordinatorEmail',
-    emailcoordinador: 'coordinatorEmail', 'correo coordinador': 'coordinatorEmail',
+    cargo: 'cargo',
+    puesto: 'cargo',
+    phone: 'phone',
+    telefono: 'phone',
+    celular: 'phone',
+    movil: 'phone',
+    address: 'address',
+    direccion: 'address',
+    domicilio: 'address',
+    role: 'role',
+    rol: 'role',
+    perfil: 'role',
+    coordinatoremail: 'coordinatorEmail',
+    'email coordinador': 'coordinatorEmail',
+    emailcoordinador: 'coordinatorEmail',
+    'correo coordinador': 'coordinatorEmail',
     coordinador: 'coordinatorEmail',
-    bankname: 'bankName', banco: 'bankName', 'nombre banco': 'bankName',
-    accountnumber: 'accountNumber', 'numero cuenta': 'accountNumber',
-    'numero de cuenta': 'accountNumber', cuenta: 'accountNumber', 'nro cuenta': 'accountNumber',
-    cci: 'cci', 'codigo cci': 'cci',
-    accounttype: 'accountType', 'tipo cuenta': 'accountType', 'tipo de cuenta': 'accountType',
+    bankname: 'bankName',
+    banco: 'bankName',
+    'nombre banco': 'bankName',
+    accountnumber: 'accountNumber',
+    'numero cuenta': 'accountNumber',
+    'numero de cuenta': 'accountNumber',
+    cuenta: 'accountNumber',
+    'nro cuenta': 'accountNumber',
+    cci: 'cci',
+    'codigo cci': 'cci',
+    accounttype: 'accountType',
+    'tipo cuenta': 'accountType',
+    'tipo de cuenta': 'accountType',
     tipocuenta: 'accountType',
   }
 
@@ -744,19 +790,44 @@ export class UserService {
     categoryIds: string[]
   } {
     const ALL_NON_COLAB = [
-      'nueva-rendicion', 'rendiciones', 'viaticos',
-      'consolidated-invoices', 'tesoreria', 'configuracion', 'audit-log',
+      'nueva-rendicion',
+      'rendiciones',
+      'viaticos',
+      'consolidated-invoices',
+      'tesoreria',
+      'configuracion',
+      'audit-log',
     ]
     switch (roleName) {
       case 'Coordinador':
-        return { modules: ['rendiciones', 'viaticos', 'tesoreria'], canApproveL1: true, canApproveL2: false, categoryIds: [] }
+        return {
+          modules: ['rendiciones', 'viaticos', 'tesoreria'],
+          canApproveL1: true,
+          canApproveL2: false,
+          categoryIds: [],
+        }
       case 'Contabilidad':
-        return { modules: ALL_NON_COLAB, canApproveL1: true, canApproveL2: true, categoryIds: [] }
+        return {
+          modules: ALL_NON_COLAB,
+          canApproveL1: true,
+          canApproveL2: true,
+          categoryIds: [],
+        }
       case 'Administrador':
-        return { modules: ALL_NON_COLAB, canApproveL1: false, canApproveL2: false, categoryIds: [] }
+        return {
+          modules: ALL_NON_COLAB,
+          canApproveL1: false,
+          canApproveL2: false,
+          categoryIds: [],
+        }
       case 'Colaborador':
       default:
-        return { modules: ['mis-rendiciones', 'nueva-rendicion', 'viaticos'], canApproveL1: false, canApproveL2: false, categoryIds: [] }
+        return {
+          modules: ['mis-rendiciones', 'nueva-rendicion', 'viaticos'],
+          canApproveL1: false,
+          canApproveL2: false,
+          categoryIds: [],
+        }
     }
   }
 
@@ -772,17 +843,35 @@ export class UserService {
     let created = 0
     const skipped: string[] = []
     const errors: string[] = []
-    const credentials: { name: string; email: string; temporaryPassword: string }[] = []
+    const credentials: {
+      name: string
+      email: string
+      temporaryPassword: string
+    }[] = []
 
     if (!clientId) {
-      return { created, skipped, errors: ['No se pudo determinar la empresa destino'], credentials }
+      return {
+        created,
+        skipped,
+        errors: ['No se pudo determinar la empresa destino'],
+        credentials,
+      }
     }
     const clientObjectId = new Types.ObjectId(clientId)
 
-    const allowedRoles = ['Colaborador', 'Coordinador', 'Contabilidad', 'Administrador']
+    const allowedRoles = [
+      'Colaborador',
+      'Coordinador',
+      'Contabilidad',
+      'Administrador',
+    ]
     const roleCache = new Map<string, Types.ObjectId | null>()
-    const resolveRole = async (name: string): Promise<Types.ObjectId | null> => {
-      const match = allowedRoles.find(r => r.toLowerCase() === name.toLowerCase())
+    const resolveRole = async (
+      name: string
+    ): Promise<Types.ObjectId | null> => {
+      const match = allowedRoles.find(
+        r => r.toLowerCase() === name.toLowerCase()
+      )
       const roleName = match || 'Colaborador'
       if (roleCache.has(roleName)) return roleCache.get(roleName)!
       const role = await this.roleService.getByName(roleName)
@@ -792,11 +881,16 @@ export class UserService {
     }
 
     const coordinatorCache = new Map<string, Types.ObjectId | null>()
-    const resolveCoordinator = async (email: string): Promise<Types.ObjectId | null> => {
+    const resolveCoordinator = async (
+      email: string
+    ): Promise<Types.ObjectId | null> => {
       const key = email.toLowerCase()
       if (coordinatorCache.has(key)) return coordinatorCache.get(key)!
-      const u = await this.userModel.findOne({ email: key, clientId: clientObjectId }).select('_id').exec()
-      const id = u ? (u._id as Types.ObjectId) : null
+      const u = await this.userModel
+        .findOne({ email: key, clientId: clientObjectId })
+        .select('_id')
+        .exec()
+      const id = u ? u._id : null
       coordinatorCache.set(key, id)
       return id
     }
@@ -815,16 +909,23 @@ export class UserService {
           errors.push(`Fila ${rowNumber} (${email}): email inválido`)
           continue
         }
-        const exists = await this.userModel.findOne({ email, clientId: clientObjectId }).exec()
+        const exists = await this.userModel
+          .findOne({ email, clientId: clientObjectId })
+          .exec()
         if (exists) {
           skipped.push(email)
           continue
         }
 
-        const roleName = allowedRoles.find(r => r.toLowerCase() === (row.role || '').toLowerCase()) || 'Colaborador'
+        const roleName =
+          allowedRoles.find(
+            r => r.toLowerCase() === (row.role || '').toLowerCase()
+          ) || 'Colaborador'
         const roleId = await resolveRole(roleName)
         if (!roleId) {
-          errors.push(`Fila ${rowNumber} (${email}): rol "${roleName}" no existe`)
+          errors.push(
+            `Fila ${rowNumber} (${email}): rol "${roleName}" no existe`
+          )
           continue
         }
 
@@ -832,7 +933,9 @@ export class UserService {
         if (row.coordinatorEmail) {
           const coordId = await resolveCoordinator(row.coordinatorEmail)
           if (!coordId) {
-            errors.push(`Fila ${rowNumber} (${email}): coordinador "${row.coordinatorEmail}" no encontrado en la empresa`)
+            errors.push(
+              `Fila ${rowNumber} (${email}): coordinador "${row.coordinatorEmail}" no encontrado en la empresa`
+            )
             continue
           }
           coordinatorId = coordId
@@ -880,7 +983,9 @@ export class UserService {
         credentials.push({ name, email, temporaryPassword })
         created++
       } catch (e: any) {
-        errors.push(`Fila ${rowNumber} (${email || 'sin email'}): ${e?.message || 'error desconocido'}`)
+        errors.push(
+          `Fila ${rowNumber} (${email || 'sin email'}): ${e?.message || 'error desconocido'}`
+        )
       }
     }
     return { created, skipped, errors, credentials }

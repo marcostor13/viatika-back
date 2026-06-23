@@ -20,12 +20,7 @@ export class DashboardController {
 
   /** KPIs y series agregadas del dashboard, scoped por la empresa activa (JWT). */
   @Get()
-  @Roles(
-    ROLES.ADMIN,
-    ROLES.SUPER_ADMIN,
-    ROLES.COLABORADOR,
-    ROLES.CONTABILIDAD
-  )
+  @Roles(ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD)
   getDashboard(@Query() query: DashboardQueryDto, @Request() req) {
     const rawClient = req.user?.clientId
     const clientId =

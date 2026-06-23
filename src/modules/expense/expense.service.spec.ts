@@ -21,7 +21,9 @@ describe('ExpenseService — email gating (isEmailEnabled)', () => {
 
   const mockEmailServiceGating = {
     buildAppUrl: jest.fn().mockReturnValue('http://app'),
-    sendInvoiceUploadedExpenseNotification: jest.fn().mockResolvedValue(undefined),
+    sendInvoiceUploadedExpenseNotification: jest
+      .fn()
+      .mockResolvedValue(undefined),
     sendInvoiceApprovedToColaborador: jest.fn().mockResolvedValue(undefined),
   }
 
@@ -41,8 +43,14 @@ describe('ExpenseService — email gating (isEmailEnabled)', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ExpenseService,
-        { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue('sk-test') } },
-        { provide: getModelToken(Expense.name), useValue: { aggregate: jest.fn() } },
+        {
+          provide: ConfigService,
+          useValue: { get: jest.fn().mockReturnValue('sk-test') },
+        },
+        {
+          provide: getModelToken(Expense.name),
+          useValue: { aggregate: jest.fn() },
+        },
         { provide: getModelToken(Client.name), useValue: {} },
         { provide: EmailService, useValue: mockEmailServiceGating },
         { provide: ProjectService, useValue: {} },
@@ -51,7 +59,10 @@ describe('ExpenseService — email gating (isEmailEnabled)', () => {
         { provide: HttpService, useValue: {} },
         { provide: UploadService, useValue: {} },
         { provide: ExpenseReportService, useValue: {} },
-        { provide: NotificationsService, useValue: { create: jest.fn().mockResolvedValue(undefined) } },
+        {
+          provide: NotificationsService,
+          useValue: { create: jest.fn().mockResolvedValue(undefined) },
+        },
         { provide: CategoryService, useValue: mockCategoryServiceGating },
       ],
     }).compile()
@@ -66,26 +77,33 @@ describe('ExpenseService — email gating (isEmailEnabled)', () => {
 
   describe('notifyStakeholders — creator email gating', () => {
     it('does not send creator email when isEmailEnabled returns false', async () => {
-      mockUserServiceGating.findOne.mockResolvedValue({ email: 'creator@test.com', name: 'Creator' })
+      mockUserServiceGating.findOne.mockResolvedValue({
+        email: 'creator@test.com',
+        name: 'Creator',
+      })
       mockUserServiceGating.isEmailEnabled.mockResolvedValue(false)
       mockUserServiceGating.findAll.mockResolvedValue([])
 
       await (service as any).notifyStakeholders(body, data, 'Project')
 
-      expect(mockEmailServiceGating.sendInvoiceUploadedExpenseNotification).not.toHaveBeenCalled()
+      expect(
+        mockEmailServiceGating.sendInvoiceUploadedExpenseNotification
+      ).not.toHaveBeenCalled()
     })
 
     it('sends creator email when isEmailEnabled returns true', async () => {
-      mockUserServiceGating.findOne.mockResolvedValue({ email: 'creator@test.com', name: 'Creator' })
+      mockUserServiceGating.findOne.mockResolvedValue({
+        email: 'creator@test.com',
+        name: 'Creator',
+      })
       mockUserServiceGating.isEmailEnabled.mockResolvedValue(true)
       mockUserServiceGating.findAll.mockResolvedValue([])
 
       await (service as any).notifyStakeholders(body, data, 'Project')
 
-      expect(mockEmailServiceGating.sendInvoiceUploadedExpenseNotification).toHaveBeenCalledWith(
-        'creator@test.com',
-        expect.any(Object),
-      )
+      expect(
+        mockEmailServiceGating.sendInvoiceUploadedExpenseNotification
+      ).toHaveBeenCalledWith('creator@test.com', expect.any(Object))
     })
   })
 
@@ -101,7 +119,9 @@ describe('ExpenseService — email gating (isEmailEnabled)', () => {
 
       await (service as any).notifyStakeholders(body, data, 'Project')
 
-      expect(mockEmailServiceGating.sendInvoiceUploadedExpenseNotification).not.toHaveBeenCalled()
+      expect(
+        mockEmailServiceGating.sendInvoiceUploadedExpenseNotification
+      ).not.toHaveBeenCalled()
     })
 
     it('sends collaborator email when isEmailEnabled returns true for collaborator', async () => {
@@ -117,10 +137,9 @@ describe('ExpenseService — email gating (isEmailEnabled)', () => {
 
       await (service as any).notifyStakeholders(body, data, 'Project')
 
-      expect(mockEmailServiceGating.sendInvoiceUploadedExpenseNotification).toHaveBeenCalledWith(
-        'collab@test.com',
-        expect.any(Object),
-      )
+      expect(
+        mockEmailServiceGating.sendInvoiceUploadedExpenseNotification
+      ).toHaveBeenCalledWith('collab@test.com', expect.any(Object))
     })
   })
 
@@ -131,7 +150,10 @@ describe('ExpenseService — email gating (isEmailEnabled)', () => {
     const expense = { data: null, createdBy, clientId }
 
     it('skips collaborator approval email when isEmailEnabled returns false', async () => {
-      mockUserServiceGating.findOne.mockResolvedValue({ email: 'creator@test.com', name: 'Creator' })
+      mockUserServiceGating.findOne.mockResolvedValue({
+        email: 'creator@test.com',
+        name: 'Creator',
+      })
       mockUserServiceGating.findAll.mockResolvedValue([
         { _id: collab1Id, email: 'collab@test.com', name: 'Collab' },
       ])
@@ -139,11 +161,16 @@ describe('ExpenseService — email gating (isEmailEnabled)', () => {
 
       await (service as any).sendApprovalEmails(expense, null, 'Admin', 'User')
 
-      expect(mockEmailServiceGating.sendInvoiceApprovedToColaborador).not.toHaveBeenCalled()
+      expect(
+        mockEmailServiceGating.sendInvoiceApprovedToColaborador
+      ).not.toHaveBeenCalled()
     })
 
     it('sends collaborator approval email when isEmailEnabled returns true', async () => {
-      mockUserServiceGating.findOne.mockResolvedValue({ email: 'creator@test.com', name: 'Creator' })
+      mockUserServiceGating.findOne.mockResolvedValue({
+        email: 'creator@test.com',
+        name: 'Creator',
+      })
       mockUserServiceGating.findAll.mockResolvedValue([
         { _id: collab1Id, email: 'collab@test.com', name: 'Collab' },
       ])
@@ -151,10 +178,9 @@ describe('ExpenseService — email gating (isEmailEnabled)', () => {
 
       await (service as any).sendApprovalEmails(expense, null, 'Admin', 'User')
 
-      expect(mockEmailServiceGating.sendInvoiceApprovedToColaborador).toHaveBeenCalledWith(
-        'collab@test.com',
-        expect.any(Object),
-      )
+      expect(
+        mockEmailServiceGating.sendInvoiceApprovedToColaborador
+      ).toHaveBeenCalledWith('collab@test.com', expect.any(Object))
     })
   })
 })
@@ -193,7 +219,10 @@ describe('ExpenseService — Fase 5 (plazos y límites de categoría)', () => {
           provide: ConfigService,
           useValue: { get: jest.fn().mockReturnValue('sk-test-openai-key') },
         },
-        { provide: getModelToken(Expense.name), useValue: mockExpenseRepository },
+        {
+          provide: getModelToken(Expense.name),
+          useValue: mockExpenseRepository,
+        },
         { provide: getModelToken(Client.name), useValue: {} },
         { provide: EmailService, useValue: noopDeps.emailService },
         { provide: ProjectService, useValue: noopDeps.projectService },
@@ -201,8 +230,14 @@ describe('ExpenseService — Fase 5 (plazos y límites de categoría)', () => {
         { provide: SunatConfigService, useValue: noopDeps.sunatConfigService },
         { provide: HttpService, useValue: noopDeps.httpService },
         { provide: UploadService, useValue: noopDeps.uploadService },
-        { provide: ExpenseReportService, useValue: noopDeps.expenseReportService },
-        { provide: NotificationsService, useValue: noopDeps.notificationsService },
+        {
+          provide: ExpenseReportService,
+          useValue: noopDeps.expenseReportService,
+        },
+        {
+          provide: NotificationsService,
+          useValue: noopDeps.notificationsService,
+        },
         { provide: CategoryService, useValue: mockCategoryService },
       ],
     }).compile()
@@ -216,28 +251,32 @@ describe('ExpenseService — Fase 5 (plazos y límites de categoría)', () => {
 
   describe('evaluateDeadline', () => {
     it('sin fecha no marca observación', () => {
-      const out = (service as unknown as { evaluateDeadline: (d?: string | null) => unknown }).evaluateDeadline(null)
+      const out = (
+        service as unknown as {
+          evaluateDeadline: (d?: string | null) => unknown
+        }
+      ).evaluateDeadline(null)
       expect(out).toEqual({ observado: false })
     })
 
     it('emisión reciente no observa', () => {
-      const out = (service as unknown as { evaluateDeadline: (d: string) => unknown }).evaluateDeadline(
-        '2026-05-14'
-      )
+      const out = (
+        service as unknown as { evaluateDeadline: (d: string) => unknown }
+      ).evaluateDeadline('2026-05-14')
       expect(out).toEqual({ observado: false })
     })
 
     it('emisión con varios días de antigüedad no observa', () => {
-      const out = (service as unknown as { evaluateDeadline: (d: string) => unknown }).evaluateDeadline(
-        '2026-05-10'
-      )
+      const out = (
+        service as unknown as { evaluateDeadline: (d: string) => unknown }
+      ).evaluateDeadline('2026-05-10')
       expect(out).toEqual({ observado: false })
     })
 
     it('emisión de mes anterior tampoco rechaza', () => {
-      const out = (service as unknown as { evaluateDeadline: (d: string) => unknown }).evaluateDeadline(
-        '2026-04-20'
-      )
+      const out = (
+        service as unknown as { evaluateDeadline: (d: string) => unknown }
+      ).evaluateDeadline('2026-04-20')
       expect(out).toEqual({ observado: false })
     })
   })
@@ -255,7 +294,10 @@ describe('ExpenseService — Fase 5 (plazos y límites de categoría)', () => {
       delete (b as { expenseReportId?: string }).expenseReportId
       const out = await (
         service as unknown as {
-          evaluateCategoryLimit: (dto: CreateExpenseDto, n: number) => Promise<unknown>
+          evaluateCategoryLimit: (
+            dto: CreateExpenseDto,
+            n: number
+          ) => Promise<unknown>
         }
       ).evaluateCategoryLimit(b, 100)
       expect(out).toEqual({})
@@ -268,7 +310,10 @@ describe('ExpenseService — Fase 5 (plazos y límites de categoría)', () => {
       await expect(
         (
           service as unknown as {
-            evaluateCategoryLimit: (dto: CreateExpenseDto, n: number) => Promise<unknown>
+            evaluateCategoryLimit: (
+              dto: CreateExpenseDto,
+              n: number
+            ) => Promise<unknown>
           }
         ).evaluateCategoryLimit(bodyBase(), 10)
       ).rejects.toThrow(/Límite de categoría/)
@@ -279,7 +324,10 @@ describe('ExpenseService — Fase 5 (plazos y límites de categoría)', () => {
       mockExpenseRepository.aggregate.mockResolvedValue([{ total: 85 }])
       const out = await (
         service as unknown as {
-          evaluateCategoryLimit: (dto: CreateExpenseDto, n: number) => Promise<unknown>
+          evaluateCategoryLimit: (
+            dto: CreateExpenseDto,
+            n: number
+          ) => Promise<unknown>
         }
       ).evaluateCategoryLimit(bodyBase(), 10)
       expect(out).toMatchObject({
@@ -292,7 +340,10 @@ describe('ExpenseService — Fase 5 (plazos y límites de categoría)', () => {
       mockExpenseRepository.aggregate.mockResolvedValue([{ total: 10 }])
       const out = await (
         service as unknown as {
-          evaluateCategoryLimit: (dto: CreateExpenseDto, n: number) => Promise<unknown>
+          evaluateCategoryLimit: (
+            dto: CreateExpenseDto,
+            n: number
+          ) => Promise<unknown>
         }
       ).evaluateCategoryLimit(bodyBase(), 50)
       expect(out).toEqual({ percent: 60 })

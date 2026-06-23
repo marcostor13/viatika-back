@@ -1,7 +1,15 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common'
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common'
 import { InjectModel } from '@nestjs/mongoose'
 import { Model, Types } from 'mongoose'
-import { CategoryGroup, CategoryGroupDocument } from './entities/category-group.entity'
+import {
+  CategoryGroup,
+  CategoryGroupDocument,
+} from './entities/category-group.entity'
 import { CreateCategoryGroupDto } from './dto/create-category-group.dto'
 import { UpdateCategoryGroupDto } from './dto/update-category-group.dto'
 
@@ -21,7 +29,7 @@ export class CategoryGroupService {
         name: dto.name,
         description: dto.description,
         clientId: clientIdObject,
-        categoryIds: (dto.categoryIds || []).map((id) => new Types.ObjectId(id)),
+        categoryIds: (dto.categoryIds || []).map(id => new Types.ObjectId(id)),
       })
       return await group.save()
     } catch (error) {
@@ -35,7 +43,10 @@ export class CategoryGroupService {
     try {
       return await this.groupModel.find({ clientId: clientIdObject }).exec()
     } catch (error) {
-      this.logger.error(`Error al obtener grupos: ${error.message}`, error.stack)
+      this.logger.error(
+        `Error al obtener grupos: ${error.message}`,
+        error.stack
+      )
       throw error
     }
   }
@@ -46,8 +57,11 @@ export class CategoryGroupService {
     }
     const clientIdObject = new Types.ObjectId(clientId)
     try {
-      const group = await this.groupModel.findOne({ _id: id, clientId: clientIdObject }).exec()
-      if (!group) throw new NotFoundException(`Grupo con ID ${id} no encontrado`)
+      const group = await this.groupModel
+        .findOne({ _id: id, clientId: clientIdObject })
+        .exec()
+      if (!group)
+        throw new NotFoundException(`Grupo con ID ${id} no encontrado`)
       return group
     } catch (error) {
       this.logger.error(`Error al obtener grupo: ${error.message}`, error.stack)
@@ -64,19 +78,28 @@ export class CategoryGroupService {
     try {
       const updateData: Record<string, unknown> = {}
       if (dto.name !== undefined) updateData.name = dto.name
-      if (dto.description !== undefined) updateData.description = dto.description
+      if (dto.description !== undefined)
+        updateData.description = dto.description
       if (dto.categoryIds !== undefined) {
-        updateData.categoryIds = dto.categoryIds.map((id) => new Types.ObjectId(id))
+        updateData.categoryIds = dto.categoryIds.map(
+          id => new Types.ObjectId(id)
+        )
       }
 
       const updated = await this.groupModel
-        .findOneAndUpdate({ _id: id, clientId: clientIdObject }, updateData, { new: true })
+        .findOneAndUpdate({ _id: id, clientId: clientIdObject }, updateData, {
+          new: true,
+        })
         .exec()
 
-      if (!updated) throw new NotFoundException(`Grupo con ID ${id} no encontrado`)
+      if (!updated)
+        throw new NotFoundException(`Grupo con ID ${id} no encontrado`)
       return updated
     } catch (error) {
-      this.logger.error(`Error al actualizar grupo: ${error.message}`, error.stack)
+      this.logger.error(
+        `Error al actualizar grupo: ${error.message}`,
+        error.stack
+      )
       throw error
     }
   }
@@ -103,8 +126,13 @@ export class CategoryGroupService {
   }
 
   /** Perfiles por ids (scopeados al cliente). */
-  async findByIds(ids: string[], clientId: string): Promise<CategoryGroupDocument[]> {
-    const valid = (ids || []).filter((id) => Types.ObjectId.isValid(id)).map((id) => new Types.ObjectId(id))
+  async findByIds(
+    ids: string[],
+    clientId: string
+  ): Promise<CategoryGroupDocument[]> {
+    const valid = (ids || [])
+      .filter(id => Types.ObjectId.isValid(id))
+      .map(id => new Types.ObjectId(id))
     if (!valid.length) return []
     return this.groupModel
       .find({ _id: { $in: valid }, clientId: new Types.ObjectId(clientId) })
@@ -112,13 +140,21 @@ export class CategoryGroupService {
   }
 
   /** _ids (string) de los perfiles que contienen alguna de las categorías dadas. */
-  async findIdsContainingAnyCategory(categoryIds: string[], clientId: string): Promise<string[]> {
-    const valid = (categoryIds || []).filter((id) => Types.ObjectId.isValid(id)).map((id) => new Types.ObjectId(id))
+  async findIdsContainingAnyCategory(
+    categoryIds: string[],
+    clientId: string
+  ): Promise<string[]> {
+    const valid = (categoryIds || [])
+      .filter(id => Types.ObjectId.isValid(id))
+      .map(id => new Types.ObjectId(id))
     if (!valid.length) return []
     const groups = await this.groupModel
-      .find({ clientId: new Types.ObjectId(clientId), categoryIds: { $in: valid } }, { _id: 1 })
+      .find(
+        { clientId: new Types.ObjectId(clientId), categoryIds: { $in: valid } },
+        { _id: 1 }
+      )
       .exec()
-    return groups.map((g) => String(g._id))
+    return groups.map(g => String(g._id))
   }
 
   /**
@@ -133,8 +169,8 @@ export class CategoryGroupService {
     const clientIdObject = new Types.ObjectId(clientId)
     const catObj = new Types.ObjectId(categoryId)
     const targetIds = (perfilIds || [])
-      .filter((id) => Types.ObjectId.isValid(id))
-      .map((id) => new Types.ObjectId(id))
+      .filter(id => Types.ObjectId.isValid(id))
+      .map(id => new Types.ObjectId(id))
 
     if (targetIds.length) {
       await this.groupModel
@@ -146,7 +182,11 @@ export class CategoryGroupService {
     }
     await this.groupModel
       .updateMany(
-        { clientId: clientIdObject, _id: { $nin: targetIds }, categoryIds: catObj },
+        {
+          clientId: clientIdObject,
+          _id: { $nin: targetIds },
+          categoryIds: catObj,
+        },
         { $pull: { categoryIds: catObj } }
       )
       .exec()
@@ -158,9 +198,13 @@ export class CategoryGroupService {
       const result = await this.groupModel
         .findOneAndDelete({ _id: id, clientId: clientIdObject })
         .exec()
-      if (!result) throw new NotFoundException(`Grupo con ID ${id} no encontrado`)
+      if (!result)
+        throw new NotFoundException(`Grupo con ID ${id} no encontrado`)
     } catch (error) {
-      this.logger.error(`Error al eliminar grupo: ${error.message}`, error.stack)
+      this.logger.error(
+        `Error al eliminar grupo: ${error.message}`,
+        error.stack
+      )
       throw error
     }
   }

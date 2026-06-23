@@ -62,6 +62,19 @@ export interface ExpenseReviewHistory {
   reason?: string
 }
 
+/**
+ * Reparto analítico de un comprobante para asientos contables.
+ * Una factura puede dividirse en varias líneas (multiproyecto y/o afecto+inafecto).
+ */
+export interface ExpenseAnalyticDetail {
+  /** Proyecto / centro de costo (id) al que se carga esta porción. */
+  proyectId?: string
+  /** Condición tributaria de la porción. */
+  condicion: 'afecto' | 'inafecto'
+  /** Monto de valor venta de esta porción (sin IGV). */
+  monto: number
+}
+
 export interface ExpenseDocument extends Document {
   proyectId: Types.ObjectId
   total: number
@@ -92,6 +105,25 @@ export interface ExpenseDocument extends Document {
   placaVehiculo?: string
   approvalCoord?: ExpenseApproval
   approvalCont?: ExpenseApproval
+  // --- Desglose contable (asientos Contanet) ---
+  /** Base imponible afecta al IGV (valor venta gravado). */
+  baseAfecta?: number
+  /** Monto del IGV declarado en el comprobante. */
+  igv?: number
+  /** Tasa de IGV leída del comprobante (18, 10, 10.5). */
+  tasaIgv?: number
+  /** Monto inafecto (recargo al consumo, servicio, propina…). */
+  inafecto?: number
+  /** Reparto analítico por proyecto y condición afecto/inafecto. */
+  detalleAnalitico?: ExpenseAnalyticDetail[]
+  /** Marca si Contabilidad ya revisó/corrigió el desglose contable. */
+  desgloseRevisado?: boolean
+  /**
+   * Información completa del comprobante extraída por el OCR/IA (estructura libre).
+   * Aditivo: no reemplaza `data` ni los campos estructurados. Captura todos los
+   * parámetros de la factura peruana (totales, tributos, ítems, detracción, etc.).
+   */
+  comprobanteDetallado?: Record<string, any>
 }
 
 export interface GetExpenseDocument extends Omit<ExpenseDocument, '_id'> {
@@ -160,7 +192,11 @@ export class Expense {
   @Prop({
     type: [
       {
-        action: { type: String, enum: ['approved', 'rejected'], required: true },
+        action: {
+          type: String,
+          enum: ['approved', 'rejected'],
+          required: true,
+        },
         reviewerId: { type: String, required: false },
         reviewedAt: { type: Date, required: true },
         reason: { type: String, required: false },
@@ -239,7 +275,11 @@ export class Expense {
 
   @Prop({
     type: {
-      status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
+      status: {
+        type: String,
+        enum: ['pending', 'approved', 'rejected'],
+        default: 'pending',
+      },
       userId: { type: String },
       userName: { type: String },
       date: { type: Date },
@@ -252,7 +292,11 @@ export class Expense {
 
   @Prop({
     type: {
-      status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
+      status: {
+        type: String,
+        enum: ['pending', 'approved', 'rejected'],
+        default: 'pending',
+      },
       userId: { type: String },
       userName: { type: String },
       date: { type: Date },
@@ -266,6 +310,43 @@ export class Expense {
   /** Sub-tipo para 'otros_gastos': TK (Ticket), RC (Recibos diversos), DJ (Declaración Jurada), OT (Otros) */
   @Prop({ type: String, required: false })
   subTipo?: string
+
+  // --- Desglose contable (asientos Contanet) ---
+  @Prop({ type: Number, required: false })
+  baseAfecta?: number
+
+  @Prop({ type: Number, required: false })
+  igv?: number
+
+  @Prop({ type: Number, required: false })
+  tasaIgv?: number
+
+  @Prop({ type: Number, required: false })
+  inafecto?: number
+
+  @Prop({
+    type: [
+      {
+        proyectId: { type: String, required: false },
+        condicion: {
+          type: String,
+          enum: ['afecto', 'inafecto'],
+          required: true,
+        },
+        monto: { type: Number, required: true },
+        _id: false,
+      },
+    ],
+    required: false,
+    default: undefined,
+  })
+  detalleAnalitico?: ExpenseAnalyticDetail[]
+
+  @Prop({ type: Boolean, default: false })
+  desgloseRevisado?: boolean
+
+  @Prop({ type: Object, required: false })
+  comprobanteDetallado?: Record<string, any>
 }
 
 export const ExpenseSchema = SchemaFactory.createForClass(Expense)

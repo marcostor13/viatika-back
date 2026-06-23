@@ -56,6 +56,11 @@ interface ExtractedInvoiceData {
   direccionEmisor?: string
   comentario?: string
   placaVehiculo?: string
+  baseAfecta?: number
+  igv?: number
+  tasaIgv?: number
+  inafecto?: number
+  comprobanteDetallado?: Record<string, unknown>
   [key: string]: unknown
 }
 
@@ -72,6 +77,15 @@ export interface DepositScanResult {
   hora?: string
   operationNumber?: string
   titular?: string
+}
+
+/** Datos extraídos de un comprobante de caja (escaneo OCR para autorellenar). */
+export interface CashVoucherScanResult {
+  entregadoA?: string
+  fecha?: string
+  direccion?: string
+  concepto?: string
+  monto: number
 }
 
 @Injectable()
@@ -128,7 +142,11 @@ export class ExpenseService {
     expense: Expense,
     actor: ExpenseActorContext
   ): void {
-    if (actor.roleName === ROLES.SUPER_ADMIN || actor.roleName === ROLES.CONTABILIDAD) return
+    if (
+      actor.roleName === ROLES.SUPER_ADMIN ||
+      actor.roleName === ROLES.CONTABILIDAD
+    )
+      return
     const expClient = this.normalizeClientId(
       (expense as unknown as { clientId: unknown }).clientId
     )
@@ -169,6 +187,15 @@ export class ExpenseService {
       if (report.status !== 'open' && report.status !== 'rejected') {
         throw new ForbiddenException(
           'Solo puedes editar o eliminar gastos en rendiciones abiertas o rechazadas.'
+        )
+      }
+      // Caja chica finalizada: el total quedó congelado, el colaborador ya no
+      // puede modificar/eliminar gastos (mismo criterio que para agregarlos).
+      if (
+        (report as unknown as { lockedByCajaChica?: boolean }).lockedByCajaChica
+      ) {
+        throw new ForbiddenException(
+          'La caja chica de esta rendición fue finalizada por Contabilidad. No se pueden modificar más gastos.'
         )
       }
     }
@@ -256,7 +283,10 @@ export class ExpenseService {
     if (dto.data == null || typeof dto.data !== 'string') return
     try {
       const parsed = JSON.parse(dto.data) as Record<string, unknown>
-      if (dto.comentario === undefined && typeof parsed.comentario === 'string') {
+      if (
+        dto.comentario === undefined &&
+        typeof parsed.comentario === 'string'
+      ) {
         const c = parsed.comentario.trim()
         if (c) dto.comentario = c
       }
@@ -285,11 +315,19 @@ export class ExpenseService {
     body: CreateExpenseDto,
     amount: number
   ): Promise<{ percent?: number; warning?: string }> {
-    if (!body.expenseReportId || !body.categoryId || !body.clientId || amount <= 0) {
+    if (
+      !body.expenseReportId ||
+      !body.categoryId ||
+      !body.clientId ||
+      amount <= 0
+    ) {
       return {}
     }
 
-    const category = await this.categoryService.findOne(body.categoryId, body.clientId)
+    const category = await this.categoryService.findOne(
+      body.categoryId,
+      body.clientId
+    )
     const limit = Number(category?.limit ?? 0)
     if (!limit || Number.isNaN(limit) || limit <= 0) return {}
 
@@ -458,7 +496,10 @@ export class ExpenseService {
             const response = await firstValueFrom(
               this.httpService.post(sunatApiUrl, params, { headers })
             )
-            console.log('[SUNAT] Raw response:', JSON.stringify(response.data, null, 2))
+            console.log(
+              '[SUNAT] Raw response:',
+              JSON.stringify(response.data, null, 2)
+            )
             validation = this.interpretSunatResponse(response.data)
             expenseStatus = validation.status
           } catch (error) {
@@ -526,6 +567,16 @@ export class ExpenseService {
       categoryLimitWarning: categoryMeta.warning,
       comentario: data.comentario || undefined,
       placaVehiculo: data.placaVehiculo || undefined,
+      baseAfecta:
+        typeof data.baseAfecta === 'number' ? data.baseAfecta : undefined,
+      igv: typeof data.igv === 'number' ? data.igv : undefined,
+      tasaIgv: typeof data.tasaIgv === 'number' ? data.tasaIgv : undefined,
+      inafecto: typeof data.inafecto === 'number' ? data.inafecto : undefined,
+      comprobanteDetallado:
+        data.comprobanteDetallado &&
+        typeof data.comprobanteDetallado === 'object'
+          ? data.comprobanteDetallado
+          : undefined,
     })
   }
 
@@ -643,7 +694,7 @@ export class ExpenseService {
     }
 
     // Dueño de la rendición vinculada (reutiliza el report consultado arriba).
-    const ownerRef = (report as any)?.userId
+    const ownerRef = report?.userId
     const reportOwnerId: string | undefined = ownerRef?._id
       ? String(ownerRef._id)
       : ownerRef
@@ -657,17 +708,22 @@ export class ExpenseService {
         const owner = await this.userService.findOne(ownerCandidate)
         await sendTo(owner?.email, ownerCandidate)
       } catch (err) {
-        this.logger.warn('No se pudo notificar al dueño del gasto/rendición:', err)
+        this.logger.warn(
+          'No se pudo notificar al dueño del gasto/rendición:',
+          err
+        )
       }
     }
 
     // 2) Coordinador del dueño.
     if (ownerCandidate) {
       try {
-        const profile = await this.userService.findTransactionalProfile(ownerCandidate)
+        const profile =
+          await this.userService.findTransactionalProfile(ownerCandidate)
         const coordinatorId = profile?.coordinatorId?.toString?.()
         if (coordinatorId) {
-          const coordinator = await this.userService.findEmailNameClient(coordinatorId)
+          const coordinator =
+            await this.userService.findEmailNameClient(coordinatorId)
           await sendTo(coordinator?.email, coordinatorId)
         }
       } catch (err) {
@@ -678,8 +734,9 @@ export class ExpenseService {
     // 3) Contabilidad/Tesorería (solo por rol Contabilidad, ya filtrado en el helper).
     if (body.clientId) {
       try {
-        const contabilidad =
-          await this.userService.findContabilidadRecipients(body.clientId)
+        const contabilidad = await this.userService.findContabilidadRecipients(
+          body.clientId
+        )
         for (const u of contabilidad) {
           await sendTo(u.email)
         }
@@ -700,7 +757,7 @@ export class ExpenseService {
       if (!client_id || !client_secret) {
         throw new HttpException(
           'Credenciales SUNAT incompletas: falta clientId o clientSecret',
-          HttpStatus.BAD_REQUEST,
+          HttpStatus.BAD_REQUEST
         )
       }
 
@@ -725,7 +782,9 @@ export class ExpenseService {
         })
       )
 
-      this.logger.log(`[SUNAT Token] Token obtenido exitosamente para client_id: ${client_id}`)
+      this.logger.log(
+        `[SUNAT Token] Token obtenido exitosamente para client_id: ${client_id}`
+      )
 
       await this.sunatConfigService.update(credentials._id, { isActive: true })
 
@@ -745,18 +804,21 @@ export class ExpenseService {
             sunat_error: sunatError.error,
             sunat_description: sunatError.error_description,
           },
-          HttpStatus.BAD_GATEWAY,
+          HttpStatus.BAD_GATEWAY
         )
       }
 
       throw new HttpException(
         error?.message || 'Error al generar token de SUNAT',
-        HttpStatus.INTERNAL_SERVER_ERROR,
+        HttpStatus.INTERNAL_SERVER_ERROR
       )
     }
   }
 
-  async getRucInfo(ruc: string, clientId: string): Promise<{ razonSocial: string | null; fuente: string }> {
+  async getRucInfo(
+    ruc: string,
+    clientId: string
+  ): Promise<{ razonSocial: string | null; fuente: string }> {
     // Option A: SUNAT API oficial con el mismo token OAuth2
     try {
       const token = await this.generateTokenSunat(clientId)
@@ -767,21 +829,29 @@ export class ExpenseService {
             headers: { Authorization: `Bearer ${token.access_token}` },
           })
         )
-        console.log(`[RUC Info] SUNAT respuesta para ${ruc}:`, JSON.stringify(response.data))
+        console.log(
+          `[RUC Info] SUNAT respuesta para ${ruc}:`,
+          JSON.stringify(response.data)
+        )
         const data = response.data
-        const razonSocial = data?.ddp_nombre ?? data?.razonSocial ?? data?.nombre ?? null
+        const razonSocial =
+          data?.ddp_nombre ?? data?.razonSocial ?? data?.nombre ?? null
         if (razonSocial) {
           this.logger.log(`[RUC Info] ${ruc} via SUNAT oficial: ${razonSocial}`)
           return { razonSocial, fuente: 'sunat' }
         }
       }
     } catch (err: any) {
-      console.log(`[RUC Info] SUNAT error para ${ruc}:`, err?.response?.status, JSON.stringify(err?.response?.data ?? err?.message))
+      console.log(
+        `[RUC Info] SUNAT error para ${ruc}:`,
+        err?.response?.status,
+        JSON.stringify(err?.response?.data ?? err?.message)
+      )
     }
 
     // Option B-1: api.apis.net.pe v2 (requiere token si lo hay en env)
     try {
-      const headers: any = { 'Accept': 'application/json' }
+      const headers: any = { Accept: 'application/json' }
       const apisToken = process.env.APIS_NET_PE_TOKEN
       if (apisToken) headers['Authorization'] = `Bearer ${apisToken}`
 
@@ -789,15 +859,24 @@ export class ExpenseService {
       const response = await firstValueFrom(
         this.httpService.get(url, { headers, timeout: 6000 } as any)
       )
-      console.log(`[RUC Info] api.apis.net.pe v2 respuesta para ${ruc}:`, JSON.stringify(response.data))
+      console.log(
+        `[RUC Info] api.apis.net.pe v2 respuesta para ${ruc}:`,
+        JSON.stringify(response.data)
+      )
       const data = response.data
       const razonSocial = data?.razonSocial ?? data?.nombre ?? null
       if (razonSocial) {
-        this.logger.log(`[RUC Info] ${ruc} via api.apis.net.pe v2: ${razonSocial}`)
+        this.logger.log(
+          `[RUC Info] ${ruc} via api.apis.net.pe v2: ${razonSocial}`
+        )
         return { razonSocial, fuente: 'tercero' }
       }
     } catch (err: any) {
-      console.log(`[RUC Info] api.apis.net.pe v2 error para ${ruc}:`, err?.response?.status, JSON.stringify(err?.response?.data ?? err?.message))
+      console.log(
+        `[RUC Info] api.apis.net.pe v2 error para ${ruc}:`,
+        err?.response?.status,
+        JSON.stringify(err?.response?.data ?? err?.message)
+      )
     }
 
     // Option B-2: api.apis.net.pe v1 (puede funcionar sin token)
@@ -806,15 +885,24 @@ export class ExpenseService {
       const response = await firstValueFrom(
         this.httpService.get(url, { timeout: 6000 } as any)
       )
-      console.log(`[RUC Info] api.apis.net.pe v1 respuesta para ${ruc}:`, JSON.stringify(response.data))
+      console.log(
+        `[RUC Info] api.apis.net.pe v1 respuesta para ${ruc}:`,
+        JSON.stringify(response.data)
+      )
       const data = response.data
       const razonSocial = data?.razonSocial ?? data?.nombre ?? null
       if (razonSocial) {
-        this.logger.log(`[RUC Info] ${ruc} via api.apis.net.pe v1: ${razonSocial}`)
+        this.logger.log(
+          `[RUC Info] ${ruc} via api.apis.net.pe v1: ${razonSocial}`
+        )
         return { razonSocial, fuente: 'tercero' }
       }
     } catch (err: any) {
-      console.log(`[RUC Info] api.apis.net.pe v1 error para ${ruc}:`, err?.response?.status, JSON.stringify(err?.response?.data ?? err?.message))
+      console.log(
+        `[RUC Info] api.apis.net.pe v1 error para ${ruc}:`,
+        err?.response?.status,
+        JSON.stringify(err?.response?.data ?? err?.message)
+      )
     }
 
     return { razonSocial: null, fuente: 'not_found' }
@@ -885,7 +973,7 @@ export class ExpenseService {
         const buffer = await this.fetchUrlAsBuffer(url)
         const pdfModule = await import('pdf-parse')
         const pdfParse: (data: Buffer) => Promise<{ text: string }> =
-          (pdfModule as any).default ?? (pdfModule as any)
+          pdfModule.default ?? pdfModule
         const parsed = await pdfParse(buffer)
         const text = (parsed.text || '').substring(0, 15000)
         const completion = await this.openai.chat.completions.create({
@@ -941,7 +1029,7 @@ export class ExpenseService {
       const m = cleaned.match(/[\d,]+\.?\d*/)
       if (m) obj.amount = Number(m[0].replace(/,/g, '')) || 0
     }
-    let amount =
+    const amount =
       typeof obj.amount === 'string'
         ? Number(String(obj.amount).replace(/,/g, '')) || 0
         : Number(obj.amount) || 0
@@ -958,7 +1046,110 @@ export class ExpenseService {
     }
   }
 
+  /**
+   * Escanea un comprobante de caja (imagen o PDF, por URL) y extrae los campos
+   * para autorellenar el formulario: entregado a, fecha, dirección, concepto y
+   * monto. Ligero: no persiste Expense ni valida nada; el usuario revisa y edita
+   * los datos antes de guardar.
+   */
+  async scanCashVoucher(
+    url: string,
+    mimeType?: string
+  ): Promise<CashVoucherScanResult> {
+    const isPdf =
+      (mimeType ? mimeType.toLowerCase().includes('pdf') : false) ||
+      /\.pdf(\?|$)/i.test(url)
+
+    const prompt =
+      'Eres un asistente que extrae datos de un COMPROBANTE DE CAJA (vale de ' +
+      'caja / comprobante de egreso de efectivo). Devuelve EXCLUSIVAMENTE un ' +
+      'JSON con la forma {"entregadoA": "<texto>", "fecha": "<dd/mm/aaaa>", ' +
+      '"direccion": "<texto>", "concepto": "<texto>", "monto": <número>}. ' +
+      'entregadoA es la persona o entidad a quien se entrega el dinero ' +
+      '("entregado a", "recibí de", "señor(es)"); fecha es la fecha del ' +
+      'comprobante; direccion la dirección si aparece; concepto el detalle o ' +
+      'motivo del pago/egreso; monto el importe total como número (sin símbolo ' +
+      'de moneda ni separadores de miles, punto decimal). Si un dato no ' +
+      'aparece, usa cadena vacía (o 0 para monto).'
+
+    try {
+      let content: string
+      if (isPdf) {
+        const buffer = await this.fetchUrlAsBuffer(url)
+        const pdfModule = await import('pdf-parse')
+        const pdfParse: (data: Buffer) => Promise<{ text: string }> =
+          pdfModule.default ?? pdfModule
+        const parsed = await pdfParse(buffer)
+        const text = (parsed.text || '').substring(0, 15000)
+        const completion = await this.openai.chat.completions.create({
+          model: this.visionModel,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: prompt },
+                { type: 'text', text },
+              ],
+            },
+          ],
+          temperature: 0,
+          max_completion_tokens: 512,
+        })
+        content = completion.choices[0]?.message?.content || ''
+      } else {
+        const completion = await this.openai.chat.completions.create({
+          model: this.visionModel,
+          messages: this.buildVisionMessages(prompt, url),
+          temperature: 0,
+          max_completion_tokens: 512,
+        })
+        content = completion.choices[0]?.message?.content || ''
+      }
+      return this.parseCashVoucherScan(content)
+    } catch (error) {
+      this.logger.error('Error al escanear el comprobante de caja:', error)
+      throw new HttpException(
+        'No se pudo escanear el comprobante de caja.',
+        HttpStatus.INTERNAL_SERVER_ERROR
+      )
+    }
+  }
+
+  private parseCashVoucherScan(raw: string): CashVoucherScanResult {
+    const cleaned = (raw || '')
+      .replace(/^```json\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim()
+    let obj: any = {}
+    try {
+      obj = JSON.parse(cleaned)
+    } catch {
+      obj = {}
+    }
+    const monto =
+      typeof obj.monto === 'string'
+        ? Number(String(obj.monto).replace(/,/g, '')) || 0
+        : Number(obj.monto) || 0
+    const str = (v: unknown) => {
+      const s = v == null ? '' : String(v).trim()
+      return s.length ? s : undefined
+    }
+    return {
+      entregadoA: str(obj.entregadoA),
+      fecha: str(obj.fecha),
+      direccion: str(obj.direccion),
+      concepto: str(obj.concepto),
+      monto: monto > 0 ? monto : 0,
+    }
+  }
+
   async analyzeImageWithUrl(body: CreateExpenseDto): Promise<Expense> {
+    // Si la caja chica de la rendición ya fue finalizada por Contabilidad, no se
+    // permiten más gastos. Se valida antes del análisis para no gastar la llamada
+    // a OpenAI en un comprobante que será rechazado.
+    await this.expenseReportService.assertReportNotLockedByCajaChica(
+      body.expenseReportId
+    )
     const configSunat = await this.sunatConfigService.findOne(body.clientId)
     const prompt = PROMPT1
     try {
@@ -1032,6 +1223,10 @@ export class ExpenseService {
     if (!file || !file.buffer) {
       throw new HttpException('Archivo PDF no provisto', HttpStatus.BAD_REQUEST)
     }
+    // Caja chica finalizada: no se permiten más gastos.
+    await this.expenseReportService.assertReportNotLockedByCajaChica(
+      body.expenseReportId
+    )
 
     try {
       const pdfModule = await import('pdf-parse')
@@ -1123,6 +1318,10 @@ export class ExpenseService {
     if (!body.clientId) {
       throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
     }
+    // Caja chica finalizada: no se permiten más gastos.
+    await this.expenseReportService.assertReportNotLockedByCajaChica(
+      body.expenseReportId
+    )
     if (!body.mobilityRows || body.mobilityRows.length === 0) {
       throw new HttpException(
         'Se requiere al menos una fila en la planilla',
@@ -1204,6 +1403,10 @@ export class ExpenseService {
     if (!body.clientId) {
       throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
     }
+    // Caja chica finalizada: no se permiten más gastos.
+    await this.expenseReportService.assertReportNotLockedByCajaChica(
+      body.expenseReportId
+    )
     if (!body.total || body.total <= 0) {
       throw new HttpException(
         'Se requiere un monto válido',
@@ -1223,7 +1426,9 @@ export class ExpenseService {
         )
       }
       if (body.userId) {
-        const profile = await this.userService.findTransactionalProfile(body.userId)
+        const profile = await this.userService.findTransactionalProfile(
+          body.userId
+        )
         if (!profile?.signature) {
           throw new HttpException(
             'Debes registrar tu firma digital antes de enviar una Declaración Jurada. Ve a tu perfil para añadirla.',
@@ -1234,7 +1439,9 @@ export class ExpenseService {
     }
 
     const normalizedFecha = this.normalizeFechaEmisionValue(body.fechaEmision)
-    const deadlineMeta = this.evaluateDeadline(normalizedFecha ?? body.fechaEmision)
+    const deadlineMeta = this.evaluateDeadline(
+      normalizedFecha ?? body.fechaEmision
+    )
     const categoryMeta = await this.evaluateCategoryLimit(body, body.total)
     const expense = await this.expenseRepository.create({
       categoryId: new Types.ObjectId(body.categoryId),
@@ -1248,7 +1455,9 @@ export class ExpenseService {
       expenseType: 'otros_gastos',
       subTipo,
       declaracionJurada: isDJ ? true : false,
-      declaracionJuradaFirmante: isDJ ? body.declaracionJuradaFirmante : undefined,
+      declaracionJuradaFirmante: isDJ
+        ? body.declaracionJuradaFirmante
+        : undefined,
       file: body.imageUrl || undefined,
       status: 'pending',
       createdBy: body.userId || 'system',
@@ -1284,6 +1493,10 @@ export class ExpenseService {
     if (!body.clientId) {
       throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
     }
+    // Caja chica finalizada: no se permiten más gastos.
+    await this.expenseReportService.assertReportNotLockedByCajaChica(
+      body.expenseReportId
+    )
     if (!body.imageUrl) {
       throw new HttpException(
         'Debe adjuntar la foto/archivo del recibo de caja',
@@ -1322,7 +1535,9 @@ export class ExpenseService {
     }
 
     const normalizedFecha = this.normalizeFechaEmisionValue(body.fechaEmision)
-    const deadlineMeta = this.evaluateDeadline(normalizedFecha ?? body.fechaEmision)
+    const deadlineMeta = this.evaluateDeadline(
+      normalizedFecha ?? body.fechaEmision
+    )
     const categoryMeta = await this.evaluateCategoryLimit(body, body.total)
     const expense = await this.expenseRepository.create({
       categoryId: new Types.ObjectId(body.categoryId),
@@ -1363,6 +1578,10 @@ export class ExpenseService {
     if (!body.clientId) {
       throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
     }
+    // Caja chica finalizada: no se permiten más gastos.
+    await this.expenseReportService.assertReportNotLockedByCajaChica(
+      body.expenseReportId
+    )
     if (!body.total || body.total <= 0) {
       throw new HttpException(
         'Se requiere un monto válido',
@@ -1378,7 +1597,9 @@ export class ExpenseService {
     }
 
     const normalizedFecha = this.normalizeFechaEmisionValue(body.fechaEmision)
-    const deadlineMeta = this.evaluateDeadline(normalizedFecha ?? body.fechaEmision)
+    const deadlineMeta = this.evaluateDeadline(
+      normalizedFecha ?? body.fechaEmision
+    )
     const categoryMeta = await this.evaluateCategoryLimit(body, body.total)
     const internalCode = await this.generateInternalCode(
       body.userId,
@@ -1396,6 +1617,7 @@ export class ExpenseService {
       total: body.total,
       description,
       expenseType: 'comprobante_caja',
+      file: body.imageUrl,
       status: 'pending',
       createdBy: body.userId || 'system',
       fechaEmision: normalizedFecha ?? body.fechaEmision,
@@ -1433,10 +1655,46 @@ export class ExpenseService {
       : value
   }
 
+  /**
+   * Rellena el desglose contable (base/IGV/tasa/inafecto) desde el JSON `data`
+   * del OCR cuando el DTO no lo trae explícito. No sobreescribe valores ya provistos.
+   */
+  private syncDesgloseFromData(
+    dto: Partial<CreateExpenseDto | UpdateExpenseDto>
+  ): void {
+    if (dto.data == null || typeof dto.data !== 'string') return
+    try {
+      const parsed = JSON.parse(dto.data) as Record<string, unknown>
+      const num = (v: unknown): number | undefined =>
+        typeof v === 'number' && !Number.isNaN(v) ? v : undefined
+      if (dto.baseAfecta === undefined) dto.baseAfecta = num(parsed.baseAfecta)
+      if (dto.igv === undefined) dto.igv = num(parsed.igv)
+      if (dto.tasaIgv === undefined) dto.tasaIgv = num(parsed.tasaIgv)
+      if (dto.inafecto === undefined) dto.inafecto = num(parsed.inafecto)
+      if (
+        dto.comprobanteDetallado === undefined &&
+        parsed.comprobanteDetallado &&
+        typeof parsed.comprobanteDetallado === 'object'
+      ) {
+        dto.comprobanteDetallado = parsed.comprobanteDetallado as Record<
+          string,
+          unknown
+        >
+      }
+    } catch {
+      /* mantener dto original */
+    }
+  }
+
   async create(createExpenseDto: CreateExpenseDto): Promise<Expense> {
+    // Caja chica finalizada: no se permiten más gastos.
+    await this.expenseReportService.assertReportNotLockedByCajaChica(
+      createExpenseDto.expenseReportId
+    )
     const dto = { ...createExpenseDto }
     this.sanitizeFechaEmisionOnWrite(dto)
     this.syncComentarioPlacaFromData(dto)
+    this.syncDesgloseFromData(dto)
 
     if (!dto.fechaEmision && dto.data) {
       try {
@@ -1471,10 +1729,23 @@ export class ExpenseService {
     return expense
   }
 
-  async findAll(clientId: string, filters: any = {}): Promise<{ data: Expense[]; total: number; page: number; pages: number; limit: number }> {
+  async findAll(
+    clientId: string,
+    filters: any = {}
+  ): Promise<{
+    data: Expense[]
+    total: number
+    page: number
+    pages: number
+    limit: number
+  }> {
     const query: any = { clientId }
-    const page = filters.page ? Math.max(1, parseInt(String(filters.page), 10)) : 1
-    const limit = filters.limit ? Math.min(200, parseInt(String(filters.limit), 10)) : 20
+    const page = filters.page
+      ? Math.max(1, parseInt(String(filters.page), 10))
+      : 1
+    const limit = filters.limit
+      ? Math.min(200, parseInt(String(filters.limit), 10))
+      : 20
     const skip = (page - 1) * limit
 
     const isValidObjectId = (id: string): boolean => {
@@ -1616,7 +1887,16 @@ export class ExpenseService {
                   vars: { parts: { $split: ['$fechaEmision', '-'] } },
                   in: {
                     $cond: {
-                      if: { $eq: [{ $strLenCP: { $ifNull: [{ $arrayElemAt: ['$$parts', 0] }, ''] } }, 4] },
+                      if: {
+                        $eq: [
+                          {
+                            $strLenCP: {
+                              $ifNull: [{ $arrayElemAt: ['$$parts', 0] }, ''],
+                            },
+                          },
+                          4,
+                        ],
+                      },
                       then: '$fechaEmision',
                       else: {
                         $concat: [
@@ -1679,17 +1959,21 @@ export class ExpenseService {
         ...pipeline,
         {
           $facet: {
-            data: [{ $skip: skip }, { $limit: limit }, { $project: { fechaEmisionDate: 0 } }],
+            data: [
+              { $skip: skip },
+              { $limit: limit },
+              { $project: { fechaEmisionDate: 0 } },
+            ],
             count: [{ $count: 'total' }],
           },
         },
       ])
       const rawData = facetResult?.data ?? []
       const total = facetResult?.count?.[0]?.total ?? 0
-      const populatedResult = await this.expenseRepository.populate(rawData, [
+      const populatedResult = (await this.expenseRepository.populate(rawData, [
         { path: 'proyectId' },
         { path: 'categoryId' },
-      ]) as unknown as Expense[]
+      ])) as unknown as Expense[]
       return {
         data: applyFechaEmisionDisplayToExpenses(populatedResult),
         total,
@@ -1705,7 +1989,14 @@ export class ExpenseService {
     sortOptions[sortBy] = sortOrder === 'desc' ? -1 : 1
 
     const [result, total] = await Promise.all([
-      this.expenseRepository.find(query).populate('proyectId').populate('categoryId').sort(sortOptions).skip(skip).limit(limit).exec(),
+      this.expenseRepository
+        .find(query)
+        .populate('proyectId')
+        .populate('categoryId')
+        .sort(sortOptions)
+        .skip(skip)
+        .limit(limit)
+        .exec(),
       this.expenseRepository.countDocuments(query),
     ])
 
@@ -1730,12 +2021,23 @@ export class ExpenseService {
     }
   }
 
-  async getStatusCounts(clientId: string): Promise<{ pending: number; approved: number; rejected: number; total: number }> {
+  async getStatusCounts(clientId: string): Promise<{
+    pending: number
+    approved: number
+    rejected: number
+    total: number
+  }> {
     const match = { clientId: new Types.ObjectId(clientId) }
     const [total, approved, rejected] = await Promise.all([
       this.expenseRepository.countDocuments(match),
-      this.expenseRepository.countDocuments({ ...match, status: { $in: ['approved', 'APPROVED'] } }),
-      this.expenseRepository.countDocuments({ ...match, status: { $in: ['rejected', 'REJECTED'] } }),
+      this.expenseRepository.countDocuments({
+        ...match,
+        status: { $in: ['approved', 'APPROVED'] },
+      }),
+      this.expenseRepository.countDocuments({
+        ...match,
+        status: { $in: ['rejected', 'REJECTED'] },
+      }),
     ])
     return { total, approved, rejected, pending: total - approved - rejected }
   }
@@ -1883,6 +2185,18 @@ export class ExpenseService {
       .populate('categoryId')
       .exec()
 
+    const reportId = this.expenseReportIdString(existing)
+    if (reportId) {
+      try {
+        await this.expenseReportService.resubmitSilent(reportId)
+      } catch (err) {
+        this.logger.warn(
+          `[update] Error al reactivar rendición ${reportId}:`,
+          err
+        )
+      }
+    }
+
     return updated ? applyFechaEmisionDisplayToExpense(updated) : null
   }
 
@@ -2027,12 +2341,16 @@ export class ExpenseService {
           for (const colaborador of colaboradores) {
             if (colaborador.email && colaborador._id.toString() !== creadorId) {
               try {
-                const emailEnabled = await this.userService.isEmailEnabled(colaborador._id.toString())
+                const emailEnabled = await this.userService.isEmailEnabled(
+                  colaborador._id.toString()
+                )
                 if (!emailEnabled) continue
                 await this.emailService.sendInvoiceApprovedToColaborador(
                   colaborador.email,
                   {
-                    clientId: expense.clientId?.toString?.() ?? String(expense.clientId),
+                    clientId:
+                      expense.clientId?.toString?.() ??
+                      String(expense.clientId),
                     providerName: colaborador.name,
                     invoiceNumber: `${invoiceData.serie || ''}-${
                       invoiceData.correlativo || ''
@@ -2340,10 +2658,15 @@ export class ExpenseService {
         if (razonSocial) {
           let parsed: any = {}
           try {
-            parsed = typeof expense.data === 'string' ? JSON.parse(expense.data) : (expense.data ?? {})
+            parsed =
+              typeof expense.data === 'string'
+                ? JSON.parse(expense.data)
+                : (expense.data ?? {})
           } catch {}
           updatedData = JSON.stringify({ ...parsed, razonSocial })
-          this.logger.log(`[validateWithSunatData] razonSocial actualizada para RUC ${data.rucEmisor}: ${razonSocial}`)
+          this.logger.log(
+            `[validateWithSunatData] razonSocial actualizada para RUC ${data.rucEmisor}: ${razonSocial}`
+          )
         }
       }
 
@@ -2353,7 +2676,10 @@ export class ExpenseService {
         await this.validateWithSunatIfPossible(data, clientId, configSunat?.ruc)
 
       // Paso 3: guardar razón social + resultado de validación en un solo update
-      const updateDoc: any = { sunatValidation: validation, status: expenseStatus }
+      const updateDoc: any = {
+        sunatValidation: validation,
+        status: expenseStatus,
+      }
       if (updatedData !== undefined) updateDoc.data = updatedData
 
       const updatedExpense = await this.expenseRepository
@@ -2385,8 +2711,10 @@ export class ExpenseService {
     coordStatus: string | undefined,
     contStatus: string | undefined
   ): 'pending' | 'approved' | 'rejected' {
-    if (coordStatus === 'rejected' || contStatus === 'rejected') return 'rejected'
-    if (coordStatus === 'approved' && contStatus === 'approved') return 'approved'
+    if (coordStatus === 'rejected' || contStatus === 'rejected')
+      return 'rejected'
+    if (coordStatus === 'approved' && contStatus === 'approved')
+      return 'approved'
     return 'pending'
   }
 
@@ -2404,7 +2732,12 @@ export class ExpenseService {
         id,
         {
           $set: {
-            approvalCoord: { status: 'approved', userId: actor.userId, userName: actor.roleName, date: new Date() },
+            approvalCoord: {
+              status: 'approved',
+              userId: actor.userId,
+              userName: actor.roleName,
+              date: new Date(),
+            },
             status: newCombined,
           },
         },
@@ -2429,7 +2762,8 @@ export class ExpenseService {
     actor: ExpenseActorContext,
     reason: string
   ): Promise<Expense> {
-    if (!reason?.trim()) throw new BadRequestException('El motivo de rechazo es obligatorio.')
+    if (!reason?.trim())
+      throw new BadRequestException('El motivo de rechazo es obligatorio.')
     const expense = await this.loadExpenseOrThrow(id)
     this.assertCompanyAccess(expense, actor)
     const updated = await this.expenseRepository
@@ -2437,7 +2771,13 @@ export class ExpenseService {
         id,
         {
           $set: {
-            approvalCoord: { status: 'rejected', userId: actor.userId, userName: actor.roleName, date: new Date(), reason },
+            approvalCoord: {
+              status: 'rejected',
+              userId: actor.userId,
+              userName: actor.roleName,
+              date: new Date(),
+              reason,
+            },
             status: 'rejected',
             rejectionReason: reason,
           },
@@ -2472,7 +2812,12 @@ export class ExpenseService {
         id,
         {
           $set: {
-            approvalCont: { status: 'approved', userId: actor.userId, userName: actor.roleName, date: new Date() },
+            approvalCont: {
+              status: 'approved',
+              userId: actor.userId,
+              userName: actor.roleName,
+              date: new Date(),
+            },
             status: newCombined,
           },
         },
@@ -2497,7 +2842,8 @@ export class ExpenseService {
     actor: ExpenseActorContext,
     reason: string
   ): Promise<Expense> {
-    if (!reason?.trim()) throw new BadRequestException('El motivo de rechazo es obligatorio.')
+    if (!reason?.trim())
+      throw new BadRequestException('El motivo de rechazo es obligatorio.')
     const expense = await this.loadExpenseOrThrow(id)
     this.assertCompanyAccess(expense, actor)
     const updated = await this.expenseRepository
@@ -2505,7 +2851,13 @@ export class ExpenseService {
         id,
         {
           $set: {
-            approvalCont: { status: 'rejected', userId: actor.userId, userName: actor.roleName, date: new Date(), reason },
+            approvalCont: {
+              status: 'rejected',
+              userId: actor.userId,
+              userName: actor.roleName,
+              date: new Date(),
+              reason,
+            },
             status: 'rejected',
             rejectionReason: reason,
           },
@@ -2535,14 +2887,21 @@ export class ExpenseService {
       .select('expenseIds clientId userId')
       .lean()
       .exec()
-    if (!report) throw new NotFoundException(`Rendición ${reportId} no encontrada`)
+    if (!report)
+      throw new NotFoundException(`Rendición ${reportId} no encontrada`)
 
     const clientId = this.normalizeClientId(report.clientId)
-    if (actor.roleName !== ROLES.SUPER_ADMIN && actor.clientId && clientId !== actor.clientId) {
+    if (
+      actor.roleName !== ROLES.SUPER_ADMIN &&
+      actor.clientId &&
+      clientId !== actor.clientId
+    ) {
       throw new ForbiddenException('No autorizado')
     }
 
-    const ids = (report.expenseIds ?? []).map((id: any) => new Types.ObjectId(String(id)))
+    const ids = (report.expenseIds ?? []).map(
+      (id: any) => new Types.ObjectId(String(id))
+    )
     if (ids.length === 0) return { approved: 0 }
 
     const expenses = await this.expenseRepository
@@ -2556,9 +2915,11 @@ export class ExpenseService {
       const e = expense as any
       const contStatus = e.approvalCont?.status ?? 'pending'
       if (contStatus === 'approved' && e.status !== 'approved') {
-        await this.expenseRepository.findByIdAndUpdate(String(e._id), {
-          $set: { status: 'approved' },
-        }).exec()
+        await this.expenseRepository
+          .findByIdAndUpdate(String(e._id), {
+            $set: { status: 'approved' },
+          })
+          .exec()
         count++
       }
     }
@@ -2575,14 +2936,21 @@ export class ExpenseService {
       .select('expenseIds clientId')
       .lean()
       .exec()
-    if (!report) throw new NotFoundException(`Rendición ${reportId} no encontrada`)
+    if (!report)
+      throw new NotFoundException(`Rendición ${reportId} no encontrada`)
 
     const clientId = this.normalizeClientId(report.clientId)
-    if (actor.roleName !== ROLES.SUPER_ADMIN && actor.clientId && clientId !== actor.clientId) {
+    if (
+      actor.roleName !== ROLES.SUPER_ADMIN &&
+      actor.clientId &&
+      clientId !== actor.clientId
+    ) {
       throw new ForbiddenException('No autorizado')
     }
 
-    const ids = (report.expenseIds ?? []).map((id: any) => new Types.ObjectId(String(id)))
+    const ids = (report.expenseIds ?? []).map(
+      (id: any) => new Types.ObjectId(String(id))
+    )
     if (ids.length === 0) return { approved: 0 }
 
     const expenses = await this.expenseRepository
@@ -2598,12 +2966,19 @@ export class ExpenseService {
       const coordStatus = e.approvalCoord?.status ?? 'pending'
       if (contStatus === 'approved' && coordStatus !== 'approved') {
         const newCombined = this.computeCombinedStatus('approved', 'approved')
-        await this.expenseRepository.findByIdAndUpdate(String(e._id), {
-          $set: {
-            approvalCoord: { status: 'approved', userId: actor.userId, userName: actor.roleName, date: new Date() },
-            status: newCombined,
-          },
-        }).exec()
+        await this.expenseRepository
+          .findByIdAndUpdate(String(e._id), {
+            $set: {
+              approvalCoord: {
+                status: 'approved',
+                userId: actor.userId,
+                userName: actor.roleName,
+                date: new Date(),
+              },
+              status: newCombined,
+            },
+          })
+          .exec()
         count++
       }
     }
@@ -2616,7 +2991,13 @@ export class ExpenseService {
   async findMyDirectExpenses(
     userId: string,
     clientId: string,
-    filters: { tipo?: string; dateFrom?: string; dateTo?: string; page?: number; limit?: number } = {}
+    filters: {
+      tipo?: string
+      dateFrom?: string
+      dateTo?: string
+      page?: number
+      limit?: number
+    } = {}
   ) {
     const page = Math.max(1, filters.page ?? 1)
     const limit = Math.min(100, filters.limit ?? 50)
@@ -2628,7 +3009,10 @@ export class ExpenseService {
       userId: new Types.ObjectId(userId),
       clientId: new Types.ObjectId(clientId),
       isDirecta: true,
-    }).select('_id status').lean().exec()
+    })
+      .select('_id status')
+      .lean()
+      .exec()
     const directReportIds = directReportDocs.map((r: any) => r._id)
     const directReportStatusMap = new Map<string, string>(
       directReportDocs.map((r: any) => [String(r._id), r.status])
@@ -2641,7 +3025,9 @@ export class ExpenseService {
       $or: [
         { expenseReportId: { $exists: false } },
         { expenseReportId: null },
-        ...(directReportIds.length > 0 ? [{ expenseReportId: { $in: directReportIds } }] : []),
+        ...(directReportIds.length > 0
+          ? [{ expenseReportId: { $in: directReportIds } }]
+          : []),
       ],
     }
 
@@ -2656,39 +3042,75 @@ export class ExpenseService {
         $addFields: {
           _parsedDate: {
             $cond: {
-              if: { $regexMatch: { input: { $ifNull: ['$fechaEmision', ''] }, regex: /^\d{2}\/\d{2}\/\d{4}$/ } },
+              if: {
+                $regexMatch: {
+                  input: { $ifNull: ['$fechaEmision', ''] },
+                  regex: /^\d{2}\/\d{2}\/\d{4}$/,
+                },
+              },
               then: {
                 $dateFromString: {
                   dateString: {
                     $concat: [
-                      { $substr: ['$fechaEmision', 6, 4] }, '-',
-                      { $substr: ['$fechaEmision', 3, 2] }, '-',
+                      { $substr: ['$fechaEmision', 6, 4] },
+                      '-',
+                      { $substr: ['$fechaEmision', 3, 2] },
+                      '-',
                       { $substr: ['$fechaEmision', 0, 2] },
                     ],
                   },
                 },
               },
-              else: { $dateFromString: { dateString: { $ifNull: ['$fechaEmision', '1970-01-01'] }, onError: new Date('1970-01-01') } },
+              else: {
+                $dateFromString: {
+                  dateString: { $ifNull: ['$fechaEmision', '1970-01-01'] },
+                  onError: new Date('1970-01-01'),
+                },
+              },
             },
           },
         },
       })
       const dateMatch: any = {}
       if (filters.dateFrom) dateMatch.$gte = new Date(filters.dateFrom)
-      if (filters.dateTo) { const to = new Date(filters.dateTo); to.setHours(23, 59, 59, 999); dateMatch.$lte = to }
+      if (filters.dateTo) {
+        const to = new Date(filters.dateTo)
+        to.setHours(23, 59, 59, 999)
+        dateMatch.$lte = to
+      }
       pipeline.push({ $match: { _parsedDate: dateMatch } })
     }
 
     pipeline.push(
-      { $lookup: { from: 'categories', localField: 'categoryId', foreignField: '_id', as: '_cat' } },
-      { $lookup: { from: 'projects', localField: 'proyectId', foreignField: '_id', as: '_proj' } },
+      {
+        $lookup: {
+          from: 'categories',
+          localField: 'categoryId',
+          foreignField: '_id',
+          as: '_cat',
+        },
+      },
+      {
+        $lookup: {
+          from: 'projects',
+          localField: 'proyectId',
+          foreignField: '_id',
+          as: '_proj',
+        },
+      }
     )
 
     const countPipeline = [...pipeline, { $count: 'total' }]
-    const countResult = await this.expenseRepository.aggregate(countPipeline).exec()
+    const countResult = await this.expenseRepository
+      .aggregate(countPipeline)
+      .exec()
     const total = countResult[0]?.total ?? 0
 
-    pipeline.push({ $sort: { createdAt: -1 } }, { $skip: skip }, { $limit: limit })
+    pipeline.push(
+      { $sort: { createdAt: -1 } },
+      { $skip: skip },
+      { $limit: limit }
+    )
 
     const expenses = await this.expenseRepository.aggregate(pipeline).exec()
 
@@ -2696,7 +3118,9 @@ export class ExpenseService {
       ...e,
       _categoryDoc: e._cat?.[0] ?? null,
       _projectDoc: e._proj?.[0] ?? null,
-      _reportStatus: e.expenseReportId ? (directReportStatusMap.get(String(e.expenseReportId)) ?? null) : null,
+      _reportStatus: e.expenseReportId
+        ? (directReportStatusMap.get(String(e.expenseReportId)) ?? null)
+        : null,
     }))
 
     return { data, total, page, limit, pages: Math.ceil(total / limit) }
@@ -2711,18 +3135,29 @@ export class ExpenseService {
     motivo?: string
   ) {
     // Buscar expenses loose (sin rendición) del usuario
-    const looseExpenses = await this.expenseRepository.find({
-      clientId: new Types.ObjectId(clientId),
-      createdBy: userId,
-      $or: [{ expenseReportId: { $exists: false } }, { expenseReportId: null }],
-    }).select('_id total').lean().exec()
+    const looseExpenses = await this.expenseRepository
+      .find({
+        clientId: new Types.ObjectId(clientId),
+        createdBy: userId,
+        $or: [
+          { expenseReportId: { $exists: false } },
+          { expenseReportId: null },
+        ],
+      })
+      .select('_id total')
+      .lean()
+      .exec()
 
     if (looseExpenses.length === 0) {
       throw new BadRequestException('No tienes gastos pendientes de enviar.')
     }
 
     const today = new Date()
-    const label = today.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric' })
+    const label = today.toLocaleDateString('es-PE', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    })
     const report = await this.expenseReportService.create(
       {
         motivo: motivo?.trim() || `Gastos del ${label}`,
@@ -2737,20 +3172,29 @@ export class ExpenseService {
     const reportId = (report as any)._id.toString()
 
     // Vincular expenses a la rendición
-    await this.expenseRepository.updateMany(
-      { _id: { $in: looseExpenses.map((e: any) => e._id) } },
-      { $set: { expenseReportId: new Types.ObjectId(reportId) } }
-    ).exec()
+    await this.expenseRepository
+      .updateMany(
+        { _id: { $in: looseExpenses.map((e: any) => e._id) } },
+        { $set: { expenseReportId: new Types.ObjectId(reportId) } }
+      )
+      .exec()
 
     // Registrar en la rendición
-    await this.expenseReportService['expenseReportModel'].findByIdAndUpdate(
-      reportId,
-      { $set: { expenseIds: looseExpenses.map((e: any) => e._id) } }
-    ).exec()
+    await this.expenseReportService['expenseReportModel']
+      .findByIdAndUpdate(reportId, {
+        $set: { expenseIds: looseExpenses.map((e: any) => e._id) },
+      })
+      .exec()
 
     // Enviar a pending_accounting (isDirecta auto-transiciona desde submitted)
-    const updatedReport = await this.expenseReportService.update(reportId, { status: 'submitted' } as any)
+    const updatedReport = await this.expenseReportService.update(reportId, {
+      status: 'submitted',
+    } as any)
 
-    return { reportId, expensesSubmitted: looseExpenses.length, report: updatedReport }
+    return {
+      reportId,
+      expensesSubmitted: looseExpenses.length,
+      report: updatedReport,
+    }
   }
 }

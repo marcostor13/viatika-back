@@ -28,6 +28,11 @@ export interface ReturnProof {
   fileKey?: string
   uploadedAt: Date
   note?: string
+  /** Datos extraídos del comprobante por OCR/visión (informativos). */
+  scannedAmount?: number
+  operationDate?: string
+  operationTime?: string
+  titular?: string
 }
 
 export interface ReturnValidation {
@@ -63,7 +68,7 @@ export interface PaymentInfo {
   cci?: string
   transferDate: Date
   reference?: string
-  paymentReceiptUrl: string
+  paymentReceiptUrl?: string
   paymentReceiptFileName?: string
   paymentReceiptMimeType?: string
   paymentReceiptSizeBytes?: number
@@ -82,7 +87,7 @@ export interface AdvancePayment {
   cci?: string
   transferDate: Date
   reference?: string
-  paymentReceiptUrl: string
+  paymentReceiptUrl?: string
   paymentReceiptFileName?: string
   paymentReceiptMimeType?: string
   paymentReceiptSizeBytes?: number
@@ -159,6 +164,8 @@ export interface AdvanceDocument extends Document {
   pendingBalanceAmount?: number
   /** Monto adicional solicitado por encima del saldo pendiente. */
   additionalAmount?: number
+  /** Saldos de la bolsa consumidos para financiar esta solicitud de viáticos. */
+  saldoIds?: Types.ObjectId[]
 }
 
 // Umbrales de aprobación multinivel
@@ -293,7 +300,9 @@ export class Advance {
       cci: { type: String },
       transferDate: { type: Date },
       reference: { type: String },
-      paymentReceiptUrl: { type: String, required: true },
+      // Opcional: en pagos en efectivo no hay comprobante. La obligatoriedad
+      // para transferencia/cheque se valida en advance.service.registerPayment.
+      paymentReceiptUrl: { type: String },
       paymentReceiptFileName: { type: String },
       paymentReceiptMimeType: { type: String },
       paymentReceiptSizeBytes: { type: Number },
@@ -315,7 +324,9 @@ export class Advance {
         cci: { type: String },
         transferDate: { type: Date },
         reference: { type: String },
-        paymentReceiptUrl: { type: String, required: true },
+        // Opcional: efectivo no lleva comprobante; transferencia/cheque se
+        // valida en advance.service.registerPayment.
+        paymentReceiptUrl: { type: String },
         paymentReceiptFileName: { type: String },
         paymentReceiptMimeType: { type: String },
         paymentReceiptSizeBytes: { type: Number },
@@ -375,6 +386,9 @@ export class Advance {
 
   @Prop({ type: Number, required: false })
   additionalAmount?: number
+
+  @Prop({ type: [{ type: Types.ObjectId, ref: 'Saldo' }], default: undefined })
+  saldoIds?: Types.ObjectId[]
 }
 
 export const AdvanceSchema = SchemaFactory.createForClass(Advance)

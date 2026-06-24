@@ -2516,8 +2516,12 @@ export class ExpenseReportService implements OnModuleInit {
     userPermissions?: { canApproveL2?: boolean },
     tenantCtx?: { requestClientId: string; isSuperAdmin: boolean }
   ) {
+    // El reembolso lo registra Tesorería (Contabilidad/SuperAdmin o delegado
+    // con L2). El Coordinador queda excluido aunque tenga canApproveL2 o el
+    // RolesGuard lo aliase a Administrador: por rol no participa en el pago.
     const canPay =
-      userRole === ROLES.SUPER_ADMIN || userPermissions?.canApproveL2 === true
+      userRole !== ROLES.COORDINADOR &&
+      (userRole === ROLES.SUPER_ADMIN || userPermissions?.canApproveL2 === true)
     if (!canPay) {
       throw new ForbiddenException(
         'No tienes permiso para registrar pagos de reembolso.'

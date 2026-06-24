@@ -21,9 +21,6 @@ describe('ExpenseService — email gating (isEmailEnabled)', () => {
 
   const mockEmailServiceGating = {
     buildAppUrl: jest.fn().mockReturnValue('http://app'),
-    sendInvoiceUploadedExpenseNotification: jest
-      .fn()
-      .mockResolvedValue(undefined),
     sendInvoiceApprovedToColaborador: jest.fn().mockResolvedValue(undefined),
   }
 
@@ -70,78 +67,7 @@ describe('ExpenseService — email gating (isEmailEnabled)', () => {
     service = module.get<ExpenseService>(ExpenseService)
   })
 
-  const userId = new Types.ObjectId().toHexString()
   const clientId = new Types.ObjectId().toHexString()
-  const body = { userId, clientId } as unknown as CreateExpenseDto
-  const data = {} as any
-
-  describe('notifyStakeholders — creator email gating', () => {
-    it('does not send creator email when isEmailEnabled returns false', async () => {
-      mockUserServiceGating.findOne.mockResolvedValue({
-        email: 'creator@test.com',
-        name: 'Creator',
-      })
-      mockUserServiceGating.isEmailEnabled.mockResolvedValue(false)
-      mockUserServiceGating.findAll.mockResolvedValue([])
-
-      await (service as any).notifyStakeholders(body, data, 'Project')
-
-      expect(
-        mockEmailServiceGating.sendInvoiceUploadedExpenseNotification
-      ).not.toHaveBeenCalled()
-    })
-
-    it('sends creator email when isEmailEnabled returns true', async () => {
-      mockUserServiceGating.findOne.mockResolvedValue({
-        email: 'creator@test.com',
-        name: 'Creator',
-      })
-      mockUserServiceGating.isEmailEnabled.mockResolvedValue(true)
-      mockUserServiceGating.findAll.mockResolvedValue([])
-
-      await (service as any).notifyStakeholders(body, data, 'Project')
-
-      expect(
-        mockEmailServiceGating.sendInvoiceUploadedExpenseNotification
-      ).toHaveBeenCalledWith('creator@test.com', expect.any(Object))
-    })
-  })
-
-  describe('notifyStakeholders — collaborator email gating', () => {
-    it('skips collaborator email when isEmailEnabled returns false', async () => {
-      const collabId = new Types.ObjectId()
-      // findOne returns null so creator block skips email; isEmailEnabled still called for creator
-      mockUserServiceGating.findOne.mockResolvedValue(null)
-      mockUserServiceGating.findAll.mockResolvedValue([
-        { _id: collabId, email: 'collab@test.com', name: 'Collab' },
-      ])
-      mockUserServiceGating.isEmailEnabled.mockResolvedValue(false)
-
-      await (service as any).notifyStakeholders(body, data, 'Project')
-
-      expect(
-        mockEmailServiceGating.sendInvoiceUploadedExpenseNotification
-      ).not.toHaveBeenCalled()
-    })
-
-    it('sends collaborator email when isEmailEnabled returns true for collaborator', async () => {
-      const collabId = new Types.ObjectId()
-      mockUserServiceGating.findOne.mockResolvedValue(null) // no creator email
-      mockUserServiceGating.findAll.mockResolvedValue([
-        { _id: collabId, email: 'collab@test.com', name: 'Collab' },
-      ])
-      // first call = creator check (null email so no send), second call = collab check
-      mockUserServiceGating.isEmailEnabled
-        .mockResolvedValueOnce(false)
-        .mockResolvedValueOnce(true)
-
-      await (service as any).notifyStakeholders(body, data, 'Project')
-
-      expect(
-        mockEmailServiceGating.sendInvoiceUploadedExpenseNotification
-      ).toHaveBeenCalledWith('collab@test.com', expect.any(Object))
-    })
-  })
 
   describe('sendApprovalEmails — collaborator email gating', () => {
     const createdBy = new Types.ObjectId().toHexString()

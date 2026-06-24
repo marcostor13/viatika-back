@@ -8,6 +8,8 @@ export interface ClientLimits {
 export interface ClientNotificationSettings {
   enabled: boolean
   frequency: 'semanal' | 'mensual'
+  /** Día de la semana para notificaciones semanales: 0=Domingo … 6=Sábado (default 1=Lunes) */
+  notificationDay?: number
 }
 
 export interface ClientDocument extends Document {
@@ -69,6 +71,7 @@ export class Client {
         enum: ['semanal', 'mensual'],
         default: 'semanal',
       },
+      notificationDay: { type: Number, min: 0, max: 6, default: 1 },
       _id: false,
     },
     required: false,

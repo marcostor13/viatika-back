@@ -1873,4 +1873,62 @@ export class EmailService {
       this.logger.error(`Error resumen viáticos coordinador a ${email}:`, error)
     }
   }
+
+  async sendRendicionRecordatorioCoordinador(
+    email: string,
+    data: {
+      clientId?: string
+      coordinatorName: string
+      pendingCount: number
+      reports: { collaboratorName: string; title: string; endDateFormatted?: string }[]
+      platformUrl?: string
+    }
+  ) {
+    try {
+      await this.send({
+        to: email,
+        subject: `Recordatorio: tienes ${data.pendingCount} rendicion(es) pendiente(s) de revision`,
+        template: './rendicion-recordatorio-coordinador',
+        context: {
+          logoUrl: await this.resolveLogoUrl(this.extractClientId(data)),
+          year: new Date().getFullYear(),
+          coordinatorName: data.coordinatorName,
+          pendingCount: data.pendingCount,
+          reports: data.reports,
+          platformUrl: this.resolvePlatformHref(data.platformUrl ?? '/invoice-approval'),
+        },
+      })
+    } catch (error) {
+      this.logger.error(`Error recordatorio rendición coordinador a ${email}:`, error)
+    }
+  }
+
+  async sendRendicionRecordatorioContabilidad(
+    email: string,
+    data: {
+      clientId?: string
+      recipientName: string
+      pendingCount: number
+      reports: { collaboratorName: string; title: string; endDateFormatted?: string }[]
+      platformUrl?: string
+    }
+  ) {
+    try {
+      await this.send({
+        to: email,
+        subject: `Recordatorio: ${data.pendingCount} rendicion(es) pendiente(s) de aprobacion contable`,
+        template: './rendicion-recordatorio-contabilidad',
+        context: {
+          logoUrl: await this.resolveLogoUrl(this.extractClientId(data)),
+          year: new Date().getFullYear(),
+          recipientName: data.recipientName,
+          pendingCount: data.pendingCount,
+          reports: data.reports,
+          platformUrl: this.resolvePlatformHref(data.platformUrl ?? '/tesoreria'),
+        },
+      })
+    } catch (error) {
+      this.logger.error(`Error recordatorio rendición contabilidad a ${email}:`, error)
+    }
+  }
 }

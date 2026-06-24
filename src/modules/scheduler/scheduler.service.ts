@@ -490,7 +490,7 @@ export class SchedulerService {
     if (reportsToNotify.length === 0) return
 
     const recipients = await this.userService.findRendicionApprovalUsers(
-      client._id.toString()
+      (client._id as Types.ObjectId).toString()
     )
     if (recipients.length === 0) return
 

@@ -17,7 +17,6 @@ import { EmailService } from '../email/email.service'
 import { PROMPT1 } from './constants/prompt1'
 import OpenAI from 'openai'
 import { ApprovalDto } from './dto/approval.dto'
-import { ProjectService } from '../project/project.service'
 import { SunatConfigService } from '../sunat-config/sunat-config.service'
 import { HttpService } from '@nestjs/axios'
 import { firstValueFrom } from 'rxjs'
@@ -101,7 +100,6 @@ export class ExpenseService {
     @InjectModel(Client.name)
     private clientModel: Model<Client>,
     private readonly emailService: EmailService,
-    private readonly projectService: ProjectService,
     private readonly userService: UserService,
     private readonly sunatConfigService: SunatConfigService,
     private readonly httpService: HttpService,
@@ -590,172 +588,6 @@ export class ExpenseService {
     })
   }
 
-  private async getCreatorName(userId?: string | null): Promise<string> {
-    if (!userId) return 'Usuario del sistema'
-    try {
-      const creator = await this.userService.findOne(userId)
-      return creator?.name || 'Usuario del sistema'
-    } catch {
-      this.logger.warn('No se pudo obtener información del usuario creador')
-      return 'Usuario del sistema'
-    }
-  }
-
-  private buildNotificationPayload(
-    data: ExtractedInvoiceData,
-    body: CreateExpenseDto,
-    projectName: string,
-    creatorName: string,
-    categoryName: string
-  ) {
-    return {
-      clientId: body.clientId,
-      providerName: creatorName,
-      invoiceNumber: `${data.serie || ''}-${data.correlativo || ''}`,
-      date: data.fechaEmision || new Date().toISOString().split('T')[0],
-      type: data.tipoComprobante || 'Factura',
-      status: 'PENDIENTE',
-      montoTotal: data.montoTotal || 0,
-      moneda: data.moneda || 'PEN',
-      createdBy: creatorName,
-      category: categoryName || 'No especificada',
-      projectName: projectName || 'No especificado',
-      razonSocial: data.razonSocial || 'No especificada',
-      direccionEmisor: data.direccionEmisor,
-    }
-  }
-
-  private async notifyStakeholders(
-    body: CreateExpenseDto,
-    data: ExtractedInvoiceData,
-    projectName: string
-  ) {
-    // Resolver la rendición vinculada (si existe) una sola vez.
-    let report: any = null
-    if (body.expenseReportId) {
-      try {
-        report = await this.expenseReportService.findOne(body.expenseReportId)
-      } catch (err) {
-        this.logger.warn(
-          `No se pudo obtener la rendición ${body.expenseReportId}:`,
-          err
-        )
-      }
-    }
-
-    // Rendiciones directas: NO se notifica por cada factura. Los involucrados
-    // (Contabilidad incluida) reciben un único aviso cuando el colaborador
-    // ENVÍA la rendición (status submitted → sendRendicionSubmitted en
-    // ExpenseReportService). Evita el spam de un correo por comprobante.
-    if (report?.isDirecta === true) {
-      this.logger.debug(
-        `Rendición directa ${body.expenseReportId}: se omite la notificación por factura (se avisa al enviar la rendición).`
-      )
-      return
-    }
-
-    const creatorName = await this.getCreatorName(body.userId)
-    let categoryName = 'No especificada'
-
-    if (body.categoryId && body.clientId) {
-      try {
-        const category = await this.categoryService.findOne(
-          body.categoryId,
-          body.clientId
-        )
-        categoryName = category?.name || categoryName
-      } catch (error) {
-        this.logger.warn(
-          `No se pudo obtener el nombre de la categoría ${body.categoryId}:`,
-          error
-        )
-      }
-    }
-
-    const notificationPayload = this.buildNotificationPayload(
-      data,
-      body,
-      projectName,
-      creatorName,
-      categoryName
-    )
-
-    // Destinatarios: solo los involucrados — dueño de la rendición, su
-    // coordinador y Contabilidad. Sin broadcast a todos los usuarios del cliente.
-    const seen = new Set<string>()
-    const sendTo = async (email?: string | null, userId?: string | null) => {
-      const e = email?.trim()
-      if (!e) return
-      const key = e.toLowerCase()
-      if (seen.has(key)) return
-      seen.add(key)
-      try {
-        if (userId) {
-          const enabled = await this.userService.isEmailEnabled(userId)
-          if (!enabled) return
-        }
-        await this.emailService.sendInvoiceUploadedExpenseNotification(
-          e,
-          notificationPayload
-        )
-      } catch (err) {
-        this.logger.warn(`Error notificando subida de gasto a ${e}:`, err)
-      }
-    }
-
-    // Dueño de la rendición vinculada (reutiliza el report consultado arriba).
-    const ownerRef = report?.userId
-    const reportOwnerId: string | undefined = ownerRef?._id
-      ? String(ownerRef._id)
-      : ownerRef
-        ? String(ownerRef)
-        : undefined
-
-    // 1) Dueño de la rendición (o creador si no hay rendición).
-    const ownerCandidate = reportOwnerId || body.userId || undefined
-    if (ownerCandidate) {
-      try {
-        const owner = await this.userService.findOne(ownerCandidate)
-        await sendTo(owner?.email, ownerCandidate)
-      } catch (err) {
-        this.logger.warn(
-          'No se pudo notificar al dueño del gasto/rendición:',
-          err
-        )
-      }
-    }
-
-    // 2) Coordinador del dueño.
-    if (ownerCandidate) {
-      try {
-        const profile =
-          await this.userService.findTransactionalProfile(ownerCandidate)
-        const coordinatorId = profile?.coordinatorId?.toString?.()
-        if (coordinatorId) {
-          const coordinator =
-            await this.userService.findEmailNameClient(coordinatorId)
-          await sendTo(coordinator?.email, coordinatorId)
-        }
-      } catch (err) {
-        this.logger.warn('No se pudo notificar al coordinador:', err)
-      }
-    }
-
-    // 3) Contabilidad/Tesorería (solo por rol Contabilidad, ya filtrado en el helper).
-    if (body.clientId) {
-      try {
-        const contabilidad = await this.userService.findContabilidadRecipients(
-          body.clientId
-        )
-        for (const u of contabilidad) {
-          await sendTo(u.email)
-        }
-      } catch (err) {
-        this.logger.warn('No se pudo notificar a contabilidad:', err)
-      }
-    }
-  }
-
   async generateTokenSunat(clientId: string) {
     try {
       const credentials = await this.sunatConfigService.getCredentials(clientId)
@@ -1197,21 +1029,6 @@ export class ExpenseService {
         )
       }
 
-      const project = await this.projectService.findOne(
-        body.proyectId,
-        body.clientId
-      )
-
-      try {
-        await this.notifyStakeholders(
-          body,
-          extraction,
-          project?.name || 'No especificado'
-        )
-      } catch (error) {
-        this.logger.error('Error al enviar notificaciones de correo:', error)
-      }
-
       return expense
     } catch (error) {
       if (error instanceof HttpException) {
@@ -1296,21 +1113,6 @@ export class ExpenseService {
           body.expenseReportId,
           expense._id.toString()
         )
-      }
-
-      const project = await this.projectService.findOne(
-        body.proyectId,
-        body.clientId
-      )
-
-      try {
-        await this.notifyStakeholders(
-          body,
-          extraction,
-          project?.name || 'No especificado'
-        )
-      } catch (error) {
-        this.logger.error('Error al enviar notificaciones de correo:', error)
       }
 
       return expense

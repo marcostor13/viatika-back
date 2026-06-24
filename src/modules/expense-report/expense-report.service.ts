@@ -1665,7 +1665,12 @@ export class ExpenseReportService implements OnModuleInit {
         restricted = true
         restrictedMsg =
           'Esta rendición directa fue creada por Contabilidad; solo Contabilidad puede eliminarla.'
-      } else if (report.pendingBalanceFromReportId) {
+      } else if (report.pendingBalanceFromReportId && expenses.length > 0) {
+        // Saldo heredado CON gastos ya cargados: borrarla rompería la cadena del
+        // saldo, solo Contabilidad. Si aún NO se subió ningún gasto, el dueño
+        // puede eliminarla: el borrado restaura el saldo a la bolsa
+        // (restoreByConsumer) y libera la rendición de origen
+        // (unmarkPendingBalanceUsed), volviendo todo al estado anterior.
         restricted = true
         restrictedMsg =
           'Esta rendición directa se creó con saldo heredado de otra rendición; solo Contabilidad puede eliminarla.'

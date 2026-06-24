@@ -547,6 +547,7 @@ export class ExpenseReportService implements OnModuleInit {
       .populate('expenseIds', 'total approvalCoord approvalCont')
       .populate('createdBy', 'name email')
       .populate('viaticoLines.categoryId', 'name')
+      .populate('projectId', 'code name')
       .sort({ createdAt: -1 })
       .lean()
       .exec()

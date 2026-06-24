@@ -547,6 +547,7 @@ export class ExpenseReportService implements OnModuleInit {
       .populate('expenseIds', 'total approvalCoord approvalCont')
       .populate('createdBy', 'name email')
       .populate('viaticoLines.categoryId', 'name')
+      .populate('projectId', 'code name')
       .sort({ createdAt: -1 })
       .lean()
       .exec()
@@ -1664,7 +1665,12 @@ export class ExpenseReportService implements OnModuleInit {
         restricted = true
         restrictedMsg =
           'Esta rendición directa fue creada por Contabilidad; solo Contabilidad puede eliminarla.'
-      } else if (report.pendingBalanceFromReportId) {
+      } else if (report.pendingBalanceFromReportId && expenses.length > 0) {
+        // Saldo heredado CON gastos ya cargados: borrarla rompería la cadena del
+        // saldo, solo Contabilidad. Si aún NO se subió ningún gasto, el dueño
+        // puede eliminarla: el borrado restaura el saldo a la bolsa
+        // (restoreByConsumer) y libera la rendición de origen
+        // (unmarkPendingBalanceUsed), volviendo todo al estado anterior.
         restricted = true
         restrictedMsg =
           'Esta rendición directa se creó con saldo heredado de otra rendición; solo Contabilidad puede eliminarla.'
@@ -2516,8 +2522,12 @@ export class ExpenseReportService implements OnModuleInit {
     userPermissions?: { canApproveL2?: boolean },
     tenantCtx?: { requestClientId: string; isSuperAdmin: boolean }
   ) {
+    // El reembolso lo registra Tesorería (Contabilidad/SuperAdmin o delegado
+    // con L2). El Coordinador queda excluido aunque tenga canApproveL2 o el
+    // RolesGuard lo aliase a Administrador: por rol no participa en el pago.
     const canPay =
-      userRole === ROLES.SUPER_ADMIN || userPermissions?.canApproveL2 === true
+      userRole !== ROLES.COORDINADOR &&
+      (userRole === ROLES.SUPER_ADMIN || userPermissions?.canApproveL2 === true)
     if (!canPay) {
       throw new ForbiddenException(
         'No tienes permiso para registrar pagos de reembolso.'

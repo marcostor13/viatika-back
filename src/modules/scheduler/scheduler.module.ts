@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common'
 import { MongooseModule } from '@nestjs/mongoose'
 import { SchedulerService } from './scheduler.service'
+import { SchedulerController } from './scheduler.controller'
 import { Advance, AdvanceSchema } from '../advance/entities/advance.entity'
 import {
   ExpenseReport,
@@ -24,6 +25,7 @@ import { NotificationsModule } from '../notifications/notifications.module'
     EmailModule,
     NotificationsModule,
   ],
+  controllers: [SchedulerController],
   providers: [SchedulerService],
 })
 export class SchedulerModule {}

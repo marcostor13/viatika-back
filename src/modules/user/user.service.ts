@@ -1029,4 +1029,54 @@ export class UserService {
       .findByIdAndUpdate(userId, { emailNotificationsEnabled: enabled })
       .exec()
   }
+
+  /** Retorna el coordinatorId del usuario, o null si no tiene coordinador asignado. */
+  async findUserCoordinatorId(userId: string): Promise<Types.ObjectId | null> {
+    const u = await this.userModel
+      .findById(userId)
+      .select('coordinatorId')
+      .lean<{ coordinatorId?: Types.ObjectId }>()
+      .exec()
+    return u?.coordinatorId ?? null
+  }
+
+  /**
+   * Usuarios de Administrador + Contabilidad de un cliente que tienen email habilitado.
+   * Usados para enviar recordatorios semanales de rendiciones pendientes de contabilidad.
+   */
+  /**
+   * Administradores + Contabilidad activos de un cliente.
+   * Incluye `emailNotificationsEnabled` para que el caller decida si enviar correo.
+   * El in-app se envía siempre; el correo solo si el flag está activo.
+   */
+  async findRendicionApprovalUsers(
+    clientId: string
+  ): Promise<{ _id: string; email: string; name: string; emailNotificationsEnabled: boolean }[]> {
+    const [contabilidadRole, adminRoles] = await Promise.all([
+      this.roleService.getByName('Contabilidad'),
+      this.roleService.getAdminRoles(),
+    ])
+
+    const roleIds = [
+      ...adminRoles.map(r => (r as any)._id),
+      ...(contabilidadRole ? [(contabilidadRole as any)._id] : []),
+    ]
+
+    const users = await this.userModel
+      .find({
+        clientId: new Types.ObjectId(clientId),
+        roleId: { $in: roleIds },
+        isActive: true,
+      })
+      .select('_id email name emailNotificationsEnabled')
+      .lean<{ _id: Types.ObjectId; email: string; name: string; emailNotificationsEnabled?: boolean }[]>()
+      .exec()
+
+    return users.map(u => ({
+      _id: u._id.toString(),
+      email: u.email,
+      name: u.name,
+      emailNotificationsEnabled: !!u.emailNotificationsEnabled,
+    }))
+  }
 }

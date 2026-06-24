@@ -893,13 +893,18 @@ export class ExpenseReportService implements OnModuleInit {
     const dto = updateExpenseReportDto
     const existing = await this.expenseReportModel
       .findById(id)
-      .select('status isDirecta')
+      .select('status isDirecta type')
       .lean()
       .exec()
     if (!existing) {
       throw new NotFoundException(`Expense report with ID ${id} not found`)
     }
     const isDirecta = (existing as any).isDirecta === true
+    // Viático con pago parcial: sigue en fase de carga, el colaborador puede enviarlo
+    // aunque contabilidad aún no complete el depósito (lo completa tras el envío).
+    const isPartialViatico =
+      (existing as any).type === 'viatico' &&
+      existing.status === 'partially_paid'
 
     if (dto.status === 'reimbursed') {
       throw new BadRequestException(
@@ -910,7 +915,8 @@ export class ExpenseReportService implements OnModuleInit {
     if (
       dto.status === 'submitted' &&
       existing.status !== 'open' &&
-      existing.status !== 'rejected'
+      existing.status !== 'rejected' &&
+      !isPartialViatico
     ) {
       throw new BadRequestException(
         'Solo se puede enviar una rendición en estado abierta o rechazada.'
@@ -955,6 +961,10 @@ export class ExpenseReportService implements OnModuleInit {
         'Solo se puede aprobar una rendicion pendiente de contabilidad.'
       )
     }
+    // Un viático con pago parcial SÍ puede aprobarse aunque quede saldo del anticipo
+    // sin depositar: la liquidación reconcilia con lo realmente pagado
+    // (viaticoPaidAmount) vs lo gastado → reembolso al colaborador o devolución según
+    // el caso. El saldo no depositado simplemente no entra en la cuenta.
 
     const $set: Record<string, unknown> = {}
     const $unset: Record<string, ''> = {}
@@ -3942,7 +3952,11 @@ export class ExpenseReportService implements OnModuleInit {
     const report = await this.expenseReportModel.findById(id)
     if (!report) throw new NotFoundException(`Viático ${id} no encontrado`)
     if (report.type !== 'viatico') throw new BadRequestException('Esta rendición no es de tipo viático')
-    if (!['viatico_approved', 'partially_paid'].includes(report.status)) {
+    // Estados con saldo del anticipo aún por depositar. Tras el envío del colaborador
+    // (submitted/pending_accounting) contabilidad todavía puede completar el pago parcial;
+    // en esos casos solo se actualiza el monto pagado, sin tocar el estado del flujo.
+    const PAYABLE_STATUSES = ['viatico_approved', 'partially_paid', 'submitted', 'pending_accounting']
+    if (!PAYABLE_STATUSES.includes(report.status)) {
       throw new BadRequestException(`Solo se puede registrar pago de viáticos aprobados (estado actual: ${report.status})`)
     }
 
@@ -3983,11 +3997,16 @@ export class ExpenseReportService implements OnModuleInit {
     }
 
     const fullyPaid = report.viaticoPaidAmount >= (report.viaticoAmount ?? 0)
-    report.status = fullyPaid ? 'paid' : 'partially_paid'
 
-    // Al quedar pagado, la rendición pasa a abierta para registrar gastos
-    if (fullyPaid) {
-      report.status = 'open'
+    // El estado solo se gestiona mientras la rendición está en fase de pago/carga
+    // (aún no enviada por el colaborador): con el pago total pasa a 'open' para que
+    // registre gastos; si sigue parcial queda 'partially_paid'. Si el colaborador ya
+    // la envió (submitted/pending_accounting), el avance del flujo manda y completar
+    // el pago solo actualiza el monto, sin revertir el estado.
+    const inPrePaymentPhase =
+      report.status === 'viatico_approved' || report.status === 'partially_paid'
+    if (inPrePaymentPhase) {
+      report.status = fullyPaid ? 'open' : 'partially_paid'
     }
 
     await report.save()
@@ -3995,7 +4014,9 @@ export class ExpenseReportService implements OnModuleInit {
     const collaborator = await this.userService.findEmailNameClient(report.userId.toString())
     const reportId = String((report as any)._id)
     const fullyPaidMsg = fullyPaid
-      ? `Se registró el pago de tu viático por S/ ${this.viaticoFormatMoney(paymentAmount)}. Ya puedes registrar tus gastos.`
+      ? (inPrePaymentPhase
+          ? `Se registró el pago de tu viático por S/ ${this.viaticoFormatMoney(paymentAmount)}. Ya puedes registrar tus gastos.`
+          : `Se registró el pago restante de tu viático por S/ ${this.viaticoFormatMoney(paymentAmount)} (total pagado S/ ${this.viaticoFormatMoney(report.viaticoPaidAmount ?? 0)}).`)
       : `Se registró un pago parcial de tu viático por S/ ${this.viaticoFormatMoney(paymentAmount)} (total pagado S/ ${this.viaticoFormatMoney(report.viaticoPaidAmount ?? 0)} de S/ ${this.viaticoFormatMoney(report.viaticoAmount ?? 0)}).`
 
     this.notificationsService.create({ userId: report.userId.toString(), title: fullyPaid ? 'Pago de viático registrado' : 'Pago parcial de viático registrado', message: fullyPaidMsg, type: 'success', actionUrl: `/mis-rendiciones/${reportId}/detalle` }).catch(() => {})

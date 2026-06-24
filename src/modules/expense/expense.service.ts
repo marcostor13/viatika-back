@@ -184,7 +184,17 @@ export class ExpenseService {
     const reportId = this.expenseReportIdString(expense)
     if (reportId) {
       const report = await this.expenseReportService.findOne(reportId)
-      if (report.status !== 'open' && report.status !== 'rejected') {
+      // Viático con pago parcial: contabilidad ya depositó parte del anticipo y el
+      // colaborador sigue en fase de carga de gastos (el pago se completa después),
+      // por lo que puede editar/eliminar igual que en una rendición abierta.
+      const isPartialViatico =
+        (report as unknown as { type?: string }).type === 'viatico' &&
+        report.status === 'partially_paid'
+      if (
+        report.status !== 'open' &&
+        report.status !== 'rejected' &&
+        !isPartialViatico
+      ) {
         throw new ForbiddenException(
           'Solo puedes editar o eliminar gastos en rendiciones abiertas o rechazadas.'
         )

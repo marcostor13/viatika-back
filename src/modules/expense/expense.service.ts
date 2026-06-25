@@ -174,38 +174,62 @@ export class ExpenseService {
     this.assertCanReadExpense(expense, actor)
     if (actor.roleName !== ROLES.COLABORADOR) return
     const status = expense.status || 'pending'
-    if (status === 'approved' || status === 'rejected') {
+    if (status === 'approved') {
       throw new ForbiddenException(
-        'No puedes modificar un comprobante ya aprobado o rechazado.'
+        'No puedes modificar un comprobante ya aprobado.'
       )
     }
     const reportId = this.expenseReportIdString(expense)
-    if (reportId) {
-      const report = await this.expenseReportService.findOne(reportId)
-      // Viático con pago parcial: contabilidad ya depositó parte del anticipo y el
-      // colaborador sigue en fase de carga de gastos (el pago se completa después),
-      // por lo que puede editar/eliminar igual que en una rendición abierta.
-      const isPartialViatico =
-        (report as unknown as { type?: string }).type === 'viatico' &&
-        report.status === 'partially_paid'
-      if (
-        report.status !== 'open' &&
-        report.status !== 'rejected' &&
-        !isPartialViatico
-      ) {
+    if (!reportId) return
+    const report = await this.expenseReportService.findOne(reportId)
+
+    // Caja chica finalizada: el total quedó congelado, el colaborador ya no
+    // puede modificar/eliminar gastos (mismo criterio que para agregarlos).
+    if (
+      (report as unknown as { lockedByCajaChica?: boolean }).lockedByCajaChica
+    ) {
+      throw new ForbiddenException(
+        'La caja chica de esta rendición fue finalizada por Contabilidad. No se pueden modificar más gastos.'
+      )
+    }
+
+    // Viático con pago parcial: contabilidad ya depositó parte del anticipo y el
+    // colaborador sigue en fase de carga de gastos (el pago se completa después),
+    // por lo que puede editar/eliminar igual que en una rendición abierta.
+    const isPartialViatico =
+      (report as unknown as { type?: string }).type === 'viatico' &&
+      report.status === 'partially_paid'
+
+    // Gasto rechazado por Coordinador o Contabilidad: el colaborador puede
+    // corregirlo mientras la rendición siga en revisión (no aprobada/pagada/cerrada).
+    // El rechazo es por-comprobante, así que la rendición permanece en
+    // `submitted` (revisión del coordinador) o `pending_accounting` (revisión de
+    // contabilidad); ambos estados deben permitir la corrección.
+    if (status === 'rejected') {
+      const correctableStatuses = [
+        'open',
+        'rejected',
+        'submitted',
+        'pending_accounting',
+      ]
+      if (!correctableStatuses.includes(report.status) && !isPartialViatico) {
         throw new ForbiddenException(
-          'Solo puedes editar o eliminar gastos en rendiciones abiertas o rechazadas.'
+          'No puedes corregir este gasto porque la rendición ya no está en revisión.'
         )
       }
-      // Caja chica finalizada: el total quedó congelado, el colaborador ya no
-      // puede modificar/eliminar gastos (mismo criterio que para agregarlos).
-      if (
-        (report as unknown as { lockedByCajaChica?: boolean }).lockedByCajaChica
-      ) {
-        throw new ForbiddenException(
-          'La caja chica de esta rendición fue finalizada por Contabilidad. No se pueden modificar más gastos.'
-        )
-      }
+      return
+    }
+
+    // Resto de estados (pendiente / validación SUNAT): edición normal, permitida
+    // solo en rendiciones abiertas o rechazadas.
+    if (
+      report.status !== 'open' &&
+      report.status !== 'rejected' &&
+      !isPartialViatico
+    ) {
+      throw new ForbiddenException(
+        'Solo puedes editar o eliminar gastos en rendiciones abiertas o rechazadas.'
+      )
     }
   }
 
@@ -1988,6 +2012,34 @@ export class ExpenseService {
       updateDoc.proyectId = this.toObjectIdOrRaw(updateDoc.proyectId)
     if (updateDoc.categoryId !== undefined)
       updateDoc.categoryId = this.toObjectIdOrRaw(updateDoc.categoryId)
+
+    // Corrección de un comprobante rechazado por el colaborador dueño: vuelve a
+    // revisión. El front reenvía el `status: 'rejected'` original del documento, así
+    // que aquí se sobreescribe el estado y se reabren únicamente las aprobaciones que
+    // estaban rechazadas (la aprobación ya emitida por el otro rol se conserva).
+    const existingAny = existing as unknown as {
+      status?: string
+      approvalCoord?: { status?: string }
+      approvalCont?: { status?: string }
+    }
+    if (
+      actor.roleName === ROLES.COLABORADOR &&
+      existingAny.status === 'rejected'
+    ) {
+      const coordRejected = existingAny.approvalCoord?.status === 'rejected'
+      const contRejected = existingAny.approvalCont?.status === 'rejected'
+      const nextCoord = coordRejected
+        ? 'pending'
+        : (existingAny.approvalCoord?.status ?? 'pending')
+      const nextCont = contRejected
+        ? 'pending'
+        : (existingAny.approvalCont?.status ?? 'pending')
+      if (coordRejected) updateDoc.approvalCoord = { status: 'pending' }
+      if (contRejected) updateDoc.approvalCont = { status: 'pending' }
+      updateDoc.status = this.computeCombinedStatus(nextCoord, nextCont)
+      updateDoc.rejectionReason = ''
+      updateDoc.rejectedBy = ''
+    }
 
     const updated = await this.expenseRepository
       .findOneAndUpdate({ _id: expenseIdObject }, updateDoc, {

@@ -4106,24 +4106,69 @@ export class ExpenseReportService implements OnModuleInit {
 
     await report.save()
 
-    const collaborator = await this.userService.findEmailNameClient(report.userId.toString())
+    const collabId = report.userId.toString()
+    const collaborator = await this.userService.findEmailNameClient(collabId)
     const reportId = String((report as any)._id)
+
+    // Centro de costo legible para los correos (igual que en el flujo de anticipo).
+    let projectLabel = ''
+    if (report.projectId) {
+      try {
+        const p = await this.projectService.findOne(report.projectId.toString(), report.clientId.toString())
+        projectLabel = `[${p.code} - ${p.name}]`
+      } catch { /* fallback a etiqueta vacía */ }
+    }
+
+    // Coordinador del colaborador: recibe copia del aviso de pago (correo + in-app),
+    // igual que en la ruta del anticipo (advance.service.notifyViaticoPaymentRegistered).
+    const profile = await this.userService.findTransactionalProfile(collabId)
+    const coordinatorId = profile?.coordinatorId?.toString?.()
+    const coordinator = coordinatorId ? await this.userService.findEmailNameClient(coordinatorId) : null
+    const coordEmailEnabled = coordinatorId ? await this.userService.isEmailEnabled(coordinatorId) : false
+
+    const paymentEmailData = {
+      clientId: report.clientId.toString(),
+      collaboratorName: collaborator?.name ?? 'Colaborador',
+      coordinatorName: coordinator?.name,
+      projectLabel,
+      amountFormatted: this.viaticoFormatMoney(report.viaticoAmount ?? 0),
+      transferDate: new Date(dto.transferDate).toISOString().slice(0, 10),
+      reference: dto.reference ?? '—',
+      paymentMethod: dto.method,
+      paymentReceiptUrl: dto.paymentReceiptUrl ?? '',
+      paymentReceiptFileName: dto.paymentReceiptFileName ?? 'comprobante.pdf',
+      platformUrl: this.emailService.buildAppUrl('/mis-rendiciones'),
+    }
+
     const fullyPaidMsg = fullyPaid
       ? (inPrePaymentPhase
           ? `Se registró el pago de tu viático por S/ ${this.viaticoFormatMoney(paymentAmount)}. Ya puedes registrar tus gastos.`
           : `Se registró el pago restante de tu viático por S/ ${this.viaticoFormatMoney(paymentAmount)} (total pagado S/ ${this.viaticoFormatMoney(report.viaticoPaidAmount ?? 0)}).`)
       : `Se registró un pago parcial de tu viático por S/ ${this.viaticoFormatMoney(paymentAmount)} (total pagado S/ ${this.viaticoFormatMoney(report.viaticoPaidAmount ?? 0)} de S/ ${this.viaticoFormatMoney(report.viaticoAmount ?? 0)}).`
 
-    this.notificationsService.create({ userId: report.userId.toString(), title: fullyPaid ? 'Pago de viático registrado' : 'Pago parcial de viático registrado', message: fullyPaidMsg, type: 'success', actionUrl: `/mis-rendiciones/${reportId}/detalle` }).catch(() => {})
+    this.notificationsService.create({ userId: collabId, title: fullyPaid ? 'Pago de viático registrado' : 'Pago parcial de viático registrado', message: fullyPaidMsg, type: 'success', actionUrl: `/mis-rendiciones/${reportId}/detalle` }).catch(() => {})
 
-    if (collaborator?.email && await this.userService.isEmailEnabled(report.userId.toString())) {
+    if (collaborator?.email && await this.userService.isEmailEnabled(collabId)) {
       this.emailService.sendViaticoPagoRealizado(collaborator.email, {
-        clientId: report.clientId.toString(), recipientName: collaborator.name, collaboratorName: collaborator.name,
-        amountFormatted: this.viaticoFormatMoney(report.viaticoAmount ?? 0),
-        transferDate: new Date(dto.transferDate).toISOString().slice(0, 10),
-        reference: dto.reference ?? '—', paymentMethod: dto.method,
-        paymentReceiptUrl: dto.paymentReceiptUrl ?? '', paymentReceiptFileName: dto.paymentReceiptFileName ?? 'comprobante.pdf',
-        platformUrl: this.emailService.buildAppUrl('/mis-rendiciones'), projectLabel: '', coordinatorName: undefined,
+        recipientName: collaborator.name,
+        ...paymentEmailData,
+      }).catch(() => {})
+    }
+
+    // Copia al coordinador: correo + notificación in-app.
+    if (coordinator?.email && coordEmailEnabled) {
+      this.emailService.sendViaticoPagoRealizado(coordinator.email, {
+        recipientName: coordinator.name,
+        ...paymentEmailData,
+      }).catch(() => {})
+    }
+    if (coordinatorId) {
+      this.notificationsService.create({
+        userId: coordinatorId,
+        title: fullyPaid ? 'Pago de viático registrado' : 'Pago parcial de viático registrado',
+        message: `Se registró el pago del viático de ${collaborator?.name ?? 'un colaborador'} por S/ ${this.viaticoFormatMoney(paymentAmount)}.`,
+        type: 'info',
+        actionUrl: `/mis-rendiciones/${reportId}/detalle`,
       }).catch(() => {})
     }
 

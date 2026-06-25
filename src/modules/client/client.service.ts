@@ -133,4 +133,19 @@ export class ClientService {
       .findByIdAndUpdate(id, { notificationSettings: settings }, { new: true })
       .exec()
   }
+
+  async getTesoreriaEmails(clientId: string): Promise<string[]> {
+    const client = await this.clientModel
+      .findById(clientId)
+      .select('tesoreriaEmails')
+      .lean()
+      .exec()
+    return client?.tesoreriaEmails ?? []
+  }
+
+  updateTesoreriaEmails(id: string, emails: string[]) {
+    return this.clientModel
+      .findByIdAndUpdate(id, { tesoreriaEmails: emails }, { new: true })
+      .exec()
+  }
 }

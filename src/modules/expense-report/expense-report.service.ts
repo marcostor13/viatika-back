@@ -42,6 +42,7 @@ import { PayViaticoDto } from './dto/pay-viatico.dto'
 import { ResubmitViaticoDto } from './dto/resubmit-viatico.dto'
 import { CreateAdvanceLineDto } from '../advance/dto/create-advance.dto'
 import { SaldoService } from '../saldo/saldo.service'
+import { ClientService } from '../client/client.service'
 import { Logger } from '@nestjs/common'
 
 /** Contexto del usuario que solicita eliminar una solicitud. */
@@ -69,7 +70,8 @@ export class ExpenseReportService implements OnModuleInit {
     private readonly uploadService: UploadService,
     private readonly projectService: ProjectService,
     private readonly categoryService: CategoryService,
-    private readonly saldoService: SaldoService
+    private readonly saldoService: SaldoService,
+    private readonly clientService: ClientService
   ) { }
 
   async onModuleInit() {
@@ -1154,6 +1156,7 @@ export class ExpenseReportService implements OnModuleInit {
     // Contabilidad aprueba la rendición (→ approved): notificar colaborador
     // En rendición directa: solo colaborador. En flujo normal: colaborador + coordinador.
     if (dto.status === 'approved') {
+      console.log(`[APROBACIÓN RENDICIÓN] Entrando al bloque approved para rendición ${id}`)
       const owner = fullyUpdatedReport.userId as any
       const ownerId = owner?._id ? String(owner._id) : String(owner)
 
@@ -1238,6 +1241,39 @@ export class ExpenseReportService implements OnModuleInit {
           'Error enviando notificaciones de rendición aprobada por contabilidad',
           error
         )
+      }
+
+      // Enviar correo a tesorería con datos de pago al colaborador.
+      try {
+        const clientIdStr = String(fullyUpdatedReport.clientId)
+        console.log(`[TESORESRÍA RENDICIÓN] Buscando emails para clientId=${clientIdStr}`)
+        const tesoreriaEmails = await this.clientService.getTesoreriaEmails(clientIdStr)
+        console.log(`[TESORERÍA RENDICIÓN] Emails configurados: ${JSON.stringify(tesoreriaEmails)}`)
+        if (tesoreriaEmails.length > 0) {
+          const bank = (typeof owner === 'object' && owner?.bankAccount) || null
+          const hasBankAccount = !!(bank?.accountNumber)
+          console.log(`[TESORERÍA RENDICIÓN] hasBankAccount=${hasBankAccount}, banco=${bank?.bankName}`)
+          const tesoreriaEmailData = {
+            clientId: clientIdStr,
+            reportTitle,
+            collaboratorName,
+            collaboratorDni: (typeof owner === 'object' && owner?.dni) || undefined,
+            budgetFormatted: Number(budgetDisplay).toFixed(2),
+            hasBankAccount,
+            bankName: bank?.bankName || undefined,
+            accountType: bank?.accountType === 'ahorros' ? 'Ahorros' : bank?.accountType === 'corriente' ? 'Corriente' : undefined,
+            accountNumber: bank?.accountNumber || undefined,
+            cci: bank?.cci || undefined,
+            platformUrl,
+          }
+          for (const tesoEmail of tesoreriaEmails) {
+            console.log(`[TESORERÍA RENDICIÓN] Enviando a ${tesoEmail}...`)
+            await this.emailService.sendRendicionAprobadaTesoreria(tesoEmail, tesoreriaEmailData)
+            console.log(`[TESORERÍA RENDICIÓN] Enviado a ${tesoEmail} OK`)
+          }
+        }
+      } catch (err) {
+        console.error(`[TESORERÍA RENDICIÓN] ERROR:`, err)
       }
 
       try {
@@ -3749,6 +3785,7 @@ export class ExpenseReportService implements OnModuleInit {
   }
 
   async approveViaticoL1(id: string, opts: { approvedBy: string; notes?: string }, userRole: string, userPermissions?: any): Promise<ExpenseReportDocument> {
+    console.log(`[APROBACIÓN VIÁTICO L1] id=${id}, userRole=${userRole}`)
     const report = await this.expenseReportModel.findById(id)
     if (!report) throw new NotFoundException(`Viático ${id} no encontrado`)
     if (report.type !== 'viatico') throw new BadRequestException('Esta rendición no es de tipo viático')
@@ -3761,6 +3798,7 @@ export class ExpenseReportService implements OnModuleInit {
     report.viaticoApprovalLevel = 1
 
     const isSingleLevel = (report.viaticoRequiredLevels ?? 1) === 1
+    console.log(`[APROBACIÓN VIÁTICO L1] isSingleLevel=${isSingleLevel}, viaticoAmount=${report.viaticoAmount}`)
     let autoOpenedBySaldo = false
     if (isSingleLevel) {
       report.status = 'viatico_approved'
@@ -3782,6 +3820,7 @@ export class ExpenseReportService implements OnModuleInit {
   }
 
   async approveViaticoL2(id: string, opts: { approvedBy: string; notes?: string }, userRole: string, userPermissions?: any): Promise<ExpenseReportDocument> {
+    console.log(`[APROBACIÓN VIÁTICO L2] id=${id}, userRole=${userRole}`)
     const report = await this.expenseReportModel.findById(id)
     if (!report) throw new NotFoundException(`Viático ${id} no encontrado`)
     if (report.type !== 'viatico') throw new BadRequestException('Esta rendición no es de tipo viático')
@@ -3847,6 +3886,52 @@ export class ExpenseReportService implements OnModuleInit {
         }).catch(() => {})
       }
     } catch (err: unknown) { this.logger.error(`Notificación contabilidad viático ${(report as any)._id}: ${err instanceof Error ? err.message : String(err)}`) }
+
+    // Notificar a tesorería con datos de pago del colaborador
+    try {
+      const reportId = String((report as any)._id)
+      const clientIdStr = report.clientId.toString()
+      console.log(`[TESORERÍA VIÁTICO] Buscando emails para clientId=${clientIdStr}, reportId=${reportId}`)
+      const tesoreriaEmails = await this.clientService.getTesoreriaEmails(clientIdStr)
+      console.log(`[TESORERÍA VIÁTICO] Emails configurados: ${JSON.stringify(tesoreriaEmails)}`)
+      if (tesoreriaEmails.length > 0) {
+        const collab = await this.userService.findOne(report.userId.toString())
+        const bank = collab?.bankAccount ?? null
+        const hasBankAccount = !!(bank?.accountNumber)
+        console.log(`[TESORERÍA VIÁTICO] colaborador=${collab?.name}, hasBankAccount=${hasBankAccount}`)
+
+        let projectLabel: string | undefined
+        if (report.projectId) {
+          try {
+            const proj = await this.projectService.findOne(report.projectId.toString(), clientIdStr)
+            projectLabel = `${proj.code ?? '—'} - ${proj.name ?? '—'}`
+          } catch { /* proyecto opcional */ }
+        }
+
+        const platformUrl = this.emailService.buildAppUrl('/tesoreria')
+        for (const tesoEmail of tesoreriaEmails) {
+          console.log(`[TESORERÍA VIÁTICO] Enviando a ${tesoEmail}...`)
+          await this.emailService.sendViaticoAprobadoTesoreria(tesoEmail, {
+            clientId: clientIdStr,
+            advanceDescription: report.viaticoPlace ?? report.title ?? 'Solicitud de viáticos',
+            collaboratorName: collab?.name ?? 'Colaborador',
+            collaboratorDni: collab?.dni,
+            budgetFormatted: Number(report.viaticoAmount ?? 0).toFixed(2),
+            projectLabel,
+            hasBankAccount,
+            bankName: bank?.bankName || undefined,
+            accountType: bank?.accountType === 'ahorros' ? 'Ahorros' : bank?.accountType === 'corriente' ? 'Corriente' : undefined,
+            accountNumber: bank?.accountNumber || undefined,
+            cci: bank?.cci || undefined,
+            platformUrl,
+          })
+          console.log(`[TESORERÍA VIÁTICO] Enviado a ${tesoEmail} OK`)
+        }
+      }
+    } catch (err: unknown) {
+      console.error(`[TESORERÍA VIÁTICO] ERROR:`, err)
+    }
+
     return false
   }
 

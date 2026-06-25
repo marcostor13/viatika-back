@@ -38,7 +38,7 @@ export class LineaNegocioController {
   }
 
   @Post()
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   async create(@Body() dto: CreateLineaNegocioDto, @Request() req: any) {
     const clientId = this.resolveClientId(req, dto.clientId)
     const result = await this.lineaNegocioService.create(dto, clientId)
@@ -67,7 +67,7 @@ export class LineaNegocioController {
   }
 
   @Patch(':id')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   async update(
     @Param('id') id: string,
     @Body() dto: UpdateLineaNegocioDto,
@@ -88,7 +88,7 @@ export class LineaNegocioController {
   }
 
   @Delete(':id')
-  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   async remove(@Param('id') id: string, @Request() req: any) {
     const clientId = this.resolveClientId(req)
     const result = await this.lineaNegocioService.remove(id, clientId)

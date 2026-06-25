@@ -937,6 +937,88 @@ export class EmailService {
     }
   }
 
+  /** Notifica a Tesorería que una rendición fue aprobada y requiere pago al colaborador. */
+  async sendRendicionAprobadaTesoreria(
+    email: string,
+    data: {
+      clientId?: string
+      reportTitle: string
+      collaboratorName: string
+      collaboratorDni?: string
+      budgetFormatted: string
+      bankName?: string
+      accountType?: string
+      accountNumber?: string
+      cci?: string
+      hasBankAccount: boolean
+      platformUrl?: string
+    }
+  ) {
+    console.log(`[EMAIL] sendRendicionAprobadaTesoreria -> ${email}`)
+    try {
+      const { platformUrl, ...rest } = data
+      const reportTitle = this.normalizeIsoDatesInText(data.reportTitle)
+      await this.send({
+        to: email,
+        subject: `Rendicion aprobada - Pendiente de pago — ${reportTitle}`,
+        template: './rendicion-aprobada-tesoreria',
+        context: {
+          logoUrl: await this.resolveLogoUrl(this.extractClientId(data)),
+          year: new Date().getFullYear(),
+          ...rest,
+          reportTitle,
+          platformUrl: this.resolvePlatformHref(platformUrl),
+        },
+      })
+      console.log(`[EMAIL] sendRendicionAprobadaTesoreria ENVIADO a ${email}`)
+    } catch (error) {
+      console.error(`[EMAIL] sendRendicionAprobadaTesoreria ERROR a ${email}:`, error)
+      this.logger.error(
+        `Error rendicion aprobada tesoreria a ${email}:`,
+        error
+      )
+    }
+  }
+
+  /** Notifica a Tesorería que un viático ≤ S/500 fue aprobado por el coordinador y requiere desembolso. */
+  async sendViaticoAprobadoTesoreria(
+    email: string,
+    data: {
+      clientId?: string
+      advanceDescription: string
+      collaboratorName: string
+      collaboratorDni?: string
+      budgetFormatted: string
+      projectLabel?: string
+      bankName?: string
+      accountType?: string
+      accountNumber?: string
+      cci?: string
+      hasBankAccount: boolean
+      platformUrl?: string
+    }
+  ) {
+    console.log(`[EMAIL] sendViaticoAprobadoTesoreria -> ${email}`)
+    try {
+      const { platformUrl, ...rest } = data
+      await this.send({
+        to: email,
+        subject: `Viatico aprobado - Pendiente de pago — ${data.advanceDescription}`,
+        template: './viatico-aprobado-tesoreria',
+        context: {
+          logoUrl: await this.resolveLogoUrl(this.extractClientId(data)),
+          year: new Date().getFullYear(),
+          ...rest,
+          platformUrl: this.resolvePlatformHref(platformUrl),
+        },
+      })
+      console.log(`[EMAIL] sendViaticoAprobadoTesoreria ENVIADO a ${email}`)
+    } catch (error) {
+      console.error(`[EMAIL] sendViaticoAprobadoTesoreria ERROR a ${email}:`, error)
+      this.logger.error(`Error viatico aprobado tesoreria a ${email}:`, error)
+    }
+  }
+
   /** Notifica al colaborador que su rendición fue rechazada (coord o contabilidad). */
   async sendRendicionRechazadaColaborador(
     email: string,

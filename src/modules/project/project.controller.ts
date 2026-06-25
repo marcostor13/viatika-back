@@ -24,7 +24,7 @@ import { AuditLogService } from '../audit-log/audit-log.service'
 import { CategoryGroupService } from '../category-group/category-group.service'
 
 @UseGuards(AuthGuard('jwt'), RolesGuard)
-@Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
+@Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
 @Controller('project')
 export class ProjectController {
   constructor(

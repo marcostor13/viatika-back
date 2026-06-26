@@ -295,12 +295,7 @@ export class AdvanceService {
 
     const today = this.startOfDay(new Date())
     if (start < today) {
-      const obs = dto.observations?.trim() ?? ''
-      if (obs.length < 10) {
-        throw new BadRequestException(
-          'Las fechas de inicio en el pasado requieren observaciones con al menos 10 caracteres.'
-        )
-      }
+      throw new BadRequestException('La fecha de inicio no puede ser anterior a hoy.')
     }
 
     await this.projectService.findOne(dto.projectId, clientId)

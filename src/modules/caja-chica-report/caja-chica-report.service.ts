@@ -137,6 +137,7 @@ export class CajaChicaReportService {
       (report.selectedReports ?? []).map(async (sr: any) => {
         const expReport = await this.expenseReportModel
           .findById(sr.expenseReportId)
+          .populate('userId', 'name dni')
           .populate({
             path: 'expenseIds',
             populate: [

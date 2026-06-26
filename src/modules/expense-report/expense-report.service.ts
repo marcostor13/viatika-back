@@ -1820,7 +1820,7 @@ export class ExpenseReportService implements OnModuleInit {
       .select(
         '_id userId title motivo gestion budget createdAt createdBy directaDeposit'
       )
-      .populate('userId', 'name email')
+      .populate('userId', 'name email dni')
       .populate({
         path: 'createdBy',
         select: 'name email roleId',

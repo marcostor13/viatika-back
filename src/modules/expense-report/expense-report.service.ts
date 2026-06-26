@@ -3534,8 +3534,8 @@ export class ExpenseReportService implements OnModuleInit {
     if (end < start) throw new BadRequestException('La fecha fin debe ser mayor o igual a la fecha inicio.')
 
     const today = this.viaticoStartOfDay(new Date())
-    if (start < today && (dto.observations?.trim() ?? '').length < 10) {
-      throw new BadRequestException('Las fechas de inicio en el pasado requieren observaciones con al menos 10 caracteres.')
+    if (start < today) {
+      throw new BadRequestException('La fecha de inicio no puede ser anterior a hoy.')
     }
 
     await this.projectService.findOne(dto.projectId, clientId)

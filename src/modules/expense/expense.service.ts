@@ -1249,9 +1249,24 @@ export class ExpenseService {
         HttpStatus.BAD_REQUEST
       )
     }
+    // El adjunto (comprobante) es obligatorio para todos los sub-tipos de otros gastos
+    if (!body.imageUrl) {
+      throw new HttpException(
+        'Se requiere adjuntar el comprobante',
+        HttpStatus.BAD_REQUEST
+      )
+    }
 
     const subTipo = body.subTipo || 'OT'
     const isDJ = subTipo === 'DJ'
+
+    // RUC Emisor obligatorio para los sub-tipos con documento físico (TK, BV, RC)
+    if (['TK', 'BV', 'RC'].includes(subTipo) && !body.rucEmisor?.trim()) {
+      throw new HttpException(
+        'Se requiere el RUC del emisor',
+        HttpStatus.BAD_REQUEST
+      )
+    }
 
     // Solo la DJ requiere firma y aceptación del checkbox
     if (isDJ) {

@@ -9,6 +9,7 @@ import {
   IsArray,
   ValidateNested,
   IsDateString,
+  MaxLength,
 } from 'class-validator'
 import { Type } from 'class-transformer'
 import { CreateAdvanceLineDto } from '../../advance/dto/create-advance.dto'
@@ -57,4 +58,20 @@ export class ResubmitViaticoDto {
   @IsMongoId({ each: true })
   @IsOptional()
   saldoIds?: string[]
+
+  /** Cuenta bancaria alternativa para el depósito (opcional). */
+  @IsString()
+  @IsOptional()
+  @MaxLength(200)
+  bankName?: string
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(50)
+  accountNumber?: string
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(50)
+  cci?: string
 }

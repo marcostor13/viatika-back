@@ -69,5 +69,5 @@ INSTRUCCIONES:
 - La categoría del usuario es la pista principal; los ítems confirman o refinan.
 - Responde ÚNICAMENTE con un JSON array, sin texto adicional ni markdown:
 
-[{"idx":1,"cuenta9x":"91.3.1.140","nombre9x":"TRANSPORTE DE PASAJEROS","cuenta6x":"63.1.1.200","nombre6x":"TRANSPORTE DE PASAJEROS"},...]`
+[{"idx":1,"cuenta9x":"91.3.1.140","cuenta6x":"63.1.1.200"},...]`
 }

@@ -3606,6 +3606,9 @@ export class ExpenseReportService implements OnModuleInit {
       viaticoEndDate: new Date(dto.endDate),
       viaticoLines: lineDocs,
       viaticoObservations: dto.observations?.trim(),
+      ...(dto.bankName?.trim() && { viaticoBankName: dto.bankName.trim() }),
+      ...(dto.accountNumber?.trim() && { viaticoAccountNumber: dto.accountNumber.trim() }),
+      ...(dto.cci?.trim() && { viaticoCci: dto.cci.trim() }),
       coordinatorId: profile.coordinatorId ?? undefined,
       ...(pendingAmt > 0 && dto.pendingBalanceFromReportId && {
         pendingBalanceFromReportId: new Types.ObjectId(dto.pendingBalanceFromReportId),
@@ -3896,9 +3899,14 @@ export class ExpenseReportService implements OnModuleInit {
       console.log(`[TESORERÍA VIÁTICO] Emails configurados: ${JSON.stringify(tesoreriaEmails)}`)
       if (tesoreriaEmails.length > 0) {
         const collab = await this.userService.findOne(report.userId.toString())
-        const bank = collab?.bankAccount ?? null
+        // Prefer bank data from the solicitud itself; fall back to user profile.
+        const requestBank = report.viaticoAccountNumber?.trim()
+          ? { bankName: report.viaticoBankName, accountNumber: report.viaticoAccountNumber, cci: report.viaticoCci, accountType: undefined as string | undefined }
+          : null
+        const profileBank = collab?.bankAccount ?? null
+        const bank = requestBank ?? profileBank
         const hasBankAccount = !!(bank?.accountNumber)
-        console.log(`[TESORERÍA VIÁTICO] colaborador=${collab?.name}, hasBankAccount=${hasBankAccount}`)
+        console.log(`[TESORERÍA VIÁTICO] colaborador=${collab?.name}, hasBankAccount=${hasBankAccount}, source=${requestBank ? 'solicitud' : 'perfil'}`)
 
         let projectLabel: string | undefined
         if (report.projectId) {
@@ -3920,7 +3928,7 @@ export class ExpenseReportService implements OnModuleInit {
             projectLabel,
             hasBankAccount,
             bankName: bank?.bankName || undefined,
-            accountType: bank?.accountType === 'ahorros' ? 'Ahorros' : bank?.accountType === 'corriente' ? 'Corriente' : undefined,
+            accountType: (bank as any)?.accountType === 'ahorros' ? 'Ahorros' : (bank as any)?.accountType === 'corriente' ? 'Corriente' : undefined,
             accountNumber: bank?.accountNumber || undefined,
             cci: bank?.cci || undefined,
             platformUrl,
@@ -3993,6 +4001,9 @@ export class ExpenseReportService implements OnModuleInit {
     report.projectId = new Types.ObjectId(dto.projectId)
     report.viaticoLines = lineDocs
     report.viaticoObservations = dto.observations?.trim()
+    report.viaticoBankName = dto.bankName?.trim() || undefined
+    report.viaticoAccountNumber = dto.accountNumber?.trim() || undefined
+    report.viaticoCci = dto.cci?.trim() || undefined
     report.viaticoAmount = roundedSum
     report.budget = roundedSum
     // Re-aplicar saldo de la bolsa si la corrección lo selecciona y el viático no

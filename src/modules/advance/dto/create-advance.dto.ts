@@ -9,6 +9,7 @@ import {
   IsArray,
   ValidateNested,
   IsDateString,
+  MaxLength,
 } from 'class-validator'
 import { Type } from 'class-transformer'
 
@@ -113,6 +114,22 @@ export class CreateAdvanceDto {
   @IsMongoId({ each: true })
   @IsOptional()
   saldoIds?: string[]
+
+  /** Cuenta bancaria alternativa para el depósito (opcional). */
+  @IsString()
+  @IsOptional()
+  @MaxLength(200)
+  bankName?: string
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(50)
+  accountNumber?: string
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(50)
+  cci?: string
 
   /** Seteados desde el JWT en el controlador */
   userId?: string

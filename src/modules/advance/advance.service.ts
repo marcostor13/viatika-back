@@ -418,6 +418,9 @@ export class AdvanceService {
           pendingBalanceAmount: pendingAmt,
           additionalAmount: roundedSum,
         }),
+      ...(dto.bankName?.trim() && { requestBankName: dto.bankName.trim() }),
+      ...(dto.accountNumber?.trim() && { requestAccountNumber: dto.accountNumber.trim() }),
+      ...(dto.cci?.trim() && { requestCci: dto.cci.trim() }),
     })
 
     if (dto.expenseReportId) {
@@ -693,7 +696,8 @@ export class AdvanceService {
       cargo?: string
       employeeCode?: string
     },
-    approvedAt: Date
+    approvedAt: Date,
+    bankMeta?: { bankName?: string; accountNumber?: string; cci?: string }
   ): string {
     const project = advance.projectId as unknown
     let cc = '—'
@@ -786,6 +790,14 @@ export class AdvanceService {
       this.viaticoEmailKvRow('Fecha y hora de aprobación', apprDate),
     ].join('')
 
+    const bankRows = bankMeta?.accountNumber
+      ? [
+          this.viaticoEmailKvRow('Banco', this.viaticoNotifyField(bankMeta.bankName)),
+          this.viaticoEmailKvRow('N° Cuenta', bankMeta.accountNumber),
+          ...(bankMeta.cci ? [this.viaticoEmailKvRow('CCI', bankMeta.cci)] : []),
+        ].join('')
+      : ''
+
     return [
       `<div style="font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;font-size:14px;line-height:1.55;color:#334155;">`,
       `<h2 style="margin:0 0 14px;font-size:16px;color:#0f172a;font-weight:700;">${this.escapeHtmlForEmail('Detalle de la solicitud aprobada')}</h2>`,
@@ -799,6 +811,7 @@ export class AdvanceService {
       tableOpen,
       solicitanteRows,
       tableClose,
+      ...(bankRows ? [this.viaticoEmailSectionTitle('Cuenta bancaria para depósito'), tableOpen, bankRows, tableClose] : []),
       this.viaticoEmailSectionTitle('Aprobador'),
       tableOpen,
       aprobadorRows,
@@ -861,6 +874,17 @@ export class AdvanceService {
     const urgent = this.isViaticoTravelStartUrgent(doc.startDate)
     const platformUrl = this.emailService.buildAppUrl('/tesoreria')
 
+    // Prefer bank data from the solicitud; fall back to user profile.
+    let bankMetaL2: { bankName?: string; accountNumber?: string; cci?: string } | undefined
+    if (doc.requestAccountNumber?.trim()) {
+      bankMetaL2 = { bankName: doc.requestBankName, accountNumber: doc.requestAccountNumber, cci: doc.requestCci }
+    } else {
+      const collabFull = await this.userService.findOne(collabId)
+      if (collabFull?.bankAccount?.accountNumber) {
+        bankMetaL2 = { bankName: collabFull.bankAccount.bankName, accountNumber: collabFull.bankAccount.accountNumber, cci: collabFull.bankAccount.cci }
+      }
+    }
+
     const detailBody = this.buildViaticoL2PendingDetailBody(
       doc,
       {
@@ -871,7 +895,8 @@ export class AdvanceService {
         cargo: collabProfile?.cargo,
       },
       approverName,
-      lastAppr?.date ?? new Date()
+      lastAppr?.date ?? new Date(),
+      bankMetaL2
     )
 
     const emailTitle = urgent
@@ -911,7 +936,8 @@ export class AdvanceService {
       cargo?: string
     },
     approverL1Name: string,
-    approvedAt: Date
+    approvedAt: Date,
+    bankMeta?: { bankName?: string; accountNumber?: string; cci?: string }
   ): string {
     const project = advance.projectId as unknown
     let cc = '—'
@@ -991,6 +1017,14 @@ export class AdvanceService {
       this.viaticoEmailKvRow('Fecha y hora', apprDate),
     ].join('')
 
+    const bankRows = bankMeta?.accountNumber
+      ? [
+          this.viaticoEmailKvRow('Banco', this.viaticoNotifyField(bankMeta.bankName)),
+          this.viaticoEmailKvRow('N° Cuenta', bankMeta.accountNumber),
+          ...(bankMeta.cci ? [this.viaticoEmailKvRow('CCI', bankMeta.cci)] : []),
+        ].join('')
+      : ''
+
     return [
       `<div style="font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;font-size:14px;line-height:1.55;color:#334155;">`,
       `<h2 style="margin:0 0 14px;font-size:16px;color:#0f172a;font-weight:700;">${this.escapeHtmlForEmail('Detalle de la solicitud')}</h2>`,
@@ -1004,6 +1038,7 @@ export class AdvanceService {
       tableOpen,
       solicitanteRows,
       tableClose,
+      ...(bankRows ? [this.viaticoEmailSectionTitle('Cuenta bancaria para depósito'), tableOpen, bankRows, tableClose] : []),
       this.viaticoEmailSectionTitle('Aprobador Nivel 1'),
       tableOpen,
       aprobadorL1Rows,
@@ -1087,6 +1122,17 @@ export class AdvanceService {
     const urgent = this.isViaticoTravelStartUrgent(doc.startDate)
     const platformUrl = this.emailService.buildAppUrl('/tesoreria')
 
+    // Prefer bank data from the solicitud; fall back to user profile.
+    let bankMeta: { bankName?: string; accountNumber?: string; cci?: string } | undefined
+    if (doc.requestAccountNumber?.trim()) {
+      bankMeta = { bankName: doc.requestBankName, accountNumber: doc.requestAccountNumber, cci: doc.requestCci }
+    } else {
+      const collabFull = await this.userService.findOne(collabId)
+      if (collabFull?.bankAccount?.accountNumber) {
+        bankMeta = { bankName: collabFull.bankAccount.bankName, accountNumber: collabFull.bankAccount.accountNumber, cci: collabFull.bankAccount.cci }
+      }
+    }
+
     const detailBody = this.buildViaticoAccountingDetailBody(
       doc,
       {
@@ -1097,7 +1143,8 @@ export class AdvanceService {
         cargo: collabProfile?.cargo,
       },
       approverMeta,
-      lastAppr?.date ?? new Date()
+      lastAppr?.date ?? new Date(),
+      bankMeta
     )
 
     const emailTitle = urgent

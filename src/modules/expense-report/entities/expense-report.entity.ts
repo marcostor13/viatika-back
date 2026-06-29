@@ -188,6 +188,9 @@ export interface ExpenseReportDocument extends Document {
   viaticoBudgetCommitmentRecorded?: boolean
   viaticoRejectedBy?: string
   viaticoRejectionReason?: string
+  viaticoBankName?: string
+  viaticoAccountNumber?: string
+  viaticoCci?: string
 }
 
 @Schema({ timestamps: true })
@@ -564,6 +567,15 @@ export class ExpenseReport {
 
   @Prop({ type: String, required: false })
   viaticoRejectionReason?: string
+
+  @Prop({ type: String, required: false })
+  viaticoBankName?: string
+
+  @Prop({ type: String, required: false })
+  viaticoAccountNumber?: string
+
+  @Prop({ type: String, required: false })
+  viaticoCci?: string
 }
 
 export const ExpenseReportSchema = SchemaFactory.createForClass(ExpenseReport)

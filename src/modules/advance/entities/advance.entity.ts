@@ -166,6 +166,10 @@ export interface AdvanceDocument extends Document {
   additionalAmount?: number
   /** Saldos de la bolsa consumidos para financiar esta solicitud de viáticos. */
   saldoIds?: Types.ObjectId[]
+  /** Datos bancarios alternativos ingresados en la solicitud (opcionales). */
+  requestBankName?: string
+  requestAccountNumber?: string
+  requestCci?: string
 }
 
 // Umbrales de aprobación multinivel
@@ -389,6 +393,15 @@ export class Advance {
 
   @Prop({ type: [{ type: Types.ObjectId, ref: 'Saldo' }], default: undefined })
   saldoIds?: Types.ObjectId[]
+
+  @Prop({ type: String, required: false })
+  requestBankName?: string
+
+  @Prop({ type: String, required: false })
+  requestAccountNumber?: string
+
+  @Prop({ type: String, required: false })
+  requestCci?: string
 }
 
 export const AdvanceSchema = SchemaFactory.createForClass(Advance)

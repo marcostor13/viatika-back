@@ -152,43 +152,41 @@ export class AccountingEntriesService {
         : Promise.resolve(new Map<string, { cuenta9x?: string; cuenta6x?: string }>()),
     ])
 
-    // Genera todos los tipos en paralelo (ExcelJS + lógica de líneas son independientes).
-    const generated = (
-      await Promise.all(
-        tiposToGenerate.map(async (tipo) => {
-          const lines = await this.buildLinesForTipo(tipo, {
-            report,
-            config,
-            expenses,
-            advances,
-            colaborador,
-            projectMap,
-            categoryMap,
-            periodDate,
-            rateMap,
-            aiAccountsMap,
-          })
-          if (!lines.length) return null
-          const cuadreErrors = this.validateCuadre(lines)
-          const buffer = await buildContanetWorkbook(lines, 'CONTABILIDAD', tipo)
-          const filename = this.fileName(tipo, report)
-          const asientosCount = this.countAsientos(lines)
-          void this.persistCache(report, clientId, tipo, fingerprint, {
-            filename,
-            buffer,
-            asientosCount,
-            cuadreErrors,
-          })
-          return {
-            tipo,
-            filename,
-            base64: buffer.toString('base64'),
-            asientosCount,
-            cuadreErrors,
-          } as GeneratedFile
-        })
-      )
-    ).filter((f): f is GeneratedFile => f !== null)
+    // Genera tipos secuencialmente: ExcelJS carga un workbook completo en RAM por tipo,
+    // generar en paralelo multiplica el pico de memoria por N (causaba OOM a ~4 GB).
+    const generated: GeneratedFile[] = []
+    for (const tipo of tiposToGenerate) {
+      const lines = await this.buildLinesForTipo(tipo, {
+        report,
+        config,
+        expenses,
+        advances,
+        colaborador,
+        projectMap,
+        categoryMap,
+        periodDate,
+        rateMap,
+        aiAccountsMap,
+      })
+      if (!lines.length) continue
+      const cuadreErrors = this.validateCuadre(lines)
+      const buffer = await buildContanetWorkbook(lines, 'CONTABILIDAD', tipo)
+      const filename = this.fileName(tipo, report)
+      const asientosCount = this.countAsientos(lines)
+      void this.persistCache(report, clientId, tipo, fingerprint, {
+        filename,
+        buffer,
+        asientosCount,
+        cuadreErrors,
+      })
+      generated.push({
+        tipo,
+        filename,
+        base64: buffer.toString('base64'),
+        asientosCount,
+        cuadreErrors,
+      })
+    }
 
     files.push(...generated)
     return this.orderFiles(files, tipos)
@@ -649,7 +647,7 @@ export class AccountingEntriesService {
           model: this.aiModel,
           messages: [{ role: 'user', content: prompt }],
           temperature: 0,
-          max_tokens: 512,
+          max_tokens: 2048,
         },
         { timeout: 20000 }
       )

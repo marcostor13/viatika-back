@@ -24,9 +24,5 @@ jobs:
             git pull origin main
             docker compose up -d --build
             docker image prune -f
-            sudo bash -c 'cat > /etc/nginx/conf.d/viatika_timeouts.conf << "EOF"
-proxy_read_timeout 300s;
-proxy_connect_timeout 300s;
-proxy_send_timeout 300s;
-EOF'
+            printf 'proxy_read_timeout 300s;\nproxy_connect_timeout 300s;\nproxy_send_timeout 300s;\n' | sudo tee /etc/nginx/conf.d/viatika_timeouts.conf > /dev/null
             sudo nginx -t && sudo systemctl reload nginx

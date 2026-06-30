@@ -664,7 +664,12 @@ export class AccountingEntriesService {
         { timeout: 20000 }
       )
 
-      const raw = (completion.choices[0]?.message?.content || '').trim()
+      const rawContent = (completion.choices[0]?.message?.content || '').trim()
+      // DeepSeek sometimes wraps JSON in ```json...``` markdown fences — strip them.
+      const raw = rawContent
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/\s*```\s*$/i, '')
+        .trim()
       const parsed: Array<{
         idx: number
         cuenta9x?: string

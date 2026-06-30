@@ -1,5 +1,6 @@
 import {
   Controller,
+  Delete,
   Get,
   Param,
   Query,
@@ -55,6 +56,13 @@ export class AccountingEntriesController {
     @Request() req: any
   ) {
     return this.handleDownload(reportId, clientId, tipos, req)
+  }
+
+  /** Limpia la caché de asientos de una rendición (fuerza regeneración). */
+  @Delete('cache/:reportId')
+  @Roles(ROLES.CONTABILIDAD, ROLES.SUPER_ADMIN)
+  async clearCache(@Param('reportId') reportId: string) {
+    return this.service.clearCache(reportId)
   }
 
   /** Forma corta: el clientId se toma del JWT. */

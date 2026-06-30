@@ -4,6 +4,7 @@ import { EmailController } from './email.controller'
 import { MailerModule } from '@nestjs-modules/mailer'
 import { MongooseModule } from '@nestjs/mongoose'
 import { join } from 'path'
+import * as fs from 'fs'
 import { HandlebarsAdapter } from '@nestjs-modules/mailer/adapters/handlebars.adapter'
 import { Client, ClientSchema } from '../client/entities/client.entity'
 
@@ -39,7 +40,11 @@ import { Client, ClientSchema } from '../client/entities/client.entity'
             from: user,
           },
           template: {
-            dir: join(process.cwd(), 'src/modules/email/templates'),
+            dir: (() => {
+              const dist = join(process.cwd(), 'dist/modules/email/templates')
+              const src = join(process.cwd(), 'src/modules/email/templates')
+              return fs.existsSync(dist) ? dist : src
+            })(),
             adapter: new HandlebarsAdapter(),
             options: {
               strict: true,

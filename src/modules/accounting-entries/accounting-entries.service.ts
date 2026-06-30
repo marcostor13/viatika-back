@@ -176,6 +176,14 @@ export class AccountingEntriesService {
       })
       if (!lines.length) continue
       const cuadreErrors = this.validateCuadre(lines)
+      if (cuadreErrors.length) {
+        this.logger.warn(
+          `[asientos] cuadre incorrecto en tipo="${tipo}" reportId=${reportId}: ` +
+            cuadreErrors
+              .map(e => `rel=${e.relacionado} diff=${e.diferencia}`)
+              .join(', ')
+        )
+      }
       const buffer = await buildContanetWorkbook(lines, 'CONTABILIDAD', tipo)
       const filename = this.fileName(tipo, report)
       const asientosCount = this.countAsientos(lines)
@@ -192,6 +200,9 @@ export class AccountingEntriesService {
         asientosCount,
         cuadreErrors,
       })
+      // Release ExcelJS workbook memory before building the next tipo.
+      // Requires --expose-gc (set in Dockerfile CMD).
+      if (typeof (global as any).gc === 'function') (global as any).gc()
     }
 
     files.push(...generated)

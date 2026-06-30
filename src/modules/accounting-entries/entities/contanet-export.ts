@@ -24,8 +24,12 @@ export function resolveTemplatePath(tipo?: AsientoTipo): string | null {
   if (!tipo) return null
   const file = TEMPLATE_MAP[tipo]
   if (!file) return null
-  const p = path.join(process.cwd(), 'docs', 'asientos', file)
-  return fs.existsSync(p) ? p : null
+  // Assets compiled to dist/docs/asientos/ by nest-cli.json; fall back to src location for ts-node runs.
+  const candidates = [
+    path.join(process.cwd(), 'dist', 'docs', 'asientos', file),
+    path.join(process.cwd(), 'src', 'docs', 'asientos', file),
+  ]
+  return candidates.find(p => fs.existsSync(p)) ?? null
 }
 
 /** Bytes del template cacheados en memoria (se leen del disco una sola vez). */

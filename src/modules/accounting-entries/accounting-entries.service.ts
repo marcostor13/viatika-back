@@ -659,9 +659,9 @@ export class AccountingEntriesService {
           model: this.aiModel,
           messages: [{ role: 'user', content: prompt }],
           temperature: 0,
-          max_tokens: 2048,
+          max_tokens: 8192,
         },
-        { timeout: 20000 }
+        { timeout: 90000 }
       )
 
       const rawContent = (completion.choices[0]?.message?.content || '').trim()

@@ -280,6 +280,12 @@ export class AccountingEntriesService {
     }
   }
 
+  /** Elimina todas las entradas de caché de una rendición. */
+  async clearCache(reportId: string): Promise<{ deleted: number }> {
+    const result = await this.cacheModel.deleteMany({ reportId }).exec()
+    return { deleted: result.deletedCount ?? 0 }
+  }
+
   private fileName(tipo: AsientoTipo, report: any): string {
     const code =
       report.codigo || report._id?.toString()?.slice(-6) || 'rendicion'

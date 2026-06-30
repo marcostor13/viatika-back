@@ -64,6 +64,12 @@ export class AccountingEntriesService {
     const apiKey = this.configService.get<string>('DEEPSEEK_API_KEY')
     if (!apiKey) throw new Error('DEEPSEEK_API_KEY no configurada')
     this.openai = new OpenAI({ apiKey, baseURL: 'https://api.deepseek.com' })
+
+    for (const tipo of ['compra', 'aplicacion', 'reembolso'] as AsientoTipo[]) {
+      const p = resolveTemplatePath(tipo)
+      if (p) this.logger.log(`[asientos] template OK: ${p}`)
+      else this.logger.warn(`[asientos] template NO encontrado para tipo="${tipo}"`)
+    }
   }
 
   // ----------------------------------------------------------------------

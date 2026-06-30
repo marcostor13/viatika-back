@@ -25,4 +25,14 @@ jobs:
             docker compose up -d --build
             docker image prune -f
             printf 'proxy_read_timeout 300s;\nproxy_connect_timeout 300s;\nproxy_send_timeout 300s;\n' | sudo tee /etc/nginx/conf.d/viatika_timeouts.conf > /dev/null
+            SITE_CONF=$(sudo grep -rl "3016" /etc/nginx/sites-enabled/ 2>/dev/null | head -1)
+            if [ -n "$SITE_CONF" ]; then
+              if sudo grep -q "proxy_read_timeout" "$SITE_CONF"; then
+                sudo sed -i 's/proxy_read_timeout [0-9]*s;/proxy_read_timeout 300s;/g' "$SITE_CONF"
+                sudo sed -i 's/proxy_connect_timeout [0-9]*s;/proxy_connect_timeout 300s;/g' "$SITE_CONF"
+                sudo sed -i 's/proxy_send_timeout [0-9]*s;/proxy_send_timeout 300s;/g' "$SITE_CONF"
+              else
+                sudo sed -i 's|\(proxy_pass http[^;]*;\)|\1\n        proxy_read_timeout 300s;\n        proxy_connect_timeout 300s;\n        proxy_send_timeout 300s;|g' "$SITE_CONF"
+              fi
+            fi
             sudo nginx -t && sudo systemctl reload nginx

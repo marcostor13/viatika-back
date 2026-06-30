@@ -996,6 +996,8 @@ export class EmailService {
       cci?: string
       hasBankAccount: boolean
       platformUrl?: string
+      viaticoStartDate?: Date
+      viaticoEndDate?: Date
     }
   ) {
     console.log(`[EMAIL] sendViaticoAprobadoTesoreria -> ${email}`)
@@ -1010,6 +1012,8 @@ export class EmailService {
           year: new Date().getFullYear(),
           ...rest,
           platformUrl: this.resolvePlatformHref(platformUrl),
+          viaticoStartDate: this.formatDateDDMMYYYY(data.viaticoStartDate),
+          viaticoEndDate: this.formatDateDDMMYYYY(data.viaticoEndDate),
         },
       })
       console.log(`[EMAIL] sendViaticoAprobadoTesoreria ENVIADO a ${email}`)

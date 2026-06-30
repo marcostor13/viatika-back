@@ -3932,6 +3932,8 @@ export class ExpenseReportService implements OnModuleInit {
             accountNumber: bank?.accountNumber || undefined,
             cci: bank?.cci || undefined,
             platformUrl,
+            viaticoStartDate: report.viaticoStartDate,
+            viaticoEndDate: report.viaticoEndDate,
           })
           console.log(`[TESORERÍA VIÁTICO] Enviado a ${tesoEmail} OK`)
         }

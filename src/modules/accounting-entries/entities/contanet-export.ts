@@ -138,52 +138,53 @@ export async function buildContanetWorkbook(
   const templatePath = resolveTemplatePath(tipo)
 
   if (templatePath) {
-    const workbook = new ExcelJS.Workbook()
-    await workbook.xlsx.load(readTemplateBuffer(templatePath) as any)
+    // Use `let` so we can null the workbook in finally to help GC
+    // release the large in-memory DOM before the next tipo iteration.
+    let workbook: ExcelJS.Workbook | null = new ExcelJS.Workbook()
+    try {
+      await workbook.xlsx.load(readTemplateBuffer(templatePath) as any)
 
-    const worksheet = workbook.getWorksheet(sheetName)
+      const worksheet = workbook.getWorksheet(sheetName)
 
-    if (worksheet) {
-      // Columna D = índice 4 en ExcelJS (1-based).
-      // FIRST_DATA_COL_INDEX = 3 (0-based) → +1 = 4 (1-based).
-      const firstCol = FIRST_DATA_COL_INDEX + 1
-      const lastRow = worksheet.lastRow?.number ?? 8
+      if (worksheet) {
+        const firstCol = FIRST_DATA_COL_INDEX + 1
+        const lastRow = worksheet.lastRow?.number ?? 8
 
-      // Capturar estilos de la primera fila de datos antes de borrarla,
-      // para replicarlos en las filas inyectadas (fuente, alineación, formato).
-      const refStyles: Array<Record<string, any>> = []
-      if (lastRow >= 9) {
-        const refRow = worksheet.getRow(9)
-        CONTANET_COLUMNS.forEach((_, colIdx) => {
-          const cell = refRow.getCell(firstCol + colIdx)
-          refStyles.push({
-            font: cell.font ? { ...cell.font } : undefined,
-            alignment: cell.alignment ? { ...cell.alignment } : undefined,
-            numFmt: cell.numFmt || undefined,
+        const refStyles: Array<Record<string, any>> = []
+        if (lastRow >= 9) {
+          const refRow = worksheet.getRow(9)
+          CONTANET_COLUMNS.forEach((_, colIdx) => {
+            const cell = refRow.getCell(firstCol + colIdx)
+            refStyles.push({
+              font: cell.font ? { ...cell.font } : undefined,
+              alignment: cell.alignment ? { ...cell.alignment } : undefined,
+              numFmt: cell.numFmt || undefined,
+            })
           })
+          worksheet.spliceRows(9, lastRow - 8)
+        }
+
+        lines.forEach((line, idx) => {
+          const row = worksheet.getRow(9 + idx)
+          CONTANET_COLUMNS.forEach((col, colIdx) => {
+            const v = line[col.key]
+            const cell = row.getCell(firstCol + colIdx)
+            cell.value = v === undefined || v === null ? null : v
+            const style = refStyles[colIdx]
+            if (style) {
+              if (style.font) cell.font = style.font
+              if (style.alignment) cell.alignment = style.alignment
+              if (style.numFmt) cell.numFmt = style.numFmt
+            }
+          })
+          row.commit()
         })
-        worksheet.spliceRows(9, lastRow - 8)
+
+        const rawBuffer = await workbook.xlsx.writeBuffer()
+        return Buffer.from(rawBuffer as ArrayBuffer)
       }
-
-      // Inyectar filas de datos a partir de la fila 9.
-      lines.forEach((line, idx) => {
-        const row = worksheet.getRow(9 + idx)
-        CONTANET_COLUMNS.forEach((col, colIdx) => {
-          const v = line[col.key]
-          const cell = row.getCell(firstCol + colIdx)
-          cell.value = v === undefined || v === null ? null : v
-          const style = refStyles[colIdx]
-          if (style) {
-            if (style.font) cell.font = style.font
-            if (style.alignment) cell.alignment = style.alignment
-            if (style.numFmt) cell.numFmt = style.numFmt
-          }
-        })
-        row.commit()
-      })
-
-      const buffer = await workbook.xlsx.writeBuffer()
-      return Buffer.from(buffer as ArrayBuffer)
+    } finally {
+      workbook = null
     }
   }
 

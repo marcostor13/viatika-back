@@ -54,3 +54,5 @@ export const AccountingEntriesCacheSchema = SchemaFactory.createForClass(
 
 // Una entrada por (rendición, tipo). El fingerprint se actualiza in-place.
 AccountingEntriesCacheSchema.index({ reportId: 1, tipo: 1 }, { unique: true })
+// Entradas expiradas se eliminan automáticamente después de 90 días.
+AccountingEntriesCacheSchema.index({ createdAt: 1 }, { expireAfterSeconds: 90 * 24 * 3600 })

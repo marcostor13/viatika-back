@@ -996,20 +996,31 @@ export class EmailService {
       cci?: string
       hasBankAccount: boolean
       platformUrl?: string
+      urgent?: boolean
+      urgentBanner?: string
+      viaticoStartDate?: Date
+      viaticoEndDate?: Date
     }
   ) {
     console.log(`[EMAIL] sendViaticoAprobadoTesoreria -> ${email}`)
     try {
       const { platformUrl, ...rest } = data
+      const prefix = data.urgent ? '[🔴 URGENTE] ' : ''
       await this.send({
         to: email,
-        subject: `Viatico aprobado - Pendiente de pago — ${data.advanceDescription}`,
+        subject: `${prefix}Viatico aprobado - Pendiente de pago — ${data.advanceDescription}`,
         template: './viatico-aprobado-tesoreria',
+        // Prioridad alta nativa del correo: nodemailer emite los headers
+        // X-Priority: 1, X-MSMail-Priority: High e Importance: High, que hacen
+        // que Outlook/clientes muestren el "!" rojo de alta importancia.
+        ...(data.urgent ? { priority: 'high' as const } : {}),
         context: {
           logoUrl: await this.resolveLogoUrl(this.extractClientId(data)),
           year: new Date().getFullYear(),
           ...rest,
           platformUrl: this.resolvePlatformHref(platformUrl),
+          viaticoStartDate: this.formatDateDDMMYYYY(data.viaticoStartDate),
+          viaticoEndDate: this.formatDateDDMMYYYY(data.viaticoEndDate),
         },
       })
       console.log(`[EMAIL] sendViaticoAprobadoTesoreria ENVIADO a ${email}`)

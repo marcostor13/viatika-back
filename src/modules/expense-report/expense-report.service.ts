@@ -3480,6 +3480,19 @@ export class ExpenseReportService implements OnModuleInit {
     return x
   }
 
+  /**
+   * Urgente si la fecha de inicio del viaje es hoy o mañana. Se evalúa al momento
+   * de enviar el correo a tesorería (aprobación del viático), no por cron.
+   */
+  private isViaticoTravelStartUrgent(start?: Date): boolean {
+    if (!start) return false
+    const s = this.viaticoStartOfDay(new Date(start))
+    const t = this.viaticoStartOfDay(new Date())
+    const tomorrow = new Date(t)
+    tomorrow.setDate(tomorrow.getDate() + 1)
+    return s.getTime() === t.getTime() || s.getTime() === tomorrow.getTime()
+  }
+
   private viaticoFormatMoney(value: number): string {
     if (!Number.isFinite(value)) return '0.00'
     return value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -3917,6 +3930,10 @@ export class ExpenseReportService implements OnModuleInit {
         }
 
         const platformUrl = this.emailService.buildAppUrl('/tesoreria')
+        const urgent = this.isViaticoTravelStartUrgent(report.viaticoStartDate)
+        const urgentBanner =
+          '🟥 URGENTE: la fecha de inicio del viaje es hoy o mañana. Priorizar la gestión de desembolso al colaborador.'
+        console.log(`[TESORERÍA VIÁTICO] viaticoStartDate=${report.viaticoStartDate?.toISOString?.() ?? report.viaticoStartDate}, urgent=${urgent}`)
         for (const tesoEmail of tesoreriaEmails) {
           console.log(`[TESORERÍA VIÁTICO] Enviando a ${tesoEmail}...`)
           await this.emailService.sendViaticoAprobadoTesoreria(tesoEmail, {
@@ -3932,6 +3949,10 @@ export class ExpenseReportService implements OnModuleInit {
             accountNumber: bank?.accountNumber || undefined,
             cci: bank?.cci || undefined,
             platformUrl,
+            urgent,
+            urgentBanner,
+            viaticoStartDate: report.viaticoStartDate,
+            viaticoEndDate: report.viaticoEndDate,
           })
           console.log(`[TESORERÍA VIÁTICO] Enviado a ${tesoEmail} OK`)
         }

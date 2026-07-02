@@ -75,6 +75,25 @@ export interface ExpenseAnalyticDetail {
   monto: number
 }
 
+/**
+ * Clasificación de un cargo del comprobante distinto al IGV
+ * (otrosTributos/otrosCargos) para los asientos contables.
+ */
+export interface ExpenseCargoClasificado {
+  /** Origen del cargo: 'otrosTributos' | 'otrosCargos'. */
+  concepto: string
+  monto: number
+  deducible: boolean
+  /** Serie de control interno (0001/0003/0008) cuando NO es deducible. */
+  serieControlInterno?: string
+}
+
+/** Resultado de clasificación persistido; `hash` invalida si cambian los cargos. */
+export interface ExpenseCargosClasificacion {
+  hash: string
+  cargos: ExpenseCargoClasificado[]
+}
+
 export interface ExpenseDocument extends Document {
   proyectId: Types.ObjectId
   total: number
@@ -124,6 +143,11 @@ export interface ExpenseDocument extends Document {
    * parámetros de la factura peruana (totales, tributos, ítems, detracción, etc.).
    */
   comprobanteDetallado?: Record<string, any>
+  /**
+   * Clasificación (IA/determinista) de cargos ≠ IGV, cacheada por hash para
+   * no volver a consultar a la IA en cada generación de asientos.
+   */
+  otrosCargosClasificacion?: ExpenseCargosClasificacion
 }
 
 export interface GetExpenseDocument extends Omit<ExpenseDocument, '_id'> {
@@ -347,6 +371,9 @@ export class Expense {
 
   @Prop({ type: Object, required: false })
   comprobanteDetallado?: Record<string, any>
+
+  @Prop({ type: Object, required: false })
+  otrosCargosClasificacion?: ExpenseCargosClasificacion
 }
 
 export const ExpenseSchema = SchemaFactory.createForClass(Expense)

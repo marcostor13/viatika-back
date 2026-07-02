@@ -25,7 +25,15 @@ import {
   GeneratedFile,
 } from './entities/accounting-entries.types'
 import { AccountingEntriesCache } from './entities/accounting-entries-cache.entity'
-import { buildPcgeAccountsPrompt } from './constants/pcge-prompt'
+import { resolveCodTipDoc, TIPO_DOCUMENTO } from './constants/tipo-documento'
+import {
+  buildDeducibilidadPrompt,
+  CargoContext,
+} from './constants/deducibilidad-prompt'
+import {
+  ExpenseCargoClasificado,
+  ExpenseCargosClasificacion,
+} from '../expense/entities/expense.entity'
 
 /** Porción analítica resuelta para una línea de gasto. */
 interface AnalyticPortion {
@@ -34,7 +42,15 @@ interface AnalyticPortion {
   monto: number
   /** Etiqueta opcional (ej. "RECARGO DE CONSUMO") para la glosa de la línea. */
   etiqueta?: string
+  /**
+   * Serie de control interno (0001/0003/0008) cuando la porción es un gasto
+   * NO deducible: va en "Numero Documento" con "Codigo Tipo Document" vacío.
+   */
+  serieNoDeducible?: string
 }
+
+/** Series de control interno de gastos no deducibles (nodeducible.md). */
+const SERIES_NO_DEDUCIBLE = new Set(['0001', '0003', '0008'])
 
 @Injectable()
 export class AccountingEntriesService {
@@ -149,13 +165,13 @@ export class AccountingEntriesService {
 
     const periodDate = this.resolvePeriodDate(report, advances)
 
-    // prefetchRates (API externa) y resolveAccounts6x (OpenAI) son independientes:
-    // correrlos en paralelo reduce el tiempo de espera de ~40 s a ~20 s.
-    const [rateMap, aiAccountsMap] = await Promise.all([
+    // prefetchRates (API externa) y la clasificación de cargos ≠ IGV (IA solo
+    // si hay cargos desconocidos sin clasificar) son independientes: en paralelo.
+    const [rateMap, cargosMap] = await Promise.all([
       this.prefetchRates(report, expenses, advances, config),
       tiposToGenerate.includes('compra') && expenses.length > 0
-        ? this.resolveAccounts6x(expenses, categoryMap)
-        : Promise.resolve(new Map<string, { cuenta9x?: string; cuenta6x?: string }>()),
+        ? this.resolveCargosClasificacion(expenses)
+        : Promise.resolve(new Map<string, ExpenseCargoClasificado[]>()),
     ])
 
     // Genera tipos secuencialmente: ExcelJS carga un workbook completo en RAM por tipo,
@@ -172,7 +188,7 @@ export class AccountingEntriesService {
         categoryMap,
         periodDate,
         rateMap,
-        aiAccountsMap,
+        cargosMap,
       })
       if (!lines.length) continue
       const cuadreErrors = this.validateCuadre(lines)
@@ -369,7 +385,7 @@ export class AccountingEntriesService {
       categoryMap: Map<string, any>
       periodDate: Date
       rateMap: Map<string, number>
-      aiAccountsMap: Map<string, { cuenta9x?: string; cuenta6x?: string }>
+      cargosMap: Map<string, ExpenseCargoClasificado[]>
     }
   ): Promise<ContanetLine[]> {
     switch (tipo) {
@@ -458,11 +474,15 @@ export class AccountingEntriesService {
   }
 
   /**
-   * Resuelve las porciones analíticas de un comprobante.
+   * Resuelve las porciones analíticas de un comprobante (factura).
    * Prioridad: (1) detalleAnalitico explícito, (2) totales de `comprobanteDetallado`
-   * (gravada/exonerada/inafecta + recargo al consumo), (3) base/IGV/inafecto sueltos.
+   * (gravada/exonerada/inafecta + recargo al consumo + ISC/ICBPER deterministas
+   * + otros cargos clasificados), (3) base/IGV/inafecto sueltos.
    */
-  private resolvePortions(expense: any): AnalyticPortion[] {
+  private resolvePortions(
+    expense: any,
+    cargosClasificados: ExpenseCargoClasificado[] = []
+  ): AnalyticPortion[] {
     const proyectId = expense.proyectId?.toString()
 
     // (1) Detalle explícito (corregido por Contabilidad)
@@ -518,6 +538,44 @@ export class AccountingEntriesService {
         monto: this.round2(recargo),
         etiqueta: 'RECARGO DE CONSUMO',
       })
+
+    // Cargos ≠ IGV deterministas (sin IA): ISC e ICBPER son deducibles y van
+    // con la misma cuenta de la categoría, como porciones inafectas.
+    const isc = num(tot.isc)
+    const icbper = num(tot.icbper)
+    if (isc > 0)
+      portions.push({
+        proyectId,
+        condicion: 'inafecto',
+        monto: this.round2(isc),
+        etiqueta: 'ISC',
+      })
+    if (icbper > 0)
+      portions.push({
+        proyectId,
+        condicion: 'inafecto',
+        monto: this.round2(icbper),
+        etiqueta: 'ICBPER',
+      })
+
+    // Otros cargos (otrosTributos/otrosCargos) según su clasificación:
+    // deducible → porción normal; no deducible → serie de control interno.
+    for (const cargo of cargosClasificados) {
+      if (cargo.monto <= 0) continue
+      portions.push({
+        proyectId,
+        condicion: 'inafecto',
+        monto: this.round2(cargo.monto),
+        etiqueta: cargo.deducible
+          ? cargo.concepto === 'otrosTributos'
+            ? 'OTROS TRIBUTOS'
+            : 'OTROS CARGOS'
+          : 'NO DEDUCIBLE',
+        ...(cargo.deducible
+          ? {}
+          : { serieNoDeducible: cargo.serieControlInterno || '0001' }),
+      })
+    }
     if (portions.length) return portions
 
     // (3) Respaldo: base/IGV/inafecto sueltos o solo el total
@@ -545,6 +603,30 @@ export class AccountingEntriesService {
         monto: this.round2(total),
       })
     return portions
+  }
+
+  /**
+   * Porciones de un documento SIN derecho a crédito fiscal (boleta, ticket,
+   * planilla de movilidad, recibos, DJ, otros): todo el importe es gasto.
+   * El detalleAnalitico explícito (corregido por Contabilidad) sigue mandando.
+   */
+  private resolveNonFacturaPortions(expense: any): AnalyticPortion[] {
+    const proyectId = expense.proyectId?.toString()
+    const detalle: AnalyticPortion[] = (expense.detalleAnalitico ?? []).map(
+      (d: any) => ({
+        proyectId: d.proyectId?.toString() || proyectId,
+        condicion: d.condicion === 'inafecto' ? 'inafecto' : 'afecto',
+        monto: this.round2(Number(d.monto) || 0),
+      })
+    )
+    if (detalle.length) return detalle
+
+    const det = expense.comprobanteDetallado ?? {}
+    const total = this.round2(
+      Number(expense.total) || Number(det?.totales?.importeTotal) || 0
+    )
+    if (total <= 0) return []
+    return [{ proyectId, condicion: 'inafecto', monto: total }]
   }
 
   private round2(n: number): number {
@@ -629,88 +711,172 @@ export class AccountingEntriesService {
   }
 
   // ----------------------------------------------------------------------
-  // AI — Resolución de cuentas 9X/6X via PCGE Peru (DeepSeek)
+  // Cargos ≠ IGV — clasificación de deducibilidad (IA solo si es necesario)
   // ----------------------------------------------------------------------
 
   /**
-   * Determina las cuentas PCGE 91.x (analítica) y 63.x (destino) para cada gasto usando IA.
-   * Envía un único request a DeepSeek con todos los comprobantes de la rendición.
-   * Si el AI falla, retorna el mapa vacío y se usarán los fallbacks de categoría/config.
+   * Cargos del comprobante que requieren clasificación de deducibilidad.
+   * `recargoConsumo`, `isc` e `icbper` NO pasan por aquí: son deducibles por
+   * regla determinista y se resuelven directo en `resolvePortions`.
    */
-  private async resolveAccounts6x(
-    expenses: any[],
-    categoryMap: Map<string, any>
-  ): Promise<Map<string, { cuenta9x?: string; cuenta6x?: string }>> {
-    const result = new Map<string, { cuenta9x?: string; cuenta6x?: string }>()
-    if (!expenses.length) return result
+  private extractCargosDesconocidos(
+    expense: any
+  ): Array<{ concepto: string; monto: number }> {
+    const tot = expense?.comprobanteDetallado?.totales ?? {}
+    const num = (v: unknown) => (typeof v === 'number' ? v : Number(v) || 0)
+    const out: Array<{ concepto: string; monto: number }> = []
+    const otrosTributos = this.round2(num(tot.otrosTributos))
+    const otrosCargos = this.round2(num(tot.otrosCargos))
+    if (otrosTributos > 0)
+      out.push({ concepto: 'otrosTributos', monto: otrosTributos })
+    if (otrosCargos > 0) out.push({ concepto: 'otrosCargos', monto: otrosCargos })
+    return out
+  }
 
-    const contexts = expenses.map((expense, i) => {
-      const category = expense.categoryId
-        ? categoryMap.get(expense.categoryId.toString())
-        : undefined
-      const det = expense.comprobanteDetallado ?? {}
-      const items: string[] = (det.items ?? [])
-        .map((it: any) => (it.descripcion || '').trim())
-        .filter(Boolean)
-      return {
-        idx: i + 1,
-        expenseId: expense._id.toString(),
-        categoria: category?.name || 'Sin categoría',
-        cuenta9xConfigurada: category?.cuenta || '',
-        descripcion: expense.comentario || '',
-        items,
+  /** Hash de los cargos: si no cambian, la clasificación persistida sigue válida. */
+  private cargosHash(cargos: Array<{ concepto: string; monto: number }>): string {
+    return createHash('sha1').update(JSON.stringify(cargos)).digest('hex')
+  }
+
+  /**
+   * Clasifica los cargos ≠ IGV de las facturas de la rendición.
+   * Orden de resolución (para minimizar IA):
+   *  1. Sin cargos desconocidos → nada que hacer (caso común, 0 IA).
+   *  2. Clasificación ya persistida en el expense con el mismo hash → reuso.
+   *  3. Restantes → UN solo request batcheado a DeepSeek; el veredicto se
+   *     persiste en el expense (sin tocar updatedAt, no invalida la caché).
+   * Si la IA falla, los cargos se tratan como deducibles (revisión manual).
+   */
+  private async resolveCargosClasificacion(
+    expenses: any[]
+  ): Promise<Map<string, ExpenseCargoClasificado[]>> {
+    const map = new Map<string, ExpenseCargoClasificado[]>()
+    const pendientes: Array<{
+      expense: any
+      cargos: Array<{ concepto: string; monto: number }>
+      hash: string
+    }> = []
+
+    for (const expense of expenses) {
+      if (expense.expenseType && expense.expenseType !== 'factura') continue
+      const cargos = this.extractCargosDesconocidos(expense)
+      if (!cargos.length) continue
+      const hash = this.cargosHash(cargos)
+      const stored: ExpenseCargosClasificacion | undefined =
+        expense.otrosCargosClasificacion
+      if (stored?.hash === hash && Array.isArray(stored.cargos)) {
+        map.set(expense._id.toString(), stored.cargos)
+      } else {
+        pendientes.push({ expense, cargos, hash })
       }
-    })
+    }
+    if (!pendientes.length) return map
 
-    const prompt = buildPcgeAccountsPrompt(contexts)
+    // Contexto por cargo para el prompt (idx global sobre todos los pendientes).
+    const contexts: CargoContext[] = []
+    const owners: Array<{ pendiente: (typeof pendientes)[0]; cargoIdx: number }> =
+      []
+    for (const pendiente of pendientes) {
+      const det = pendiente.expense.comprobanteDetallado ?? {}
+      const items: string[] = (det.items ?? [])
+        .map((it: any) => String(it?.descripcion || '').trim())
+        .filter(Boolean)
+      pendiente.cargos.forEach((cargo, cargoIdx) => {
+        contexts.push({
+          idx: contexts.length + 1,
+          concepto: cargo.concepto,
+          monto: cargo.monto,
+          proveedor: det?.emisor?.razonSocial || '',
+          descripcion: pendiente.expense.comentario || '',
+          items,
+          leyendas: det?.leyendas || '',
+          observaciones: det?.observaciones || '',
+        })
+        owners.push({ pendiente, cargoIdx })
+      })
+    }
+
+    // Por defecto (o si la IA falla): deducible, sin serie de control.
+    const verdicts: Array<{ deducible: boolean; serie?: string }> =
+      contexts.map(() => ({ deducible: true }))
 
     try {
       const completion = await this.openai.chat.completions.create(
         {
           model: this.aiModel,
-          messages: [{ role: 'user', content: prompt }],
+          messages: [
+            { role: 'user', content: buildDeducibilidadPrompt(contexts) },
+          ],
           temperature: 0,
-          max_tokens: 8192,
+          max_tokens: 4096,
         },
-        { timeout: 90000 }
+        { timeout: 60000 }
       )
-
       const rawContent = (completion.choices[0]?.message?.content || '').trim()
-      // DeepSeek sometimes wraps JSON in ```json...``` markdown fences — strip them.
       const raw = rawContent
         .replace(/^```(?:json)?\s*/i, '')
         .replace(/\s*```\s*$/i, '')
         .trim()
-      const parsed: Array<{
-        idx: number
-        cuenta9x?: string
-        cuenta6x?: string
-      }> = JSON.parse(raw)
-
-      const accountPattern = /^\d{2}\.\d+\.\d+\.\d+$/
+      const parsed: Array<{ idx: number; deducible?: boolean; serie?: string }> =
+        JSON.parse(raw)
       for (const entry of parsed) {
-        const ctx = contexts[entry.idx - 1]
-        if (!ctx) continue
-        const resolved: { cuenta9x?: string; cuenta6x?: string } = {}
-        if (entry.cuenta9x && accountPattern.test(entry.cuenta9x))
-          resolved.cuenta9x = entry.cuenta9x
-        if (entry.cuenta6x && accountPattern.test(entry.cuenta6x))
-          resolved.cuenta6x = entry.cuenta6x
-        if (resolved.cuenta9x || resolved.cuenta6x) {
-          result.set(ctx.expenseId, resolved)
+        const verdict = verdicts[entry.idx - 1]
+        if (!verdict) continue
+        if (entry.deducible === false) {
+          const serie = String(entry.serie || '')
+          verdict.deducible = false
+          verdict.serie = SERIES_NO_DEDUCIBLE.has(serie) ? serie : '0001'
         }
       }
-
       this.logger.log(
-        `AI resolvió cuentas para ${result.size}/${expenses.length} comprobantes`
+        `[asientos] IA clasificó deducibilidad de ${contexts.length} cargos`
       )
     } catch (error) {
       this.logger.warn(
-        `AI no pudo resolver cuentas: ${error?.message}. Se usarán fallbacks de categoría.`
+        `[asientos] IA no pudo clasificar cargos: ${(error as Error)?.message}. ` +
+          'Se tratan como deducibles.'
       )
     }
 
-    return result
+    // Agrupa por expense, alimenta el mapa y persiste (best-effort).
+    const byExpense = new Map<string, ExpenseCargoClasificado[]>()
+    owners.forEach(({ pendiente, cargoIdx }, i) => {
+      const id = pendiente.expense._id.toString()
+      const list = byExpense.get(id) ?? []
+      const cargo = pendiente.cargos[cargoIdx]
+      const verdict = verdicts[i]
+      list.push({
+        concepto: cargo.concepto,
+        monto: cargo.monto,
+        deducible: verdict.deducible,
+        ...(verdict.serie ? { serieControlInterno: verdict.serie } : {}),
+      })
+      byExpense.set(id, list)
+    })
+    for (const pendiente of pendientes) {
+      const id = pendiente.expense._id.toString()
+      const cargos = byExpense.get(id) ?? []
+      map.set(id, cargos)
+      // timestamps:false — no altera updatedAt, así el fingerprint de la caché
+      // de asientos no se invalida por esta escritura interna.
+      void this.expenseModel
+        .updateOne(
+          { _id: pendiente.expense._id },
+          {
+            $set: {
+              otrosCargosClasificacion: { hash: pendiente.hash, cargos },
+            },
+          },
+          { timestamps: false }
+        )
+        .exec()
+        .catch((error: Error) =>
+          this.logger.warn(
+            `[asientos] no se pudo persistir clasificación de cargos: ${error.message}`
+          )
+        )
+    }
+    return map
   }
 
   // ----------------------------------------------------------------------
@@ -725,7 +891,7 @@ export class AccountingEntriesService {
     categoryMap: Map<string, any>
     periodDate: Date
     rateMap: Map<string, number>
-    aiAccountsMap: Map<string, { cuenta9x?: string; cuenta6x?: string }>
+    cargosMap: Map<string, ExpenseCargoClasificado[]>
   }): Promise<ContanetLine[]> {
     const {
       config,
@@ -735,7 +901,7 @@ export class AccountingEntriesService {
       categoryMap,
       periodDate,
       rateMap,
-      aiAccountsMap,
+      cargosMap,
     } = ctx
     const lines: ContanetLine[] = []
     let relacionado = 1
@@ -746,32 +912,46 @@ export class AccountingEntriesService {
       const det = expense.comprobanteDetallado ?? {}
       const date = this.asientoDate(expense, report)
       const tc = this.tcFor(date, rateMap, config)
+      const num = (v: unknown) => (typeof v === 'number' ? v : Number(v) || 0)
 
-      // Cuenta 9X analítica: categoría configurada → AI → vacío (se omite el bloque 9X).
-      // Cuenta 6X destino: AI → category.cuentaDestino6x → config.cuenta79 (fallback).
+      // Tipo de documento Contanet (codigos.md). Solo la factura (01) otorga
+      // crédito fiscal; boletas/tickets/planillas/recibos van íntegros al gasto.
+      const codTipDoc = resolveCodTipDoc(expense, data.tipoComprobante)
+      const esFactura = codTipDoc === TIPO_DOCUMENTO.FT
+
+      // Cuenta principal: SIEMPRE de la categoría seleccionada en el documento.
+      // Destino 6X: category.cuentaDestino6x → config.cuenta79 (fallback).
       const category = expense.categoryId
         ? categoryMap.get(expense.categoryId.toString())
         : undefined
-      const aiAccounts = aiAccountsMap.get(expense._id.toString())
-      const cuenta9x = category?.cuenta || aiAccounts?.cuenta9x || ''
-      const cuenta6xCat =
-        aiAccounts?.cuenta6x ||
-        category?.cuentaDestino6x ||
-        config.cuenta79
+      const cuenta9x = category?.cuenta || ''
+      const cuenta6xCat = category?.cuentaDestino6x || config.cuenta79
 
       // Centro de costo del proyecto del gasto (aplica a todas las líneas).
       const expenseProject = expense.proyectId
         ? projectMap.get(expense.proyectId.toString())
         : undefined
 
-      const igv = this.round2(
-        Number(expense.igv) || Number(det?.totales?.igv) || 0
-      )
-      const portions = this.resolvePortions(expense)
+      // IGV: solo la factura da derecho a crédito fiscal (línea 40). Si
+      // Contabilidad revisó el desglose manualmente, sus valores ganan; si no,
+      // manda `comprobanteDetallado`.
+      const igv = !esFactura
+        ? 0
+        : this.round2(
+            expense.desgloseRevisado
+              ? Number(expense.igv) || 0
+              : num(det?.totales?.igv) || Number(expense.igv) || 0
+          )
+      const cargos = esFactura
+        ? (cargosMap.get(expense._id.toString()) ?? [])
+        : []
+      const portions = esFactura
+        ? this.resolvePortions(expense, cargos)
+        : this.resolveNonFacturaPortions(expense)
       const baseTotal = this.round2(portions.reduce((s, p) => s + p.monto, 0))
       const total = this.round2(
-        Number(expense.total) ||
-          Number(det?.totales?.importeTotal) ||
+        num(det?.totales?.importeTotal) ||
+          Number(expense.total) ||
           baseTotal + igv
       )
 
@@ -800,10 +980,15 @@ export class AccountingEntriesService {
         lines.push(line)
       }
 
-      // (1) Cuentas 9X — analítica por porción (Debe); omitir si no hay cuenta configurada
+      // (1) Cuentas 9X — analítica por porción (Debe); omitir si no hay cuenta configurada.
+      // Porción NO deducible: "Codigo Tipo Document" vacío y la serie de control
+      // interno (0001/0003/0008) en "Numero Documento" (nodeducible.md).
       if (cuenta9x) {
         for (const p of portions) {
           const glosa = p.etiqueta ? `${glosaBase} (${p.etiqueta})` : glosaBase
+          const docFields = p.serieNoDeducible
+            ? { codTipDoc: '', nroSerie: '', nroDoc: p.serieNoDeducible }
+            : { codTipDoc, nroSerie: serie, nroDoc }
           push(
             this.baseLine(
               config,
@@ -814,9 +999,7 @@ export class AccountingEntriesService {
               periodDate,
               {
                 nroCuenta: cuenta9x,
-                codTipDoc: '01',
-                nroSerie: serie,
-                nroDoc,
+                ...docFields,
                 identTipAfecto: p.condicion === 'afecto' ? 'S' : 'N',
                 montoDebe: this.round2(p.monto),
                 montoDebeME: this.toME(p.monto, tc),
@@ -826,7 +1009,7 @@ export class AccountingEntriesService {
         }
       }
 
-      // (2) Cuenta 40 — IGV (Debe), si aplica
+      // (2) Cuenta 40 — IGV (Debe), solo facturas con IGV
       if (igv > 0) {
         const cuenta40 = this.resolveCuenta40(config, expense.tasaIgv)
         push(
@@ -839,7 +1022,7 @@ export class AccountingEntriesService {
             periodDate,
             {
               nroCuenta: cuenta40,
-              codTipDoc: '01',
+              codTipDoc,
               nroSerie: serie,
               nroDoc,
               montoDebe: igv,
@@ -860,7 +1043,7 @@ export class AccountingEntriesService {
           periodDate,
           {
             nroCuenta: config.cuenta42,
-            codTipDoc: '01',
+            codTipDoc,
             nroSerie: serie,
             nroDoc,
             montoHaber: total,
@@ -1037,8 +1220,10 @@ export class AccountingEntriesService {
       const det = expense.comprobanteDetallado ?? {}
       const date = this.asientoDate(expense, report)
       const tc = this.tcFor(date, rateMap, config)
+      // Mismo total que el asiento de compra (comprobanteDetallado primero)
+      // para que compra y aplicación descarguen importes idénticos.
       const total = this.round2(
-        Number(expense.total) || Number(det?.totales?.importeTotal) || 0
+        Number(det?.totales?.importeTotal) || Number(expense.total) || 0
       )
       if (total <= 0) continue
       const ruc = det?.emisor?.ruc || data.rucEmisor || ''
@@ -1048,6 +1233,7 @@ export class AccountingEntriesService {
         expense.providerName ||
         ''
       const glosa = 'APLICACION'
+      const codTipDoc = resolveCodTipDoc(expense, data.tipoComprobante)
 
       // 42 (Debe) — cancela la provisión del proveedor
       lines.push({
@@ -1060,7 +1246,7 @@ export class AccountingEntriesService {
           periodDate,
           {
             nroCuenta: config.cuenta42,
-            codTipDoc: '01',
+            codTipDoc,
             nroSerie: det?.comprobante?.serie || data.serie || '',
             nroDoc: det?.comprobante?.correlativo || data.correlativo || '',
             montoDebe: total,

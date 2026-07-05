@@ -25,8 +25,10 @@ export class CreateProjectDto {
   @IsOptional()
   lineaNegocioId?: string
 
+  // Obligatorio en el endpoint HTTP (@IsNotEmpty rechaza vacío/ausente).
+  // El tipo se deja opcional para no romper llamadas directas internas (seed, tests).
   @IsString()
-  @IsOptional()
+  @IsNotEmpty({ message: 'El perfil de categoría es obligatorio' })
   categoryGroupId?: string
 
   // --- Mapeo contable (asientos Contanet) ---

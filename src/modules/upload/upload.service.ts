@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common'
 import {
   DeleteObjectCommand,
+  GetObjectCommand,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3'
@@ -97,6 +98,48 @@ export class UploadService {
     } catch (error) {
       throw new Error(`Error al subir el archivo a S3: ${error.message}`)
     }
+  }
+
+  /** Sube un buffer arbitrario (ej. .xlsx) con el content-type indicado. */
+  async uploadBuffer(file: Buffer, key: string, contentType: string) {
+    const bucketName = this.getBucketName()
+
+    const command = new PutObjectCommand({
+      Bucket: bucketName,
+      Key: key,
+      Body: file,
+      ContentType: contentType,
+    })
+
+    try {
+      await this.s3Client.send(command)
+    } catch (error) {
+      throw new Error(`Error al subir el archivo a S3: ${error.message}`)
+    }
+  }
+
+  /**
+   * URL firmada de lectura (no requiere que el bucket sea público). Se usa
+   * para documentos sensibles como los archivos de asientos contables.
+   * `ResponseContentDisposition` fuerza la descarga con el nombre dado en
+   * vez de que el navegador intente abrir el archivo inline.
+   */
+  async getPresignedDownloadUrl(
+    key: string,
+    downloadFilename?: string,
+    expiresIn = 300
+  ): Promise<string> {
+    const bucketName = this.getBucketName()
+    const command = new GetObjectCommand({
+      Bucket: bucketName,
+      Key: key,
+      ...(downloadFilename
+        ? {
+            ResponseContentDisposition: `attachment; filename="${downloadFilename}"`,
+          }
+        : {}),
+    })
+    return getSignedUrl(this.s3Client, command, { expiresIn })
   }
 
   async getPresignedUploadUrl(

@@ -1,6 +1,11 @@
 import { AccountingEntriesService } from './accounting-entries.service'
 import { ContanetLine } from './entities/contanet-columns'
-import { buildContanetAoa } from './entities/contanet-export'
+import {
+  buildContanetAoa,
+  generateContanetExcel,
+  resolveTemplatePath,
+} from './entities/contanet-export'
+import * as XLSX from 'xlsx'
 
 /**
  * Config de prueba que replica los valores del template `compras.xlsm`.
@@ -603,4 +608,44 @@ describe('Export Contanet — cabeceras (replica sheet1)', () => {
     expect(aoa[8][D]).toBe(1)
     expect(aoa[8][D + 1]).toBe(1)
   })
+})
+
+describe('generateContanetExcel — formato según el modo de la empresa', () => {
+  const lines: ContanetLine[] = [
+    { correlativo: 1, relacionado: 1, nroCuenta: '91.3.1.513', glosa: 'PEAJE & <CIA>', montoDebe: 5.34 },
+    { correlativo: 2, relacionado: 1, nroCuenta: '42.1.2.100', glosa: 'PEAJE', montoHaber: 5.34 },
+  ]
+
+  it('modo "styled": .xlsx con content-type xlsx y datos legibles en fila 9', async () => {
+    const res = await generateContanetExcel(lines, 'compra', 'styled')
+    expect(res.ext).toBe('xlsx')
+    expect(res.contentType).toContain('spreadsheetml.sheet')
+    const wb = XLSX.read(res.buffer)
+    const ws = wb.Sheets['CONTABILIDAD']
+    expect(ws['D9'].v).toBe(1)
+    expect(ws['L9'].v).toBe('91.3.1.513')
+  })
+
+  it('modo "template" sin plantilla para el tipo: cae a .xlsx (no rompe)', async () => {
+    // `undefined` tipo → no hay template → fallback a la ruta estilizada.
+    const res = await generateContanetExcel(lines, undefined, 'template')
+    expect(res.ext).toBe('xlsx')
+  })
+
+  // El .xlsm idéntico depende de que la plantilla esté en dist/ (nest build).
+  const hasTemplate = !!resolveTemplatePath('compra')
+  ;(hasTemplate ? it : it.skip)(
+    'modo "template" con plantilla: .xlsm con macros y datos correctos + escapado XML',
+    async () => {
+      const res = await generateContanetExcel(lines, 'compra', 'template')
+      expect(res.ext).toBe('xlsm')
+      expect(res.contentType).toContain('macroEnabled')
+      const wb = XLSX.read(res.buffer, { bookVBA: true })
+      expect(wb.vbaraw).toBeTruthy() // macros preservadas
+      const ws = wb.Sheets['CONTABILIDAD']
+      expect(ws['D9'].v).toBe(1)
+      // El & y los <> de la glosa deben haber round-tripeado correctamente.
+      expect(ws['Q9'].v).toBe('PEAJE & <CIA>')
+    }
+  )
 })

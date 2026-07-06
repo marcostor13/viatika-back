@@ -142,6 +142,25 @@ export class UploadService {
     return getSignedUrl(this.s3Client, command, { expiresIn })
   }
 
+  /** Extrae la key de S3 a partir de una URL pública (inverso de buildPublicUrl). */
+  keyFromUrl(fileUrl: string): string {
+    const parsed = new URL(fileUrl)
+    return decodeURIComponent(parsed.pathname.replace(/^\/+/, ''))
+  }
+
+  /** Descarga un objeto de S3 (por URL pública) y devuelve su contenido como Buffer. */
+  async getObjectBufferFromUrl(fileUrl: string): Promise<Buffer> {
+    const bucketName = this.getBucketName()
+    const key = this.keyFromUrl(fileUrl)
+    const command = new GetObjectCommand({ Bucket: bucketName, Key: key })
+    const res = await this.s3Client.send(command)
+    const body = res.Body as AsyncIterable<Uint8Array> | undefined
+    if (!body) throw new Error(`Objeto S3 vacío o inaccesible: ${key}`)
+    const chunks: Buffer[] = []
+    for await (const chunk of body) chunks.push(Buffer.from(chunk))
+    return Buffer.concat(chunks)
+  }
+
   async getPresignedUploadUrl(
     filename: string,
     contentType: string,

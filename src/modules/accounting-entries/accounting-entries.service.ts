@@ -19,7 +19,11 @@ import {
   ContanetLine,
   toExcelSerial,
 } from './entities/contanet-columns'
-import { buildContanetWorkbook, resolveTemplatePath } from './entities/contanet-export'
+import {
+  generateContanetExcel,
+  resolveTemplatePath,
+  ExcelOutputMode,
+} from './entities/contanet-export'
 import {
   AccountingEntryStatusDto,
   AsientoTipo,
@@ -54,11 +58,33 @@ interface AnalyticPortion {
 /** Series de control interno de gastos no deducibles (nodeducible.md). */
 const SERIES_NO_DEDUCIBLE = new Set(['0001', '0003', '0008'])
 
-const XLSX_CONTENT_TYPE =
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+/**
+ * Tiempo tras el cual un job "processing" se considera huérfano (proceso
+ * reiniciado a media generación). Holgado a propósito: con concurrencia=1 un job
+ * puede esperar legítimamente en cola detrás de otras rendiciones; el umbral debe
+ * superar cualquier espera de cola razonable para no matar trabajo válido. La
+ * generación en sí ahora toma segundos (SheetJS), así que esto solo cubre crashes.
+ */
+const STALE_PROCESSING_MS = 20 * 60 * 1000
 
-/** Tiempo tras el cual un job "processing" se considera huérfano (proceso reiniciado). */
-const STALE_PROCESSING_MS = 10 * 60 * 1000
+/** Estado en el que la rendición está cerrada definitivamente (lista para contabilizar). */
+const CLOSED_STATUS = 'closed'
+
+/**
+ * Reglas de disponibilidad de generación por tipo de asiento:
+ *  - `solicitud` (desembolso del anticipo) SIEMPRE se puede generar: nace al
+ *    aprobar/pagar el anticipo, mucho antes de que la rendición se cierre.
+ *  - Los demás (compra/aplicación/devolución/reembolso) solo cuando la rendición
+ *    está CERRADA: reflejan gastos ya liquidados y no deben contabilizarse mientras
+ *    la rendición aún admite cambios.
+ */
+function isTipoGeneratable(tipo: AsientoTipo, reportStatus: string): boolean {
+  if (tipo === 'solicitud') return true
+  return reportStatus === CLOSED_STATUS
+}
+
+const BLOCKED_REASON =
+  'Este asiento solo se puede generar cuando la rendición está cerrada.'
 
 @Injectable()
 export class AccountingEntriesService {
@@ -67,18 +93,21 @@ export class AccountingEntriesService {
   private readonly aiModel = 'deepseek-chat'
 
   /**
-   * Límite de generaciones concurrentes (a través de TODAS las rendiciones).
-   * No hay cola/infra dedicada (Bull/Redis) en el repo: el fire-and-forget
-   * corre en el mismo proceso Node, así que sin este límite, disparar
-   * "Generar todos" en muchas rendiciones a la vez podría saturar CPU/RAM
-   * (IA + ExcelJS por cada una). El resto se encola en memoria.
+   * Solo UNA rendición genera asientos a la vez; el resto se encola en memoria.
+   * No hay cola/infra dedicada (Bull/Redis) en el repo y el trabajo pesado
+   * (IA + ExcelJS por tipo) corre en el mismo proceso Node, así que serializar
+   * las generaciones evita saturar CPU/RAM cuando varias rendiciones se disparan
+   * casi al mismo tiempo. Cada llamada a `runGeneration` toma UN cupo para toda
+   * la rendición (sus tipos ya se procesan secuencialmente adentro).
    */
-  private static readonly MAX_CONCURRENT_GENERATIONS = 3
+  private static readonly MAX_CONCURRENT_GENERATIONS = 1
   private activeGenerations = 0
   private readonly generationQueue: Array<() => void> = []
 
   private async acquireGenerationSlot(): Promise<() => void> {
-    if (this.activeGenerations >= AccountingEntriesService.MAX_CONCURRENT_GENERATIONS) {
+    // `while` (no `if`): si al despertar el cupo ya fue tomado por otro, se
+    // vuelve a esperar. Garantiza el límite aunque haya varios en cola.
+    while (this.activeGenerations >= AccountingEntriesService.MAX_CONCURRENT_GENERATIONS) {
       await new Promise<void>(resolve => this.generationQueue.push(resolve))
     }
     this.activeGenerations++
@@ -113,6 +142,8 @@ export class AccountingEntriesService {
     if (!apiKey) throw new Error('DEEPSEEK_API_KEY no configurada')
     this.openai = new OpenAI({ apiKey, baseURL: 'https://api.deepseek.com' })
 
+    // Los templates .xlsm se usan en el modo 'template' (.xlsm idéntico). Se
+    // valida su presencia al arranque para avisar si faltan en el despliegue.
     for (const tipo of ['compra', 'aplicacion', 'reembolso'] as AsientoTipo[]) {
       const p = resolveTemplatePath(tipo)
       if (p) this.logger.log(`[asientos] template OK: ${p}`)
@@ -177,7 +208,9 @@ export class AccountingEntriesService {
       .exec()) as any[]
     const byTipo = new Map<string, any>(docs.map(d => [d.tipo, d]))
     return Promise.all(
-      tipos.map(tipo => this.toStatusDto(tipo, byTipo.get(tipo), fingerprint))
+      tipos.map(tipo =>
+        this.toStatusDto(tipo, byTipo.get(tipo), fingerprint, report.status)
+      )
     )
   }
 
@@ -200,6 +233,10 @@ export class AccountingEntriesService {
     const now = new Date()
     const tiposToRun: AsientoTipo[] = []
     for (const tipo of tipos) {
+      // Bloqueo por estado: solicitud siempre; el resto solo con la rendición
+      // cerrada. Defensa de servidor ante un POST directo aunque el front ya
+      // deshabilite el botón.
+      if (!isTipoGeneratable(tipo, report.status)) continue
       const doc = byTipo.get(tipo)
       const isStuck =
         doc?.status === 'processing' &&
@@ -250,9 +287,14 @@ export class AccountingEntriesService {
   private async toStatusDto(
     tipo: AsientoTipo,
     doc: any | undefined,
-    currentFingerprint: string
+    currentFingerprint: string,
+    reportStatus: string
   ): Promise<AccountingEntryStatusDto> {
-    if (!doc) return { tipo, status: 'none' }
+    // `blocked` = no se puede (re)generar ahora por el estado de la rendición.
+    // Es independiente de descargar: un archivo ya listo sigue siendo descargable.
+    const blocked = !isTipoGeneratable(tipo, reportStatus)
+    const blockedReason = blocked ? BLOCKED_REASON : undefined
+    if (!doc) return { tipo, status: 'none', blocked, blockedReason }
     const hasFile = doc.status === 'ready' && !!doc.s3Key
     const url = doc.s3Key
       ? await this.uploadService.getPresignedDownloadUrl(doc.s3Key, doc.filename)
@@ -268,6 +310,8 @@ export class AccountingEntriesService {
       errorMessage: doc.errorMessage ?? undefined,
       stale: hasFile ? doc.fingerprint !== currentFingerprint : undefined,
       completedAt: doc.completedAt,
+      blocked,
+      blockedReason,
     }
   }
 
@@ -330,12 +374,13 @@ export class AccountingEntriesService {
         : Promise.resolve(new Map<string, ExpenseCargoClasificado[]>()),
     ])
 
-    // Genera tipos secuencialmente: ExcelJS carga un workbook completo en RAM por tipo,
-    // generar en paralelo multiplica el pico de memoria por N (causaba OOM a ~4 GB).
-    for (const tipo of tipos) {
-      try {
-        const warnings: string[] = []
-        const lines = await this.buildLinesForTipo(tipo, {
+    // Los tipos se generan en paralelo: con SheetJS cada workbook es liviano
+    // (ya no hay riesgo de OOM que antes obligaba a ir secuencial con ExcelJS),
+    // así se solapan las subidas a S3 y escrituras en Mongo. Cada tipo maneja su
+    // propio try/catch: un fallo en uno no aborta los demás.
+    await Promise.all(
+      tipos.map(tipo =>
+        this.generateOneTipo(tipo, reportId, clientId, fingerprint, {
           report,
           config,
           expenses,
@@ -346,69 +391,104 @@ export class AccountingEntriesService {
           periodDate,
           rateMap,
           cargosMap,
-          warnings,
         })
-        const cuadreErrors = this.validateCuadre(lines)
-        if (cuadreErrors.length) {
-          this.logger.warn(
-            `[asientos] cuadre incorrecto en tipo="${tipo}" reportId=${reportId}: ` +
-              cuadreErrors
-                .map(
-                  e =>
-                    `rel=${e.relacionado} filas=${e.filaInicio}-${e.filaFin} doc="${e.documento}" diff=${e.diferencia}`
-                )
-                .join(', ')
-          )
-        }
-        const buffer = await buildContanetWorkbook(lines, 'CONTABILIDAD', tipo)
-        const filename = this.fileName(tipo, report)
-        const asientosCount = this.countAsientos(lines)
-        const s3Key = this.s3Key(report.clientId ?? clientId, reportId, tipo)
-        await this.uploadService.uploadBuffer(buffer, s3Key, XLSX_CONTENT_TYPE)
-        await this.fileModel
-          .findOneAndUpdate(
-            { reportId: report._id, tipo },
-            {
-              $set: {
-                status: 'ready',
-                fingerprint,
-                filename,
-                s3Key,
-                asientosCount,
-                cuadreErrors,
-                warnings,
-                completedAt: new Date(),
-                errorMessage: null,
-              },
-            }
-          )
-          .exec()
-      } catch (error) {
-        this.logger.error(
-          `[asientos] error generando tipo="${tipo}" reportId=${reportId}: ${(error as Error)?.message}`,
-          (error as Error)?.stack
+      )
+    )
+  }
+
+  /** Genera, sube a S3 y persiste UN tipo de asiento. Aísla su error del resto. */
+  private async generateOneTipo(
+    tipo: AsientoTipo,
+    reportId: string,
+    clientId: string,
+    fingerprint: string,
+    ctx: {
+      report: any
+      config: AccountingConfigDocument
+      expenses: any[]
+      advances: any[]
+      colaborador: any
+      projectMap: Map<string, any>
+      categoryMap: Map<string, any>
+      periodDate: Date
+      rateMap: Map<string, number>
+      cargosMap: Map<string, ExpenseCargoClasificado[]>
+    }
+  ): Promise<void> {
+    const { report } = ctx
+    try {
+      const warnings: string[] = []
+      const lines = await this.buildLinesForTipo(tipo, { ...ctx, warnings })
+      const cuadreErrors = this.validateCuadre(lines)
+      if (cuadreErrors.length) {
+        this.logger.warn(
+          `[asientos] cuadre incorrecto en tipo="${tipo}" reportId=${reportId}: ` +
+            cuadreErrors
+              .map(
+                e =>
+                  `rel=${e.relacionado} filas=${e.filaInicio}-${e.filaFin} doc="${e.documento}" diff=${e.diferencia}`
+              )
+              .join(', ')
         )
-        await this.fileModel
-          .findOneAndUpdate(
-            { reportId: report._id, tipo },
-            {
-              $set: {
-                status: 'error',
-                errorMessage: (error as Error)?.message || 'Error desconocido',
-              },
-            }
-          )
-          .exec()
-          .catch(() => undefined)
       }
-      // Release ExcelJS workbook memory before building the next tipo.
-      // Requires --expose-gc (set in Dockerfile CMD).
-      if (typeof (global as any).gc === 'function') (global as any).gc()
+      // Formato según la config de la empresa: 'template' = .xlsm idéntico
+      // (macros+estilos), 'styled' = .xlsx liviano con cabeceras estilizadas.
+      const mode: ExcelOutputMode =
+        (ctx.config as any).excelOutputMode === 'template' ? 'template' : 'styled'
+      const { buffer, ext, contentType } = await generateContanetExcel(
+        lines,
+        tipo,
+        mode
+      )
+      const filename = this.fileName(tipo, report, ext)
+      const asientosCount = this.countAsientos(lines)
+      const s3Key = this.s3Key(report.clientId ?? clientId, reportId, tipo, ext)
+      await this.uploadService.uploadBuffer(buffer, s3Key, contentType)
+      await this.fileModel
+        .findOneAndUpdate(
+          { reportId: report._id, tipo },
+          {
+            $set: {
+              status: 'ready',
+              fingerprint,
+              filename,
+              s3Key,
+              asientosCount,
+              cuadreErrors,
+              warnings,
+              completedAt: new Date(),
+              errorMessage: null,
+            },
+          }
+        )
+        .exec()
+    } catch (error) {
+      this.logger.error(
+        `[asientos] error generando tipo="${tipo}" reportId=${reportId}: ${(error as Error)?.message}`,
+        (error as Error)?.stack
+      )
+      await this.fileModel
+        .findOneAndUpdate(
+          { reportId: report._id, tipo },
+          {
+            $set: {
+              status: 'error',
+              errorMessage: (error as Error)?.message || 'Error desconocido',
+            },
+          }
+        )
+        .exec()
+        .catch(() => undefined)
     }
   }
 
-  private s3Key(clientId: string, reportId: string, tipo: AsientoTipo): string {
-    return `accounting-entries/${clientId}/${reportId}/${tipo}.xlsx`
+  private s3Key(
+    clientId: string,
+    reportId: string,
+    tipo: AsientoTipo,
+    ext: 'xlsx' | 'xlsm'
+  ): string {
+    return `accounting-entries/${clientId}/${reportId}/${tipo}.${ext}`
   }
 
   /**
@@ -467,10 +547,13 @@ export class AccountingEntriesService {
     }
   }
 
-  private fileName(tipo: AsientoTipo, report: any): string {
+  private fileName(
+    tipo: AsientoTipo,
+    report: any,
+    ext: 'xlsx' | 'xlsm'
+  ): string {
     const code =
       report.codigo || report._id?.toString()?.slice(-6) || 'rendicion'
-    const ext = 'xlsx'
     return `asientos_${tipo}_${code}.${ext}`
   }
 
@@ -507,13 +590,11 @@ export class AccountingEntriesService {
     add(this.resolvePeriodDate(report, advances))
 
     const fallback = Number(config.tipoCambio) || 1
-    const map = new Map<string, number>()
-    // Consulta todas las fechas en paralelo (cada una cachea en BD por su cuenta).
     const isoList = Array.from(dates)
-    const rates = await Promise.all(
-      isoList.map(iso => this.exchangeRateService.getRate(iso))
-    )
-    isoList.forEach((iso, i) => map.set(iso, rates[i] ?? fallback))
+    // Una sola consulta a BD para las cacheadas + API solo para las faltantes.
+    const rates = await this.exchangeRateService.getRatesBatch(isoList)
+    const map = new Map<string, number>()
+    for (const iso of isoList) map.set(iso, rates.get(iso) ?? fallback)
     return map
   }
 
@@ -954,6 +1035,11 @@ export class AccountingEntriesService {
     if (!pendientes.length) return map
 
     // Contexto por cargo para el prompt (idx global sobre todos los pendientes).
+    // Se recorta el texto para no gastar tokens de más: la deducibilidad se
+    // decide con el proveedor/concepto y unas pocas líneas de ítems; enviar 50
+    // ítems completos o descripciones largas no aporta y encarece cada request.
+    const trunc = (s: string, max: number) =>
+      s.length > max ? s.slice(0, max) + '…' : s
     const contexts: CargoContext[] = []
     const owners: Array<{ pendiente: (typeof pendientes)[0]; cargoIdx: number }> =
       []
@@ -962,16 +1048,18 @@ export class AccountingEntriesService {
       const items: string[] = (det.items ?? [])
         .map((it: any) => String(it?.descripcion || '').trim())
         .filter(Boolean)
+        .slice(0, 8)
+        .map((d: string) => trunc(d, 60))
       pendiente.cargos.forEach((cargo, cargoIdx) => {
         contexts.push({
           idx: contexts.length + 1,
           concepto: cargo.concepto,
           monto: cargo.monto,
-          proveedor: det?.emisor?.razonSocial || '',
-          descripcion: pendiente.expense.comentario || '',
+          proveedor: trunc(det?.emisor?.razonSocial || '', 80),
+          descripcion: trunc(pendiente.expense.comentario || '', 120),
           items,
-          leyendas: det?.leyendas || '',
-          observaciones: det?.observaciones || '',
+          leyendas: trunc(det?.leyendas || '', 120),
+          observaciones: trunc(det?.observaciones || '', 120),
         })
         owners.push({ pendiente, cargoIdx })
       })
@@ -989,7 +1077,9 @@ export class AccountingEntriesService {
             { role: 'user', content: buildDeducibilidadPrompt(contexts) },
           ],
           temperature: 0,
-          max_tokens: 4096,
+          // La respuesta es un JSON array diminuto (idx/deducible/serie por
+          // cargo); 512 sobra y evita que el modelo se extienda de más.
+          max_tokens: 512,
         },
         { timeout: 60000 }
       )

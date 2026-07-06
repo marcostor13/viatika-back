@@ -1150,6 +1150,178 @@ export class ExpenseService {
     }
   }
 
+  // ----------------------------------------------------------------------
+  // Backfill de comprobanteDetallado (re-escaneo de facturas antiguas)
+  // ----------------------------------------------------------------------
+
+  /**
+   * Extrae los datos de una factura (incl. `comprobanteDetallado`) desde su
+   * archivo en S3, SIN crear un gasto ni validar duplicados/SUNAT. Reutiliza
+   * el mismo prompt y modelo que el escaneo normal. Imagen → Vision con la URL
+   * pública; PDF → descarga el buffer, extrae texto y lo envía como texto.
+   */
+  private async extractInvoiceFromFile(
+    fileUrl: string
+  ): Promise<ExtractedInvoiceData> {
+    const isPdf = /\.pdf(\?|$)/i.test(fileUrl)
+    if (isPdf) {
+      const buffer = await this.uploadService.getObjectBufferFromUrl(fileUrl)
+      const pdfModule = await import('pdf-parse')
+      const pdfParse: (data: Buffer) => Promise<{ text: string }> =
+        (pdfModule as any).default ?? pdfModule
+      const parsed = await pdfParse(buffer)
+      const completion = await this.openai.chat.completions.create({
+        model: this.visionModel,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: PROMPT1 },
+              { type: 'text', text: (parsed.text || '').substring(0, 15000) },
+            ],
+          },
+        ],
+        temperature: 0,
+        max_completion_tokens: 8192,
+      })
+      return this.parseOpenAiJsonContent(completion.choices[0]?.message?.content)
+    }
+
+    const completion = await this.openai.chat.completions.create({
+      model: this.visionModel,
+      messages: this.buildVisionMessages(PROMPT1, fileUrl),
+      temperature: 0,
+      max_completion_tokens: 8192,
+    })
+    return this.parseOpenAiJsonContent(completion.choices[0]?.message?.content)
+  }
+
+  /**
+   * Re-escanea facturas antiguas que no tienen `comprobanteDetallado` (se
+   * escanearon antes de que ese campo existiera) y se lo agrega. Idempotente:
+   * solo toca las que aún carecen del campo. NO pisa el desglose revisado
+   * manualmente (`desgloseRevisado`) ni otros datos del gasto (total, fecha,
+   * categoría). Procesa con concurrencia limitada para no saturar OpenAI.
+   */
+  async backfillComprobanteDetallado(opts: {
+    dryRun?: boolean
+    countOnly?: boolean
+    limit?: number
+    clientId?: string
+    concurrency?: number
+  } = {}): Promise<{
+    total: number
+    updated: number
+    skipped: number
+    failed: number
+    dryRun: boolean
+    failures: Array<{ id: string; error: string }>
+  }> {
+    const dryRun = opts.dryRun ?? false
+    const concurrency = Math.max(1, Math.min(opts.concurrency ?? 3, 8))
+
+    const filter: Record<string, any> = {
+      expenseType: 'factura',
+      file: { $exists: true, $nin: [null, ''] },
+      $or: [
+        { comprobanteDetallado: { $exists: false } },
+        { comprobanteDetallado: null },
+        { comprobanteDetallado: {} },
+      ],
+    }
+    if (opts.clientId) {
+      filter.clientId = Types.ObjectId.isValid(opts.clientId)
+        ? new Types.ObjectId(opts.clientId)
+        : opts.clientId
+    }
+
+    // Solo contar (no llama a OpenAI): útil para dimensionar antes de correr.
+    if (opts.countOnly) {
+      const total = await this.expenseRepository.countDocuments(filter).exec()
+      this.logger.log(
+        `[backfill] COUNT: ${total} factura(s) sin comprobanteDetallado` +
+          (opts.clientId ? ` [clientId=${opts.clientId}]` : '')
+      )
+      return { total, updated: 0, skipped: 0, failed: 0, dryRun: true, failures: [] }
+    }
+
+    let query = this.expenseRepository
+      .find(filter)
+      .select('_id file desgloseRevisado')
+    if (opts.limit && opts.limit > 0) query = query.limit(opts.limit)
+    const pending = (await query.lean().exec()) as Array<{
+      _id: Types.ObjectId
+      file?: string
+      desgloseRevisado?: boolean
+    }>
+
+    const total = pending.length
+    this.logger.log(
+      `[backfill] ${total} factura(s) sin comprobanteDetallado` +
+        (dryRun ? ' (DRY-RUN, no se escribe)' : '') +
+        (opts.clientId ? ` [clientId=${opts.clientId}]` : '')
+    )
+
+    let updated = 0
+    let skipped = 0
+    let failed = 0
+    const failures: Array<{ id: string; error: string }> = []
+
+    // Cola con concurrencia limitada: N workers consumen del arreglo.
+    let cursor = 0
+    const worker = async () => {
+      while (cursor < pending.length) {
+        const exp = pending[cursor++]
+        const id = exp._id.toString()
+        try {
+          if (!exp.file || !/^https?:\/\//i.test(exp.file)) {
+            skipped++
+            this.logger.warn(`[backfill] ${id} sin URL de archivo válida, omitido`)
+            continue
+          }
+          const data = await this.extractInvoiceFromFile(exp.file)
+          const comp = data.comprobanteDetallado
+          if (!comp || typeof comp !== 'object' || Array.isArray(comp)) {
+            skipped++
+            this.logger.warn(
+              `[backfill] ${id} la extracción no devolvió comprobanteDetallado, omitido`
+            )
+            continue
+          }
+
+          const set: Record<string, any> = { comprobanteDetallado: comp }
+          // El desglose solo se completa si NO fue revisado a mano y viene en la extracción.
+          if (!exp.desgloseRevisado) {
+            if (typeof data.baseAfecta === 'number') set.baseAfecta = data.baseAfecta
+            if (typeof data.igv === 'number') set.igv = data.igv
+            if (typeof data.tasaIgv === 'number') set.tasaIgv = data.tasaIgv
+            if (typeof data.inafecto === 'number') set.inafecto = data.inafecto
+          }
+
+          if (!dryRun) {
+            await this.expenseRepository.updateOne({ _id: exp._id }, { $set: set }).exec()
+          }
+          updated++
+          if (updated % 10 === 0 || updated === total) {
+            this.logger.log(`[backfill] progreso: ${updated}/${total} actualizadas`)
+          }
+        } catch (error) {
+          failed++
+          const msg = error instanceof Error ? error.message : String(error)
+          failures.push({ id, error: msg })
+          this.logger.error(`[backfill] error en ${id}: ${msg}`)
+        }
+      }
+    }
+
+    await Promise.all(Array.from({ length: concurrency }, () => worker()))
+
+    this.logger.log(
+      `[backfill] FIN: total=${total} actualizadas=${updated} omitidas=${skipped} fallidas=${failed}`
+    )
+    return { total, updated, skipped, failed, dryRun, failures }
+  }
+
   async createMobilitySheet(body: CreateExpenseDto): Promise<Expense> {
     if (!body.clientId) {
       throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)

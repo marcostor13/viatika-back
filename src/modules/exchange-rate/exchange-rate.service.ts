@@ -70,6 +70,37 @@ export class ExchangeRateService {
     return fallback?.tasa ?? null
   }
 
+  /**
+   * Tipos de cambio de varias fechas de una sola vez. Hace UNA consulta a la BD
+   * (`$in`) para todas las cacheadas y solo va a la API por las que faltan (en
+   * paralelo). Reemplaza N `findOne` por 1 query, importante cuando una rendición
+   * tiene decenas de comprobantes con fechas distintas.
+   */
+  async getRatesBatch(dates: Array<Date | string>): Promise<Map<string, number>> {
+    const isoList = [...new Set(dates.map(d => this.toIsoDate(d)))]
+    const map = new Map<string, number>()
+    if (!isoList.length) return map
+
+    const cached = await this.exchangeRateModel
+      .find({ fecha: { $in: isoList } })
+      .lean()
+      .exec()
+    for (const c of cached) {
+      if (c.tasa) map.set(c.fecha, c.tasa)
+    }
+
+    const missing = isoList.filter(iso => !map.has(iso))
+    if (missing.length) {
+      // getRate persiste en BD las que obtenga de la API; las futuras/uncached
+      // que la API no tenga devuelven el fallback más reciente.
+      const fetched = await Promise.all(missing.map(iso => this.getRate(iso)))
+      missing.forEach((iso, i) => {
+        if (fetched[i]) map.set(iso, fetched[i] as number)
+      })
+    }
+    return map
+  }
+
   private async fetchFromApi(fecha: string): Promise<number | null> {
     const urls = [
       `https://cdn.jsdelivr.net/gh/fawazahmed0/exchange-api@${fecha}/v1/currencies/usd.json`,

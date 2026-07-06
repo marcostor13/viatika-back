@@ -41,6 +41,10 @@ class CreatePermissionsDto {
   @IsBoolean()
   @IsOptional()
   canApproveL2?: boolean
+
+  @IsBoolean()
+  @IsOptional()
+  canBackdateViaticos?: boolean
 }
 
 export class CreateUserDto {

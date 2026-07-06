@@ -36,7 +36,8 @@ export class AdvanceController {
   create(@Body() dto: CreateAdvanceDto, @Request() req) {
     dto.userId = req.user?.sub || req.user?._id
     dto.clientId = dto.clientId || req.user?.clientId
-    return this.advanceService.create(dto)
+    const allowBackdate = req.user?.permissions?.canBackdateViaticos === true
+    return this.advanceService.create(dto, allowBackdate)
   }
 
   /** Mis anticipos (colaborador) */
@@ -218,11 +219,13 @@ export class AdvanceController {
       rawClient?._id?.toString?.() ??
       rawClient?.toString?.() ??
       String(rawClient ?? '')
+    const allowBackdate = req.user?.permissions?.canBackdateViaticos === true
     const result = await this.advanceService.resubmitRejected(
       id,
       dto,
       userId,
-      clientId
+      clientId,
+      allowBackdate
     )
     this.auditLogService.log({
       userId: req.user._id || req.user.sub,

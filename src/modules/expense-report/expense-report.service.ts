@@ -3573,14 +3573,15 @@ export class ExpenseReportService implements OnModuleInit {
 
   private async validateViaticoLines(
     dto: { place: string; startDate: string; endDate: string; projectId: string; lines: CreateAdvanceLineDto[]; observations?: string; amount: number },
-    clientId: string
+    clientId: string,
+    allowBackdate = false
   ) {
     const start = this.viaticoStartOfDay(new Date(dto.startDate))
     const end = this.viaticoStartOfDay(new Date(dto.endDate))
     if (end < start) throw new BadRequestException('La fecha fin debe ser mayor o igual a la fecha inicio.')
 
     const today = this.viaticoStartOfDay(new Date())
-    if (start < today) {
+    if (!allowBackdate && start < today) {
       throw new BadRequestException('La fecha de inicio no puede ser anterior a hoy.')
     }
 
@@ -3614,7 +3615,7 @@ export class ExpenseReportService implements OnModuleInit {
     return { lineDocs, roundedSum, description, requiredLevels: roundedSum > ADVANCE_THRESHOLDS.L1_MAX ? 2 : 1 }
   }
 
-  async createViatico(dto: CreateViaticoExpenseReportDto, userId: string, clientId: string): Promise<ExpenseReportDocument> {
+  async createViatico(dto: CreateViaticoExpenseReportDto, userId: string, clientId: string, allowBackdate = false): Promise<ExpenseReportDocument> {
     const profile = await this.userService.findTransactionalProfile(userId)
     if (!profile?.signature?.trim()) {
       throw new ForbiddenException('Debe registrar su firma digital en el perfil antes de solicitar viáticos.')
@@ -3626,7 +3627,8 @@ export class ExpenseReportService implements OnModuleInit {
     // suma al anticipo: prefinancia ese costo igual que un saldo de la bolsa.
     const { lineDocs, roundedSum, description, requiredLevels } = await this.validateViaticoLines(
       { place: dto.place, startDate: dto.startDate, endDate: dto.endDate, projectId: dto.projectId, lines: dto.lines, observations: dto.observations, amount: dto.amount },
-      clientId
+      clientId,
+      allowBackdate
     )
 
     const report = await this.expenseReportModel.create({
@@ -4030,7 +4032,7 @@ export class ExpenseReportService implements OnModuleInit {
     return this.findOne(id) as Promise<ExpenseReportDocument>
   }
 
-  async resubmitViatico(id: string, dto: ResubmitViaticoDto, actingUserId: string, clientId: string): Promise<ExpenseReportDocument> {
+  async resubmitViatico(id: string, dto: ResubmitViaticoDto, actingUserId: string, clientId: string, allowBackdate = false): Promise<ExpenseReportDocument> {
     const report = await this.expenseReportModel.findById(id)
     if (!report) throw new NotFoundException(`Viático ${id} no encontrado`)
     if (report.type !== 'viatico') throw new BadRequestException('Esta rendición no es de tipo viático')
@@ -4043,7 +4045,8 @@ export class ExpenseReportService implements OnModuleInit {
 
     const { lineDocs, roundedSum, description, requiredLevels } = await this.validateViaticoLines(
       { place: dto.place, startDate: dto.startDate, endDate: dto.endDate, projectId: dto.projectId, lines: dto.lines, observations: dto.observations, amount: dto.amount },
-      clientId
+      clientId,
+      allowBackdate
     )
 
     const wasEditing = report.status === 'pending_l1'

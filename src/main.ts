@@ -21,7 +21,7 @@ async function bootstrap() {
   app.setGlobalPrefix('api')
   app.enableCors({
     origin: '*',
-    methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   })
   // Configurar timeouts antes de empezar a escuchar conexiones.

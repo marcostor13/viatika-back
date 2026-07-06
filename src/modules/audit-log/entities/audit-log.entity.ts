@@ -61,6 +61,7 @@ export type AuditAction =
   | 'finalize_caja_chica_report'
   | 'upsert_accounting_config'
   | 'download_accounting_entries'
+  | 'generate_accounting_entries'
   | 'update_expense_desglose'
   | 'create_viatico'
   | 'approve_viatico_l1'

@@ -44,6 +44,7 @@ import { CreateAdvanceLineDto } from '../advance/dto/create-advance.dto'
 import { SaldoService } from '../saldo/saldo.service'
 import { ClientService } from '../client/client.service'
 import { Logger } from '@nestjs/common'
+import { AccountingEntriesFile } from '../accounting-entries/entities/accounting-entries-file.entity'
 
 /** Contexto del usuario que solicita eliminar una solicitud. */
 export interface SolicitudDeleteActor {
@@ -71,7 +72,9 @@ export class ExpenseReportService implements OnModuleInit {
     private readonly projectService: ProjectService,
     private readonly categoryService: CategoryService,
     private readonly saldoService: SaldoService,
-    private readonly clientService: ClientService
+    private readonly clientService: ClientService,
+    @InjectModel(AccountingEntriesFile.name)
+    private readonly accountingEntriesFileModel: Model<any>
   ) { }
 
   async onModuleInit() {
@@ -1649,6 +1652,35 @@ export class ExpenseReportService implements OnModuleInit {
   }
 
   /**
+   * Borra en cascada los asientos contables generados de una rendición
+   * (documentos + archivos en S3) al eliminarla. Best-effort: un fallo aquí
+   * no debe impedir que se complete el borrado de la rendición.
+   */
+  private async tryCleanupAccountingEntries(reportId: string): Promise<void> {
+    try {
+      // Cast explícito: `reportId` es un path Mixed en runtime (@Prop type
+      // Types.ObjectId no resuelve al SchemaType ObjectId), así que un filtro
+      // string no matchea los ObjectId almacenados y la limpieza sería un no-op.
+      const reportObjectId = Types.ObjectId.isValid(reportId)
+        ? new Types.ObjectId(reportId)
+        : reportId
+      const files = (await this.accountingEntriesFileModel
+        .find({ reportId: reportObjectId })
+        .select('s3Key')
+        .lean()
+        .exec()) as Array<{ s3Key?: string }>
+      for (const f of files) {
+        if (f.s3Key) await this.uploadService.deleteFile(f.s3Key).catch(() => undefined)
+      }
+      await this.accountingEntriesFileModel.deleteMany({ reportId: reportObjectId }).exec()
+    } catch (err) {
+      this.logger.error(
+        `No se pudieron limpiar los asientos contables de ${reportId}: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+  }
+
+  /**
    * Elimina una solicitud (rendición directa / caja chica) completa, con cascada
    * de comprobantes y sus archivos. La autorización depende del estado de aprobación:
    *  - Sin comprobantes o con comprobantes pero ninguno aprobado:
@@ -1781,6 +1813,7 @@ export class ExpenseReportService implements OnModuleInit {
         `Revertir saldos al eliminar ${id}: ${err instanceof Error ? err.message : String(err)}`
       )
     }
+    await this.tryCleanupAccountingEntries(id)
     await this.expenseReportModel.findByIdAndDelete(id).exec()
     return report
   }

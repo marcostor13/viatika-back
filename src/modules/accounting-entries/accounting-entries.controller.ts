@@ -1,12 +1,11 @@
 import {
   Controller,
-  Delete,
   Get,
   Param,
+  Post,
   Query,
   Request,
   UseGuards,
-  UseInterceptors,
   HttpException,
   HttpStatus,
   Logger,
@@ -18,10 +17,6 @@ import { ROLES } from '../auth/enums/roles.enum'
 import { Roles } from '../auth/decorators/roles.decorador'
 import { AuditLogService } from '../audit-log/audit-log.service'
 import { AsientoTipo } from './entities/accounting-entries.types'
-import { TimeoutInterceptor } from '../../common/interceptors/timeout.interceptor'
-
-/** 295 s (5 min − 5 s de margen) — configurable vía REQUEST_TIMEOUT_MS en .env. */
-const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS) || 295_000
 
 const ALL_TIPOS: AsientoTipo[] = [
   'solicitud',
@@ -33,7 +28,7 @@ const ALL_TIPOS: AsientoTipo[] = [
 
 @Controller('accounting-entries')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@UseInterceptors(new TimeoutInterceptor(REQUEST_TIMEOUT_MS))
+@Roles(ROLES.CONTABILIDAD, ROLES.SUPER_ADMIN)
 export class AccountingEntriesController {
   private readonly logger = new Logger(AccountingEntriesController.name)
 
@@ -43,84 +38,91 @@ export class AccountingEntriesController {
   ) {}
 
   /**
-   * Genera los archivos de asientos de una rendición. Solo Contabilidad (y Super).
-   * `tipos` opcional: lista separada por coma (compra,aplicacion,devolucion,reembolso,solicitud).
+   * Estado actual de los asientos de una rendición (con URL firmada de S3 si
+   * ya hay un archivo listo). No dispara generación: solo lectura, se usa
+   * tanto al entrar al detalle como para el polling mientras se genera.
    */
-  /** Forma con clientId explícito en la ruta (convención del resto del app). */
-  @Get(':reportId/:clientId')
-  @Roles(ROLES.CONTABILIDAD, ROLES.SUPER_ADMIN)
-  async downloadWithClient(
-    @Param('reportId') reportId: string,
-    @Param('clientId') clientId: string,
-    @Query('tipos') tipos: string | undefined,
-    @Request() req: any
-  ) {
-    return this.handleDownload(reportId, clientId, tipos, req)
-  }
-
-  /** Limpia la caché de asientos de una rendición (fuerza regeneración). */
-  @Delete('cache/:reportId')
-  @Roles(ROLES.CONTABILIDAD, ROLES.SUPER_ADMIN)
-  async clearCache(@Param('reportId') reportId: string) {
-    return this.service.clearCache(reportId)
-  }
-
-  /** Forma corta: el clientId se toma del JWT. */
   @Get(':reportId')
-  @Roles(ROLES.CONTABILIDAD, ROLES.SUPER_ADMIN)
-  async download(
+  async status(
     @Param('reportId') reportId: string,
     @Query('tipos') tipos: string | undefined,
     @Request() req: any
-  ) {
-    return this.handleDownload(reportId, undefined, tipos, req)
-  }
-
-  private async handleDownload(
-    reportId: string,
-    pathClientId: string | undefined,
-    tipos: string | undefined,
-    req: any
   ) {
     try {
-      // Prioriza el clientId del JWT; usa el de la ruta solo como respaldo.
-      const clientId = req.user?.clientId || pathClientId
-      if (!clientId) {
-        throw new HttpException(
-          'No se pudo determinar la empresa del usuario',
-          HttpStatus.BAD_REQUEST
-        )
-      }
-      const tipoList = (
-        tipos ? tipos.split(',').map(t => t.trim()) : ALL_TIPOS
-      ).filter((t): t is AsientoTipo => (ALL_TIPOS as string[]).includes(t))
-
-      const files = await this.service.generateForReport(
+      const clientId = this.resolveClientId(req)
+      const files = await this.service.getStatus(
         reportId,
         clientId,
-        tipoList.length ? tipoList : ALL_TIPOS
+        this.parseTipos(tipos)
+      )
+      return { files }
+    } catch (error) {
+      this.handleError(error, 'Error al consultar los asientos contables')
+    }
+  }
+
+  /**
+   * Dispara la generación en segundo plano de los tipos indicados (o de
+   * todos los aplicables) y responde de inmediato con el estado resultante.
+   * `force=true` fuerza la regeneración aunque el archivo ya esté al día.
+   */
+  @Post(':reportId/generate')
+  async generate(
+    @Param('reportId') reportId: string,
+    @Query('tipos') tipos: string | undefined,
+    @Query('force') force: string | undefined,
+    @Request() req: any
+  ) {
+    try {
+      const clientId = this.resolveClientId(req)
+      const userId = req.user?._id || req.user?.sub
+      const files = await this.service.triggerGeneration(
+        reportId,
+        clientId,
+        this.parseTipos(tipos),
+        userId,
+        force === 'true'
       )
 
       this.auditLogService.log({
-        userId: req.user._id || req.user.sub,
+        userId,
         userName: req.user.name || req.user.email,
-        action: 'download_accounting_entries',
+        action: 'generate_accounting_entries',
         module: 'facturas',
         entityId: reportId,
-        details: `Asientos: ${files.map(f => f.tipo).join(', ')}`,
+        details: `Asientos solicitados: ${files.map(f => f.tipo).join(', ')}`,
         clientId,
       })
 
       return { files }
     } catch (error) {
-      this.logger.error(
-        `Error al generar asientos: ${error.message}`,
-        error.stack
-      )
+      this.handleError(error, 'Error al generar los asientos contables')
+    }
+  }
+
+  private resolveClientId(req: any): string {
+    const clientId = req.user?.clientId
+    if (!clientId) {
       throw new HttpException(
-        error.message || 'Error al generar los asientos contables',
-        error.status || HttpStatus.INTERNAL_SERVER_ERROR
+        'No se pudo determinar la empresa del usuario',
+        HttpStatus.BAD_REQUEST
       )
     }
+    return clientId
+  }
+
+  private parseTipos(tipos: string | undefined): AsientoTipo[] {
+    const tipoList = (
+      tipos ? tipos.split(',').map(t => t.trim()) : ALL_TIPOS
+    ).filter((t): t is AsientoTipo => (ALL_TIPOS as string[]).includes(t))
+    return tipoList.length ? tipoList : ALL_TIPOS
+  }
+
+  private handleError(error: any, fallbackMessage: string): never {
+    this.logger.error(`${fallbackMessage}: ${error.message}`, error.stack)
+    throw new HttpException(
+      error.message || fallbackMessage,
+      error.status || HttpStatus.INTERNAL_SERVER_ERROR
+    )
   }
 }

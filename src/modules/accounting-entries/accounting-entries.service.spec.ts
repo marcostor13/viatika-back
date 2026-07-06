@@ -46,7 +46,8 @@ function newService(): AccountingEntriesService {
   const stub: any = {}
   const exchangeStub: any = { getRate: async () => TC }
   const configStub: any = { get: () => 'test-api-key' }
-  // (reportModel, expenseModel, advanceModel, projectModel, userModel, categoryModel, cacheModel, accountingConfigService, exchangeService, configService)
+  const uploadStub: any = {}
+  // (reportModel, expenseModel, advanceModel, projectModel, userModel, categoryModel, fileModel, accountingConfigService, exchangeService, configService, uploadService)
   return new AccountingEntriesService(
     stub,
     stub,
@@ -57,7 +58,8 @@ function newService(): AccountingEntriesService {
     stub,
     stub,
     exchangeStub,
-    configStub
+    configStub,
+    uploadStub
   )
 }
 
@@ -133,6 +135,7 @@ describe('AccountingEntriesService — asiento de compra', () => {
       periodDate: new Date('2026-03-01'),
       rateMap,
       cargosMap: new Map(),
+      warnings: [],
     })
   })
 
@@ -222,6 +225,7 @@ describe('AccountingEntriesService — tipo de documento y no deducibles', () =>
       periodDate,
       rateMap,
       cargosMap,
+      warnings: [],
     }) as Promise<ContanetLine[]>
   }
 
@@ -368,6 +372,173 @@ describe('AccountingEntriesService — tipo de documento y no deducibles', () =>
     expect(nine.montoDebe).toBe(45)
     expect(nine.nroDoc).toBe('PM-001')
     expect(lines.some(l => l.nroCuenta === '40.1.1.100')).toBe(false)
+  })
+})
+
+describe('AccountingEntriesService — avisos cuando falta la cuenta 9X', () => {
+  const service = newService()
+  const config = makeConfig()
+  const projectMap = new Map<string, any>()
+  const rateMap = new Map<string, number>([['2026-04-15', TC]])
+  const report = { createdAt: new Date('2026-04-15') }
+  const periodDate = new Date('2026-04-01')
+
+  async function build(expenses: any[], categoryMap: Map<string, any>) {
+    const warnings: string[] = []
+    const lines = (await (service as any).buildCompraLines({
+      report,
+      config,
+      expenses,
+      projectMap,
+      categoryMap,
+      periodDate,
+      rateMap,
+      cargosMap: new Map(),
+      warnings,
+    })) as ContanetLine[]
+    return { lines, warnings }
+  }
+
+  it('categoría sin cuenta 9X: no emite la línea 9X, avisa la causa exacta, y el resto queda descuadrado (no lo oculta)', async () => {
+    const categoryMap = new Map<string, any>([
+      ['cat-sin-9x', { _id: 'cat-sin-9x', name: 'Movilidad', cuentaDestino6x: '63.1.1.200' }],
+    ])
+    const expense = {
+      _id: 'e1',
+      categoryId: 'cat-sin-9x',
+      total: 100,
+      igv: 0,
+      comentario: 'Taxi',
+      data: '{}',
+    }
+    const { lines, warnings } = await build([expense], categoryMap)
+
+    expect(lines.some(l => l.nroCuenta === '91.3.1.410')).toBe(false)
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('Movilidad')
+    expect(warnings[0]).toContain('Cuenta Analítica 9X')
+    // El descuadre resultante debe seguir siendo detectado (no se enmascara).
+    expect(service.validateCuadre(lines).length).toBeGreaterThan(0)
+  })
+
+  it('comprobante sin categoría asignada: avisa sin asumir un nombre de categoría', async () => {
+    const expense = { _id: 'e2', total: 50, igv: 0, comentario: 'Sin categoria', data: '{}' }
+    const { warnings } = await build([expense], new Map())
+
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('sin categoría')
+  })
+
+  it('comprobante con categoryId que NO resuelve a ninguna categoría (borrada/otra empresa): aviso distinto a "sin categoría"', async () => {
+    // categoryMap vacío pero el expense SÍ tiene categoryId — simula una
+    // categoría borrada o que pertenece a otra empresa (clientId distinto).
+    const expense = { _id: 'e-huerfano', categoryId: 'cat-borrada', total: 40, igv: 0, data: '{}' }
+    const { warnings } = await build([expense], new Map())
+
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).not.toContain('sin categoría asignada')
+    expect(warnings[0]).toContain('ya no existe o no pertenece a esta empresa')
+    expect(warnings[0]).toContain('cat-borrada')
+  })
+
+  it('dos comprobantes con categoryId DISTINTOS que no resuelven: dos avisos separados (no se confunden con "sin categoría")', async () => {
+    const expenses = [
+      { _id: 'e-a', categoryId: 'cat-x', total: 10, igv: 0, data: '{}' },
+      { _id: 'e-b', categoryId: 'cat-y', total: 20, igv: 0, data: '{}' },
+    ]
+    const { warnings } = await build(expenses, new Map())
+
+    expect(warnings).toHaveLength(2)
+    expect(warnings.some(w => w.includes('cat-x'))).toBe(true)
+    expect(warnings.some(w => w.includes('cat-y'))).toBe(true)
+  })
+
+  it('dos comprobantes de la MISMA categoría sin cuenta 9X: un solo aviso (no uno por comprobante)', async () => {
+    // cuentaDestino6x presente para aislar el test al aviso de 9X (si no, la 6X
+    // faltante sumaría su propio aviso y no estaríamos midiendo el dedup de 9X).
+    const categoryMap = new Map<string, any>([
+      ['cat-sin-9x', { _id: 'cat-sin-9x', name: 'Movilidad', cuentaDestino6x: '63.1.1.200' }],
+    ])
+    const expenses = [
+      { _id: 'e3', categoryId: 'cat-sin-9x', total: 10, igv: 0, data: '{}' },
+      { _id: 'e4', categoryId: 'cat-sin-9x', total: 20, igv: 0, data: '{}' },
+    ]
+    const { warnings } = await build(expenses, categoryMap)
+    expect(warnings).toHaveLength(1)
+  })
+
+  it('categoría CON cuenta 9X configurada: sin avisos, cuadra', async () => {
+    const categoryMap = new Map<string, any>([
+      ['cat-ok', { _id: 'cat-ok', name: 'Alimentación', cuenta: '91.3.1.410', cuentaDestino6x: '63.1.4.100' }],
+    ])
+    const expense = { _id: 'e5', categoryId: 'cat-ok', total: 30, igv: 0, data: '{}' }
+    const { lines, warnings } = await build([expense], categoryMap)
+
+    expect(warnings).toHaveLength(0)
+    expect(service.validateCuadre(lines)).toHaveLength(0)
+  })
+
+  it('categoría con 9X pero SIN Cuenta Destino 6X: avisa (par destino sale 79/79) pero cuadra', async () => {
+    const categoryMap = new Map<string, any>([
+      ['cat-sin-6x', { _id: 'cat-sin-6x', name: 'Movilidad', cuenta: '91.3.1.140' }], // sin cuentaDestino6x
+    ])
+    const expense = { _id: 'e6', categoryId: 'cat-sin-6x', total: 30, igv: 0, data: '{}' }
+    const { lines, warnings } = await build([expense], categoryMap)
+
+    // No descuadra (el par 79/79 se cancela solo).
+    expect(service.validateCuadre(lines)).toHaveLength(0)
+    // Avisa la 6X faltante, sin avisar de la 9X (que sí está).
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('Cuenta Destino 6X')
+    expect(warnings[0]).toContain('Movilidad')
+    // El par destino usa la cuenta 79 en ambos lados (fallback config.cuenta79).
+    const destino = lines.filter(l => l.esDestino === 1)
+    expect(destino.length).toBe(2)
+    expect(destino.every(l => l.nroCuenta === '79.1.1.100')).toBe(true)
+  })
+
+  it('categoría sin 9X ni 6X: avisa ambas cosas por separado (2 avisos)', async () => {
+    const categoryMap = new Map<string, any>([
+      ['cat-vacia', { _id: 'cat-vacia', name: 'Sin cuentas' }], // ni cuenta ni cuentaDestino6x
+    ])
+    const expense = { _id: 'e7', categoryId: 'cat-vacia', total: 30, igv: 0, data: '{}' }
+    const { warnings } = await build([expense], categoryMap)
+
+    expect(warnings).toHaveLength(2)
+    expect(warnings.some(w => w.includes('Cuenta Analítica 9X'))).toBe(true)
+    expect(warnings.some(w => w.includes('Cuenta Destino 6X'))).toBe(true)
+  })
+
+  it('el descuadre reporta la fila exacta de Excel y el documento afectado', async () => {
+    // Primer comprobante SIN problema (ocupa filas 9+), segundo con categoría sin 9X.
+    const categoryMap = new Map<string, any>([
+      ['cat-ok', { _id: 'cat-ok', name: 'Alimentación', cuenta: '91.3.1.410', cuentaDestino6x: '63.1.4.100' }],
+      ['cat-sin-9x', { _id: 'cat-sin-9x', name: 'Movilidad' }],
+    ])
+    const okExpense = { _id: 'e-ok', categoryId: 'cat-ok', total: 30, igv: 0, data: '{}' }
+    const badExpense = {
+      _id: 'e-bad',
+      categoryId: 'cat-sin-9x',
+      total: 100,
+      igv: 0,
+      comprobanteDetallado: {
+        emisor: { razonSocial: 'TRANSPORTES ACME SAC' },
+        comprobante: { serie: 'F001', correlativo: '000123' },
+      },
+      data: '{}',
+    }
+    const { lines } = await build([okExpense, badExpense], categoryMap)
+    const errors = service.validateCuadre(lines)
+
+    expect(errors).toHaveLength(1)
+    const [error] = errors
+    // El comprobante conflictivo es el 2do (relacionado=2); sus filas empiezan
+    // después de las líneas del 1ro (9 + cantidad de líneas de okExpense).
+    const okLineCount = lines.filter(l => l.relacionado === 1).length
+    expect(error.filaInicio).toBe(9 + okLineCount)
+    expect(error.filaFin).toBeGreaterThanOrEqual(error.filaInicio!)
+    expect(error.documento).toContain('TRANSPORTES ACME SAC')
+    expect(error.documento).toContain('F001-000123')
   })
 })
 

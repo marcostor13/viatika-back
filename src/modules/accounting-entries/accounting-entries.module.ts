@@ -15,10 +15,11 @@ import { Project, ProjectSchema } from '../project/entities/project.entity'
 import { User, UserSchema } from '../user/schemas/user.schema'
 import { Category, CategorySchema } from '../category/entities/category.entity'
 import { ExchangeRateModule } from '../exchange-rate/exchange-rate.module'
+import { UploadModule } from '../upload/upload.module'
 import {
-  AccountingEntriesCache,
-  AccountingEntriesCacheSchema,
-} from './entities/accounting-entries-cache.entity'
+  AccountingEntriesFile,
+  AccountingEntriesFileSchema,
+} from './entities/accounting-entries-file.entity'
 
 @Module({
   imports: [
@@ -29,12 +30,13 @@ import {
       { name: Project.name, schema: ProjectSchema },
       { name: User.name, schema: UserSchema },
       { name: Category.name, schema: CategorySchema },
-      { name: AccountingEntriesCache.name, schema: AccountingEntriesCacheSchema },
+      { name: AccountingEntriesFile.name, schema: AccountingEntriesFileSchema },
     ]),
     ConfigModule,
     AccountingConfigModule,
     AuditLogModule,
     ExchangeRateModule,
+    UploadModule,
   ],
   controllers: [AccountingEntriesController],
   providers: [AccountingEntriesService],

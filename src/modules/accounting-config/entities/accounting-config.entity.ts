@@ -52,6 +52,12 @@ export interface AccountingConfigDocument extends Omit<Document, '_id'> {
   /** Cuenta que descarga el reembolso al colaborador: '14' (default) o '46'. */
   cuentaReembolso: '14' | '46'
   bankAccounts: BankAccount[]
+  /**
+   * Formato del archivo de asientos:
+   *  - 'styled' (default): .xlsx liviano con cabeceras estilizadas.
+   *  - 'template': .xlsm idéntico al template de Contanet (macros + estilos).
+   */
+  excelOutputMode: 'styled' | 'template'
 }
 
 @Schema({ timestamps: true })
@@ -156,6 +162,14 @@ export class AccountingConfig {
   /** Cuenta que descarga el reembolso al colaborador. '14' por defecto (confirmado por template). */
   @Prop({ default: '14', enum: ['14', '46'] })
   cuentaReembolso: '14' | '46'
+
+  /**
+   * Formato del archivo de asientos contables:
+   *  - 'styled' (default): .xlsx liviano con cabeceras estilizadas (rápido).
+   *  - 'template': .xlsm idéntico al template de Contanet (macros + estilos).
+   */
+  @Prop({ default: 'styled', enum: ['styled', 'template'] })
+  excelOutputMode: 'styled' | 'template'
 
   // --- Bancos de la empresa ---
   @Prop({

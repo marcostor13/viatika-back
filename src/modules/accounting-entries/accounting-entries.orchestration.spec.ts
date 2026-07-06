@@ -77,7 +77,9 @@ describe('AccountingEntriesService — orquestación async (status, trigger, S3)
   describe('getStatus', () => {
     it('devuelve "none" cuando no existe documento para el tipo', async () => {
       const result = await service.getStatus(REPORT_ID, CLIENT_ID, ['solicitud'])
-      expect(result).toEqual([{ tipo: 'solicitud', status: 'none' }])
+      expect(result).toEqual([
+        { tipo: 'solicitud', status: 'none', blocked: false, blockedReason: undefined },
+      ])
     })
 
     it('devuelve "ready" con URL firmada cuando el fingerprint coincide', async () => {
@@ -220,8 +222,8 @@ describe('AccountingEntriesService — orquestación async (status, trigger, S3)
       expect(runGenSpy).not.toHaveBeenCalled()
     })
 
-    it('retoma un job "processing" huérfano (más de 10 minutos activo, ej. reinicio del proceso)', async () => {
-      const staleStart = new Date(Date.now() - 11 * 60 * 1000)
+    it('retoma un job "processing" huérfano (más del umbral activo, ej. reinicio del proceso)', async () => {
+      const staleStart = new Date(Date.now() - 21 * 60 * 1000)
       fileModel.find.mockReturnValue(
         mockQuery([
           { tipo: 'solicitud', status: 'processing', startedAt: staleStart, asientosCount: 0, cuadreErrors: [] },
@@ -260,7 +262,7 @@ describe('AccountingEntriesService — orquestación async (status, trigger, S3)
         if (tipo === 'compra') throw new Error('fallo simulado en compra')
         return [{ relacionado: 1, montoDebe: 10, montoHaber: 10 }]
       })
-      jest.spyOn(ContanetExport, 'buildContanetWorkbook').mockResolvedValue(Buffer.from('xlsx'))
+      jest.spyOn(ContanetExport, 'generateContanetExcel').mockResolvedValue({ buffer: Buffer.from('xlsx'), ext: 'xlsx', contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
 
       const ctx = {
         report,
@@ -294,7 +296,7 @@ describe('AccountingEntriesService — orquestación async (status, trigger, S3)
       )
     })
 
-    it('limita a 3 generaciones concurrentes entre distintas rendiciones (sin cola/Redis)', async () => {
+    it('serializa: solo UNA rendición genera a la vez, el resto se encola', async () => {
       let current = 0
       let maxObserved = 0
       const resolvers: Array<() => void> = []
@@ -310,28 +312,78 @@ describe('AccountingEntriesService — orquestación async (status, trigger, S3)
       jest.spyOn(service as any, 'prefetchRates').mockResolvedValue(new Map())
       jest.spyOn(service as any, 'resolveCargosClasificacion').mockResolvedValue(new Map())
       jest.spyOn(service as any, 'buildLinesForTipo').mockResolvedValue([])
-      jest.spyOn(ContanetExport, 'buildContanetWorkbook').mockResolvedValue(Buffer.from('xlsx'))
+      jest.spyOn(ContanetExport, 'generateContanetExcel').mockResolvedValue({ buffer: Buffer.from('xlsx'), ext: 'xlsx', contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
 
       const ctx = { report, config, expenses: [], advances: [], colaborador, fingerprint: 'fp' }
-      const runs = [1, 2, 3, 4].map(i =>
+      const runs = [1, 2, 3].map(i =>
         (service as any).runGeneration(`r${i}`, CLIENT_ID, ['solicitud'], ctx)
       )
 
-      // Deja que el microtask-queue avance: las primeras 3 entran y se bloquean
-      // esperando su propio resolver; la 4ta debe quedar en cola sin ejecutar.
+      // Solo la 1ra entra; las otras 2 quedan en cola esperando el cupo.
       await new Promise(resolve => setImmediate(resolve))
-      expect(current).toBe(3)
-      expect(resolvers).toHaveLength(3)
+      expect(current).toBe(1)
+      expect(resolvers).toHaveLength(1)
 
-      // Libera una: el cupo liberado debe dejar entrar a la 4ta, sin superar 3 a la vez.
+      // Al liberar cada una, entra exactamente la siguiente — nunca más de 1 a la vez.
       resolvers.shift()!()
       await new Promise(resolve => setImmediate(resolve))
-      expect(maxObserved).toBe(3)
+      expect(current).toBe(1)
+      resolvers.shift()!()
+      await new Promise(resolve => setImmediate(resolve))
+      expect(current).toBe(1)
 
       while (resolvers.length) resolvers.shift()!()
       await Promise.all(runs)
 
-      expect(maxObserved).toBe(3)
+      expect(maxObserved).toBe(1)
+    })
+  })
+
+  describe('bloqueo por estado de la rendición (solo cerrada; solicitud siempre)', () => {
+    // La rendición del fixture está en 'approved' (no cerrada). Regla: los asientos
+    // de compra/aplicación/devolución/reembolso solo se generan con la rendición
+    // cerrada; 'solicitud' se puede generar siempre.
+    it('getStatus marca blocked=true para "compra" si la rendición no está cerrada', async () => {
+      const [status] = await service.getStatus(REPORT_ID, CLIENT_ID, ['compra'])
+      expect(status.blocked).toBe(true)
+      expect(status.blockedReason).toContain('cerrada')
+    })
+
+    it('getStatus marca blocked=false para "solicitud" aunque la rendición no esté cerrada', async () => {
+      const [status] = await service.getStatus(REPORT_ID, CLIENT_ID, ['solicitud'])
+      expect(status.blocked).toBe(false)
+    })
+
+    it('getStatus marca blocked=false para "compra" cuando la rendición está cerrada', async () => {
+      reportModel.findById.mockReturnValue(mockQuery({ ...report, status: 'closed' }))
+      const [status] = await service.getStatus(REPORT_ID, CLIENT_ID, ['compra'])
+      expect(status.blocked).toBe(false)
+    })
+
+    it('triggerGeneration NO genera "compra" si la rendición no está cerrada', async () => {
+      const runGenSpy = jest.spyOn(service as any, 'runGeneration').mockResolvedValue(undefined)
+      await service.triggerGeneration(REPORT_ID, CLIENT_ID, ['compra'], 'user1')
+      expect(runGenSpy).not.toHaveBeenCalled()
+      expect(fileModel.findOneAndUpdate).not.toHaveBeenCalled()
+    })
+
+    it('triggerGeneration SÍ genera "compra" cuando la rendición está cerrada', async () => {
+      reportModel.findById.mockReturnValue(mockQuery({ ...report, status: 'closed' }))
+      const runGenSpy = jest.spyOn(service as any, 'runGeneration').mockResolvedValue(undefined)
+      await service.triggerGeneration(REPORT_ID, CLIENT_ID, ['compra'], 'user1')
+      expect(runGenSpy).toHaveBeenCalledWith(REPORT_ID, CLIENT_ID, ['compra'], expect.anything())
+    })
+
+    it('triggerGeneration genera "solicitud" aunque la rendición no esté cerrada', async () => {
+      const runGenSpy = jest.spyOn(service as any, 'runGeneration').mockResolvedValue(undefined)
+      await service.triggerGeneration(REPORT_ID, CLIENT_ID, ['solicitud'], 'user1')
+      expect(runGenSpy).toHaveBeenCalledWith(REPORT_ID, CLIENT_ID, ['solicitud'], expect.anything())
+    })
+
+    it('mezcla: con rendición no cerrada, genera solo "solicitud" y descarta "compra"', async () => {
+      const runGenSpy = jest.spyOn(service as any, 'runGeneration').mockResolvedValue(undefined)
+      await service.triggerGeneration(REPORT_ID, CLIENT_ID, ['solicitud', 'compra'], 'user1')
+      expect(runGenSpy).toHaveBeenCalledWith(REPORT_ID, CLIENT_ID, ['solicitud'], expect.anything())
     })
   })
 

@@ -13,6 +13,11 @@ export interface CuadreError {
   totalDebe: number
   totalHaber: number
   diferencia: number
+  /** Fila de Excel (1-indexed) de la primera/última línea de este asiento en el .xlsx generado. */
+  filaInicio?: number
+  filaFin?: number
+  /** Descripción legible del comprobante/anticipo (razón social + serie-número, o glosa). */
+  documento?: string
 }
 
 export interface AsientoLote {
@@ -23,12 +28,22 @@ export interface AsientoLote {
   cuadreErrors: CuadreError[]
 }
 
-/** Archivo generado para descarga. */
-export interface GeneratedFile {
-  filename: string
-  /** Contenido base64 del .xlsx. */
-  base64: string
+export type AccountingEntriesStatus = 'processing' | 'ready' | 'error'
+
+/** Estado de un tipo de asiento expuesto al frontend. */
+export interface AccountingEntryStatusDto {
   tipo: AsientoTipo
-  asientosCount: number
-  cuadreErrors: CuadreError[]
+  /** 'none' = nunca generado. */
+  status: AccountingEntriesStatus | 'none'
+  filename?: string
+  /** URL firmada de descarga (S3), válida por pocos minutos. Solo si hay un archivo listo. */
+  url?: string
+  asientosCount?: number
+  cuadreErrors?: CuadreError[]
+  /** Avisos de configuración (ej. categoría sin cuenta 9X) detectados al generar. */
+  warnings?: string[]
+  errorMessage?: string
+  /** El archivo listo ya no refleja el estado actual de la rendición. */
+  stale?: boolean
+  completedAt?: Date
 }

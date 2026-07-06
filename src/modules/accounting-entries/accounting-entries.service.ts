@@ -1,7 +1,8 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common'
+import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common'
+import { Cron } from '@nestjs/schedule'
 import { ConfigService } from '@nestjs/config'
 import { InjectModel } from '@nestjs/mongoose'
-import { Model } from 'mongoose'
+import { Model, Types } from 'mongoose'
 import { createHash } from 'crypto'
 import OpenAI from 'openai'
 import { ExpenseReport } from '../expense-report/entities/expense-report.entity'
@@ -20,11 +21,12 @@ import {
 } from './entities/contanet-columns'
 import { buildContanetWorkbook, resolveTemplatePath } from './entities/contanet-export'
 import {
+  AccountingEntryStatusDto,
   AsientoTipo,
   CuadreError,
-  GeneratedFile,
 } from './entities/accounting-entries.types'
-import { AccountingEntriesCache } from './entities/accounting-entries-cache.entity'
+import { AccountingEntriesFile } from './entities/accounting-entries-file.entity'
+import { UploadService } from '../upload/upload.service'
 import { resolveCodTipDoc, TIPO_DOCUMENTO } from './constants/tipo-documento'
 import {
   buildDeducibilidadPrompt,
@@ -52,11 +54,40 @@ interface AnalyticPortion {
 /** Series de control interno de gastos no deducibles (nodeducible.md). */
 const SERIES_NO_DEDUCIBLE = new Set(['0001', '0003', '0008'])
 
+const XLSX_CONTENT_TYPE =
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+
+/** Tiempo tras el cual un job "processing" se considera huérfano (proceso reiniciado). */
+const STALE_PROCESSING_MS = 10 * 60 * 1000
+
 @Injectable()
 export class AccountingEntriesService {
   private readonly logger = new Logger(AccountingEntriesService.name)
   private readonly openai: OpenAI
   private readonly aiModel = 'deepseek-chat'
+
+  /**
+   * Límite de generaciones concurrentes (a través de TODAS las rendiciones).
+   * No hay cola/infra dedicada (Bull/Redis) en el repo: el fire-and-forget
+   * corre en el mismo proceso Node, así que sin este límite, disparar
+   * "Generar todos" en muchas rendiciones a la vez podría saturar CPU/RAM
+   * (IA + ExcelJS por cada una). El resto se encola en memoria.
+   */
+  private static readonly MAX_CONCURRENT_GENERATIONS = 3
+  private activeGenerations = 0
+  private readonly generationQueue: Array<() => void> = []
+
+  private async acquireGenerationSlot(): Promise<() => void> {
+    if (this.activeGenerations >= AccountingEntriesService.MAX_CONCURRENT_GENERATIONS) {
+      await new Promise<void>(resolve => this.generationQueue.push(resolve))
+    }
+    this.activeGenerations++
+    return () => {
+      this.activeGenerations--
+      const next = this.generationQueue.shift()
+      if (next) next()
+    }
+  }
 
   constructor(
     @InjectModel(ExpenseReport.name)
@@ -71,11 +102,12 @@ export class AccountingEntriesService {
     private userModel: Model<any>,
     @InjectModel(Category.name)
     private categoryModel: Model<any>,
-    @InjectModel(AccountingEntriesCache.name)
-    private cacheModel: Model<any>,
+    @InjectModel(AccountingEntriesFile.name)
+    private fileModel: Model<any>,
     private accountingConfigService: AccountingConfigService,
     private exchangeRateService: ExchangeRateService,
-    private configService: ConfigService
+    private configService: ConfigService,
+    private uploadService: UploadService
   ) {
     const apiKey = this.configService.get<string>('DEEPSEEK_API_KEY')
     if (!apiKey) throw new Error('DEEPSEEK_API_KEY no configurada')
@@ -89,27 +121,32 @@ export class AccountingEntriesService {
   }
 
   // ----------------------------------------------------------------------
-  // Orquestación
+  // Orquestación — generación asíncrona con persistencia en S3
   // ----------------------------------------------------------------------
 
-  /**
-   * Genera los archivos de asientos de una rendición para los tipos solicitados.
-   * Disponible en cualquier estado de la rendición (decisión de negocio).
-   */
-  async generateForReport(
-    reportId: string,
-    clientId: string,
-    tipos: AsientoTipo[]
-  ): Promise<GeneratedFile[]> {
+  /** Lecturas comunes a `getStatus` y `triggerGeneration` (baratas, sin IA/ExcelJS). */
+  private async loadContext(reportId: string, clientId: string) {
     const report = (await this.reportModel
       .findById(reportId)
       .lean()
       .exec()) as any
     if (!report) throw new NotFoundException('Rendición no encontrada')
 
-    // Lecturas independientes en paralelo (config + entidades del reporte).
+    // Aislamiento multi-tenant: sin este chequeo, cualquier Contabilidad autenticado
+    // podía generar/leer los asientos de una rendición de OTRA empresa con solo
+    // conocer su reportId (el find de arriba no filtraba por clientId). Además, un
+    // reportId cuya empresa no coincide con la del caller produce categorías/proyectos
+    // "invisibles" más abajo (se filtran por clientId) y eso se manifestaba como un
+    // descuadre confuso en vez de un error de permisos claro.
+    const reportClientId = report.clientId?.toString()
+    if (reportClientId && reportClientId !== clientId) {
+      throw new ForbiddenException(
+        'Esta rendición no pertenece a tu empresa; no puedes generar sus asientos contables.'
+      )
+    }
+
     const [config, expenses, advances, colaborador] = await Promise.all([
-      this.accountingConfigService.getEffective(clientId),
+      this.accountingConfigService.getEffective(reportClientId ?? clientId),
       this.expenseModel
         .find({ expenseReportId: report._id, status: { $ne: 'rejected' } })
         .lean()
@@ -123,125 +160,259 @@ export class AccountingEntriesService {
       this.userModel.findById(report.userId).lean().exec(),
     ])
 
-    // Fingerprint barato: invalida la caché si cambia la rendición, sus gastos,
-    // los anticipos o la configuración contable.
-    const fingerprint = this.computeFingerprint(
-      report,
-      expenses,
-      advances,
-      config
-    )
+    const fingerprint = this.computeFingerprint(report, expenses, advances, config)
+    return { report, config, expenses, advances, colaborador, fingerprint }
+  }
 
-    // Reutiliza de caché los tipos cuyo fingerprint coincide.
-    const cachedDocs = (await this.cacheModel
-      .find({ reportId: report._id, tipo: { $in: tipos }, fingerprint })
+  /** Estado actual (para pintar la UI) de los tipos solicitados, con URL firmada si hay archivo listo. */
+  async getStatus(
+    reportId: string,
+    clientId: string,
+    tipos: AsientoTipo[]
+  ): Promise<AccountingEntryStatusDto[]> {
+    const { report, fingerprint } = await this.loadContext(reportId, clientId)
+    const docs = (await this.fileModel
+      .find({ reportId: report._id, tipo: { $in: tipos } })
       .lean()
       .exec()) as any[]
-    const cachedByTipo = new Map<string, any>(
-      cachedDocs.map(c => [c.tipo, c])
+    const byTipo = new Map<string, any>(docs.map(d => [d.tipo, d]))
+    return Promise.all(
+      tipos.map(tipo => this.toStatusDto(tipo, byTipo.get(tipo), fingerprint))
     )
+  }
 
-    const files: GeneratedFile[] = []
+  /** Dispara la generación en segundo plano de los tipos que lo necesiten y devuelve el estado inmediato. */
+  async triggerGeneration(
+    reportId: string,
+    clientId: string,
+    tipos: AsientoTipo[],
+    requestedBy: string,
+    force = false
+  ): Promise<AccountingEntryStatusDto[]> {
+    const ctx = await this.loadContext(reportId, clientId)
+    const { report, fingerprint } = ctx
+    const docs = (await this.fileModel
+      .find({ reportId: report._id, tipo: { $in: tipos } })
+      .lean()
+      .exec()) as any[]
+    const byTipo = new Map<string, any>(docs.map(d => [d.tipo, d]))
+
+    const now = new Date()
+    const tiposToRun: AsientoTipo[] = []
     for (const tipo of tipos) {
-      const hit = cachedByTipo.get(tipo)
-      if (!hit) continue
-      files.push({
-        tipo,
-        filename: hit.filename,
-        base64: this.bufferToBase64(hit.buffer),
-        asientosCount: hit.asientosCount ?? 0,
-        cuadreErrors: hit.cuadreErrors ?? [],
-      })
+      const doc = byTipo.get(tipo)
+      const isStuck =
+        doc?.status === 'processing' &&
+        doc?.startedAt &&
+        now.getTime() - new Date(doc.startedAt).getTime() > STALE_PROCESSING_MS
+      const alreadyRunning = doc?.status === 'processing' && !isStuck
+      if (alreadyRunning && !force) continue
+      const isStale = !doc || doc.fingerprint !== fingerprint
+      if (!force && doc?.status === 'ready' && !isStale) continue
+      tiposToRun.push(tipo)
     }
 
-    const tiposToGenerate = tipos.filter(t => !cachedByTipo.has(t))
-    if (!tiposToGenerate.length) return this.orderFiles(files, tipos)
+    if (tiposToRun.length) {
+      await Promise.all(
+        tiposToRun.map(tipo =>
+          this.fileModel
+            .findOneAndUpdate(
+              { reportId: report._id, tipo },
+              {
+                $set: {
+                  clientId: report.clientId ?? clientId,
+                  status: 'processing',
+                  requestedBy,
+                  startedAt: now,
+                  errorMessage: null,
+                },
+                $setOnInsert: { asientosCount: 0, cuadreErrors: [] },
+              },
+              { upsert: true }
+            )
+            .exec()
+        )
+      )
+      // Fire-and-forget: el request responde de inmediato, el trabajo pesado
+      // corre en segundo plano dentro del mismo proceso Node.
+      void this.runGeneration(reportId, clientId, tiposToRun, ctx).catch(error =>
+        this.logger.error(
+          `[asientos] fallo no controlado generando reportId=${reportId}: ${error?.message}`,
+          error?.stack
+        )
+      )
+    }
 
-    // Trabajo pesado (IA + tipo de cambio + ExcelJS) solo para los faltantes.
+    return this.getStatus(reportId, clientId, tipos)
+  }
+
+  /** Convierte un documento (o su ausencia) en el DTO que consume el frontend. */
+  private async toStatusDto(
+    tipo: AsientoTipo,
+    doc: any | undefined,
+    currentFingerprint: string
+  ): Promise<AccountingEntryStatusDto> {
+    if (!doc) return { tipo, status: 'none' }
+    const hasFile = doc.status === 'ready' && !!doc.s3Key
+    const url = doc.s3Key
+      ? await this.uploadService.getPresignedDownloadUrl(doc.s3Key, doc.filename)
+      : undefined
+    return {
+      tipo,
+      status: doc.status,
+      filename: doc.filename,
+      url,
+      asientosCount: doc.asientosCount,
+      cuadreErrors: doc.cuadreErrors,
+      warnings: doc.warnings,
+      errorMessage: doc.errorMessage ?? undefined,
+      stale: hasFile ? doc.fingerprint !== currentFingerprint : undefined,
+      completedAt: doc.completedAt,
+    }
+  }
+
+  /**
+   * Trabajo pesado (IA + tipo de cambio + ExcelJS + subida a S3). Corre
+   * desacoplado del request HTTP que lo disparó (ver `triggerGeneration`).
+   * Cada tipo se persiste de forma independiente: si uno falla, no impide
+   * que los demás terminen con éxito.
+   */
+  private async runGeneration(
+    reportId: string,
+    clientId: string,
+    tipos: AsientoTipo[],
+    ctx: {
+      report: any
+      config: AccountingConfigDocument
+      expenses: any[]
+      advances: any[]
+      colaborador: any
+      fingerprint: string
+    }
+  ): Promise<void> {
+    const release = await this.acquireGenerationSlot()
+    try {
+      await this.runGenerationLocked(reportId, clientId, tipos, ctx)
+    } finally {
+      release()
+    }
+  }
+
+  private async runGenerationLocked(
+    reportId: string,
+    clientId: string,
+    tipos: AsientoTipo[],
+    ctx: {
+      report: any
+      config: AccountingConfigDocument
+      expenses: any[]
+      advances: any[]
+      colaborador: any
+      fingerprint: string
+    }
+  ): Promise<void> {
+    const { report, config, expenses, advances, colaborador, fingerprint } = ctx
+    // Alcance de datos = la empresa DUEÑA de la rendición, no la del caller (ya
+    // verificadas iguales en `loadContext`, pero se usa report.clientId explícitamente
+    // para que categorías/proyectos jamás se resuelvan contra el clientId equivocado).
+    const dataClientId = report.clientId?.toString() ?? clientId
+
     const [projectMap, categoryMap] = await Promise.all([
-      this.buildProjectMap(expenses, report, clientId),
-      this.buildCategoryMap(expenses, clientId),
+      this.buildProjectMap(expenses, report, dataClientId),
+      this.buildCategoryMap(expenses, dataClientId),
     ])
 
     const periodDate = this.resolvePeriodDate(report, advances)
-
-    // prefetchRates (API externa) y la clasificación de cargos ≠ IGV (IA solo
-    // si hay cargos desconocidos sin clasificar) son independientes: en paralelo.
     const [rateMap, cargosMap] = await Promise.all([
       this.prefetchRates(report, expenses, advances, config),
-      tiposToGenerate.includes('compra') && expenses.length > 0
+      tipos.includes('compra') && expenses.length > 0
         ? this.resolveCargosClasificacion(expenses)
         : Promise.resolve(new Map<string, ExpenseCargoClasificado[]>()),
     ])
 
     // Genera tipos secuencialmente: ExcelJS carga un workbook completo en RAM por tipo,
     // generar en paralelo multiplica el pico de memoria por N (causaba OOM a ~4 GB).
-    const generated: GeneratedFile[] = []
-    for (const tipo of tiposToGenerate) {
-      const lines = await this.buildLinesForTipo(tipo, {
-        report,
-        config,
-        expenses,
-        advances,
-        colaborador,
-        projectMap,
-        categoryMap,
-        periodDate,
-        rateMap,
-        cargosMap,
-      })
-      if (!lines.length) continue
-      const cuadreErrors = this.validateCuadre(lines)
-      if (cuadreErrors.length) {
-        this.logger.warn(
-          `[asientos] cuadre incorrecto en tipo="${tipo}" reportId=${reportId}: ` +
-            cuadreErrors
-              .map(e => `rel=${e.relacionado} diff=${e.diferencia}`)
-              .join(', ')
+    for (const tipo of tipos) {
+      try {
+        const warnings: string[] = []
+        const lines = await this.buildLinesForTipo(tipo, {
+          report,
+          config,
+          expenses,
+          advances,
+          colaborador,
+          projectMap,
+          categoryMap,
+          periodDate,
+          rateMap,
+          cargosMap,
+          warnings,
+        })
+        const cuadreErrors = this.validateCuadre(lines)
+        if (cuadreErrors.length) {
+          this.logger.warn(
+            `[asientos] cuadre incorrecto en tipo="${tipo}" reportId=${reportId}: ` +
+              cuadreErrors
+                .map(
+                  e =>
+                    `rel=${e.relacionado} filas=${e.filaInicio}-${e.filaFin} doc="${e.documento}" diff=${e.diferencia}`
+                )
+                .join(', ')
+          )
+        }
+        const buffer = await buildContanetWorkbook(lines, 'CONTABILIDAD', tipo)
+        const filename = this.fileName(tipo, report)
+        const asientosCount = this.countAsientos(lines)
+        const s3Key = this.s3Key(report.clientId ?? clientId, reportId, tipo)
+        await this.uploadService.uploadBuffer(buffer, s3Key, XLSX_CONTENT_TYPE)
+        await this.fileModel
+          .findOneAndUpdate(
+            { reportId: report._id, tipo },
+            {
+              $set: {
+                status: 'ready',
+                fingerprint,
+                filename,
+                s3Key,
+                asientosCount,
+                cuadreErrors,
+                warnings,
+                completedAt: new Date(),
+                errorMessage: null,
+              },
+            }
+          )
+          .exec()
+      } catch (error) {
+        this.logger.error(
+          `[asientos] error generando tipo="${tipo}" reportId=${reportId}: ${(error as Error)?.message}`,
+          (error as Error)?.stack
         )
+        await this.fileModel
+          .findOneAndUpdate(
+            { reportId: report._id, tipo },
+            {
+              $set: {
+                status: 'error',
+                errorMessage: (error as Error)?.message || 'Error desconocido',
+              },
+            }
+          )
+          .exec()
+          .catch(() => undefined)
       }
-      const buffer = await buildContanetWorkbook(lines, 'CONTABILIDAD', tipo)
-      const filename = this.fileName(tipo, report)
-      const asientosCount = this.countAsientos(lines)
-      void this.persistCache(report, clientId, tipo, fingerprint, {
-        filename,
-        buffer,
-        asientosCount,
-        cuadreErrors,
-      })
-      generated.push({
-        tipo,
-        filename,
-        base64: buffer.toString('base64'),
-        asientosCount,
-        cuadreErrors,
-      })
       // Release ExcelJS workbook memory before building the next tipo.
       // Requires --expose-gc (set in Dockerfile CMD).
       if (typeof (global as any).gc === 'function') (global as any).gc()
     }
-
-    files.push(...generated)
-    return this.orderFiles(files, tipos)
   }
 
-  /** Ordena los archivos según el orden solicitado en `tipos`. */
-  private orderFiles(files: GeneratedFile[], tipos: AsientoTipo[]): GeneratedFile[] {
-    const order = new Map(tipos.map((t, i) => [t, i]))
-    return [...files].sort(
-      (a, b) => (order.get(a.tipo) ?? 0) - (order.get(b.tipo) ?? 0)
-    )
-  }
-
-  /** base64 de un Buffer de Mongo (puede llegar como { buffer } binario). */
-  private bufferToBase64(buf: any): string {
-    if (Buffer.isBuffer(buf)) return buf.toString('base64')
-    if (buf?.buffer) return Buffer.from(buf.buffer).toString('base64')
-    return Buffer.from(buf ?? []).toString('base64')
+  private s3Key(clientId: string, reportId: string, tipo: AsientoTipo): string {
+    return `accounting-entries/${clientId}/${reportId}/${tipo}.xlsx`
   }
 
   /**
-   * Hash de invalidación de caché. Cualquier cambio en la rendición, sus gastos,
+   * Hash de invalidación. Cualquier cambio en la rendición, sus gastos,
    * los anticipos o la configuración contable produce un fingerprint distinto.
    */
   private computeFingerprint(
@@ -269,48 +440,31 @@ export class AccountingEntriesService {
     return createHash('sha1').update(parts.join('|')).digest('hex')
   }
 
-  /** Persiste (upsert) el archivo generado en la caché de asientos. */
-  private async persistCache(
-    report: any,
-    clientId: string,
-    tipo: AsientoTipo,
-    fingerprint: string,
-    data: {
-      filename: string
-      buffer: Buffer
-      asientosCount: number
-      cuadreErrors: CuadreError[]
-    }
-  ): Promise<void> {
-    try {
-      await this.cacheModel
-        .findOneAndUpdate(
-          { reportId: report._id, tipo },
-          {
-            $set: {
-              clientId: report.clientId ?? clientId,
-              fingerprint,
-              filename: data.filename,
-              buffer: data.buffer,
-              asientosCount: data.asientosCount,
-              cuadreErrors: data.cuadreErrors,
-            },
+  /**
+   * Reconciliación de jobs huérfanos: si el proceso se reinició a mitad de
+   * una generación, el documento queda en `processing` para siempre. Cada
+   * 10 minutos se marcan como error los que llevan más de ese tiempo activos
+   * (el usuario puede volver a generar desde el frontend).
+   */
+  @Cron('*/10 * * * *')
+  async reconcileStuckJobs(): Promise<void> {
+    const threshold = new Date(Date.now() - STALE_PROCESSING_MS)
+    const result = await this.fileModel
+      .updateMany(
+        { status: 'processing', startedAt: { $lt: threshold } },
+        {
+          $set: {
+            status: 'error',
+            errorMessage: 'Generación interrumpida. Vuelve a generar el archivo.',
           },
-          { upsert: true }
-        )
-        .exec()
-    } catch (error) {
-      // La caché es best-effort: si falla, el archivo igual se devuelve.
+        }
+      )
+      .exec()
+    if (result.modifiedCount) {
       this.logger.warn(
-        `No se pudo cachear asientos (${tipo}): ${(error as Error)?.message}`
+        `[asientos] ${result.modifiedCount} job(s) huérfano(s) marcados como error`
       )
     }
-  }
-
-  /** Elimina todas las entradas de caché de una rendición. */
-  async clearCache(reportId: string): Promise<{ deleted: number }> {
-    const result = await this.cacheModel.deleteMany({ reportId }).exec()
-    return { deleted: result.deletedCount ?? 0 }
   }
 
   private fileName(tipo: AsientoTipo, report: any): string {
@@ -386,6 +540,8 @@ export class AccountingEntriesService {
       periodDate: Date
       rateMap: Map<string, number>
       cargosMap: Map<string, ExpenseCargoClasificado[]>
+      /** Se llena con avisos de configuración (ej. categoría sin cuenta 9X). */
+      warnings: string[]
     }
   ): Promise<ContanetLine[]> {
     switch (tipo) {
@@ -404,6 +560,25 @@ export class AccountingEntriesService {
     }
   }
 
+  /**
+   * Cast explícito string → ObjectId para filtros de query. IMPRESCINDIBLE en este
+   * proyecto: los paths declarados con `@Prop({ type: Types.ObjectId })` quedan como
+   * SchemaType **Mixed** en runtime (verificado con `schema.path('clientId').instance`),
+   * y los paths Mixed NO castean — un filtro string jamás matchea el ObjectId
+   * almacenado y la query devuelve vacío en silencio. Es la misma razón por la que
+   * CategoryService/ProjectService castean con `new Types.ObjectId(...)` en cada query.
+   */
+  private toObjectId(value: string): Types.ObjectId | string {
+    return Types.ObjectId.isValid(value) ? new Types.ObjectId(value) : value
+  }
+
+  /** Ids válidos casteados a ObjectId (los inválidos se descartan: no resolverían). */
+  private toObjectIds(values: Iterable<string>): Types.ObjectId[] {
+    return [...values]
+      .filter(v => Types.ObjectId.isValid(v))
+      .map(v => new Types.ObjectId(v))
+  }
+
   /** Mapa categoryId → categoría (para resolver cuentas 9X/6X). */
   private async buildCategoryMap(
     expenses: any[],
@@ -416,7 +591,10 @@ export class AccountingEntriesService {
     const categories = (
       ids.size
         ? await this.categoryModel
-            .find({ _id: { $in: Array.from(ids) }, clientId })
+            .find({
+              _id: { $in: this.toObjectIds(ids) },
+              clientId: this.toObjectId(clientId),
+            })
             .lean()
             .exec()
         : []
@@ -446,7 +624,10 @@ export class AccountingEntriesService {
     const projects = (
       ids.size
         ? await this.projectModel
-            .find({ _id: { $in: Array.from(ids) }, clientId })
+            .find({
+              _id: { $in: this.toObjectIds(ids) },
+              clientId: this.toObjectId(clientId),
+            })
             .lean()
             .exec()
         : []
@@ -892,6 +1073,7 @@ export class AccountingEntriesService {
     periodDate: Date
     rateMap: Map<string, number>
     cargosMap: Map<string, ExpenseCargoClasificado[]>
+    warnings: string[]
   }): Promise<ContanetLine[]> {
     const {
       config,
@@ -902,8 +1084,11 @@ export class AccountingEntriesService {
       periodDate,
       rateMap,
       cargosMap,
+      warnings,
     } = ctx
     const lines: ContanetLine[] = []
+    // Dedup: una advertencia por categoría (o "sin categoría"), no por comprobante.
+    const warnedCategoryKeys = new Set<string>()
     let relacionado = 1
     let correlativo = 1
 
@@ -926,6 +1111,43 @@ export class AccountingEntriesService {
         : undefined
       const cuenta9x = category?.cuenta || ''
       const cuenta6xCat = category?.cuentaDestino6x || config.cuenta79
+
+      // Sin cuenta 9X no se puede emitir esa línea (VIATIKA no inventa cuentas
+      // contables); el comprobante queda descuadrado por el monto de sus
+      // porciones. Avisar la causa exacta en vez de dejar que Contabilidad
+      // adivine a partir de un "descuadre" genérico.
+      if (!cuenta9x) {
+        const categoryKey = category?._id?.toString() || expense.categoryId?.toString() || 'sin-categoria'
+        if (!warnedCategoryKeys.has(categoryKey)) {
+          warnedCategoryKeys.add(categoryKey)
+          // Tres causas distintas, cada una con acción distinta:
+          //  1. La categoría existe pero no tiene 9X configurada → falta configuración.
+          //  2. El comprobante tiene un categoryId que NO resuelve a ninguna categoría
+          //     (borrada, o de otra empresa) → dato roto, no un simple "falta configurar".
+          //  3. El comprobante nunca tuvo categoría asignada.
+          const msg = category
+            ? `La categoría "${category.name}" no tiene la Cuenta Analítica 9X configurada (Categorías → editar categoría). Sus comprobantes quedarán descuadrados hasta configurarla.`
+            : expense.categoryId
+              ? `Un comprobante tiene asignada una categoría (id ${categoryKey}) que ya no existe o no pertenece a esta empresa. Reasígnale una categoría válida desde el detalle del gasto.`
+              : 'Hay comprobantes sin categoría asignada: no se puede generar su línea analítica 9X. Asígnales una categoría desde el detalle del gasto.'
+          warnings.push(msg)
+          this.logger.warn(`[asientos] ${msg} (categoryId=${categoryKey})`)
+        }
+      }
+
+      // Falta la Cuenta Destino 6X (gasto por naturaleza, clase 6): el par destino
+      // cae al fallback `config.cuenta79` y sale como 79/79 (mismo cargo/abono, se
+      // cancela solo y NO registra el gasto por naturaleza). No descuadra, pero el
+      // asiento queda contablemente incompleto. Se avisa aparte de la 9X.
+      if (category && !category.cuentaDestino6x) {
+        const dest6xKey = `${category._id?.toString()}:6x`
+        if (!warnedCategoryKeys.has(dest6xKey)) {
+          warnedCategoryKeys.add(dest6xKey)
+          const msg = `La categoría "${category.name}" no tiene la Cuenta Destino 6X configurada (Categorías → editar categoría). El asiento de destino saldrá como 79/79 en vez de 6X/79, sin registrar el gasto por naturaleza.`
+          warnings.push(msg)
+          this.logger.warn(`[asientos] ${msg} (categoryId=${category._id?.toString()})`)
+        }
+      }
 
       // Centro de costo del proyecto del gasto (aplica a todas las líneas).
       const expenseProject = expense.proyectId
@@ -1129,8 +1351,9 @@ export class AccountingEntriesService {
     colaborador: any
     periodDate: Date
     rateMap: Map<string, number>
+    warnings: string[]
   }): Promise<ContanetLine[]> {
-    const { config, advances, colaborador, report, periodDate, rateMap } = ctx
+    const { config, advances, colaborador, report, periodDate, rateMap, warnings } = ctx
     const lines: ContanetLine[] = []
     let relacionado = 1
     let correlativo = 1
@@ -1140,7 +1363,12 @@ export class AccountingEntriesService {
 
     for (const adv of advances) {
       const amount = this.round2(Number(adv.amount) || 0)
-      if (amount <= 0) continue
+      if (amount <= 0) {
+        warnings.push(
+          `El anticipo "${adv.description || adv._id}" tiene monto ${amount} y no genera asiento de solicitud (revisa el monto del anticipo).`
+        )
+        continue
+      }
       const rawDate =
         adv.payment?.transferDate || adv.startDate || adv.createdAt
       const date = rawDate ? new Date(rawDate) : new Date()
@@ -1206,8 +1434,9 @@ export class AccountingEntriesService {
     colaborador: any
     periodDate: Date
     rateMap: Map<string, number>
+    warnings: string[]
   }): Promise<ContanetLine[]> {
-    const { config, expenses, colaborador, report, periodDate, rateMap } = ctx
+    const { config, expenses, colaborador, report, periodDate, rateMap, warnings } = ctx
     const lines: ContanetLine[] = []
     let relacionado = 1
     let correlativo = 1
@@ -1225,7 +1454,14 @@ export class AccountingEntriesService {
       const total = this.round2(
         Number(det?.totales?.importeTotal) || Number(expense.total) || 0
       )
-      if (total <= 0) continue
+      if (total <= 0) {
+        const label =
+          det?.emisor?.razonSocial || data.razonSocial || expense.providerName || expense.comentario || expense._id
+        warnings.push(
+          `El comprobante "${label}" tiene total 0 y no genera asiento de aplicación (revisa el desglose del comprobante).`
+        )
+        continue
+      }
       const ruc = det?.emisor?.ruc || data.rucEmisor || ''
       const razonSocial =
         det?.emisor?.razonSocial ||
@@ -1424,15 +1660,25 @@ export class AccountingEntriesService {
   // C4 — Validación de cuadre (partida doble)
   // ----------------------------------------------------------------------
 
+  /**
+   * Valida la partida doble por `relacionado` (un grupo = un comprobante/anticipo).
+   * Cada error incluye la fila de Excel exacta (misma fórmula que `buildContanetWorkbook`:
+   * fila = 9 + índice) y una descripción legible del documento, para que Contabilidad
+   * no tenga que adivinar cuál comprobante originó el descuadre.
+   */
   validateCuadre(lines: ContanetLine[]): CuadreError[] {
-    const groups = new Map<number, { debe: number; haber: number }>()
-    for (const line of lines) {
+    const groups = new Map<
+      number,
+      { debe: number; haber: number; firstIdx: number; lastIdx: number }
+    >()
+    lines.forEach((line, idx) => {
       const rel = Number(line.relacionado)
-      if (!groups.has(rel)) groups.set(rel, { debe: 0, haber: 0 })
+      if (!groups.has(rel)) groups.set(rel, { debe: 0, haber: 0, firstIdx: idx, lastIdx: idx })
       const g = groups.get(rel)!
       g.debe += Number(line.montoDebe) || 0
       g.haber += Number(line.montoHaber) || 0
-    }
+      g.lastIdx = idx
+    })
     const errors: CuadreError[] = []
     for (const [rel, g] of groups) {
       const debe = this.round2(g.debe)
@@ -1443,10 +1689,36 @@ export class AccountingEntriesService {
           totalDebe: debe,
           totalHaber: haber,
           diferencia: this.round2(debe - haber),
+          filaInicio: this.toExcelRow(g.firstIdx),
+          filaFin: this.toExcelRow(g.lastIdx),
+          documento: this.describeRelacionado(lines, g.firstIdx, g.lastIdx),
         })
       }
     }
     return errors
+  }
+
+  /** Fila de Excel (1-indexed) para el índice de línea dado. Debe calzar con `buildContanetWorkbook`. */
+  private toExcelRow(lineIdx: number): number {
+    return 9 + lineIdx
+  }
+
+  /** Descripción legible del documento (comprobante o anticipo) al que pertenece un grupo de líneas. */
+  private describeRelacionado(lines: ContanetLine[], firstIdx: number, lastIdx: number): string {
+    for (let i = firstIdx; i <= lastIdx; i++) {
+      const l = lines[i]
+      if (l.razonSocialProv) {
+        const doc = [l.nroSerie, l.nroDoc].filter(Boolean).join('-')
+        return doc ? `${l.razonSocialProv} (${doc})` : String(l.razonSocialProv)
+      }
+    }
+    for (let i = firstIdx; i <= lastIdx; i++) {
+      if (lines[i].razonSocialTrab) return String(lines[i].razonSocialTrab)
+    }
+    for (let i = firstIdx; i <= lastIdx; i++) {
+      if (lines[i].glosa) return String(lines[i].glosa)
+    }
+    return `asiento #${lines[firstIdx]?.relacionado}`
   }
 
   private countAsientos(lines: ContanetLine[]): number {

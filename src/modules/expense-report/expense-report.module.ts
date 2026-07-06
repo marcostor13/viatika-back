@@ -21,6 +21,10 @@ import { ProjectModule } from '../project/project.module'
 import { CategoryModule } from '../category/category.module'
 import { SaldoModule } from '../saldo/saldo.module'
 import { ClientModule } from '../client/client.module'
+import {
+  AccountingEntriesFile,
+  AccountingEntriesFileSchema,
+} from '../accounting-entries/entities/accounting-entries-file.entity'
 
 @Module({
   imports: [
@@ -28,6 +32,7 @@ import { ClientModule } from '../client/client.module'
       { name: ExpenseReport.name, schema: ExpenseReportSchema },
       { name: Expense.name, schema: ExpenseSchema },
       { name: CajaChicaReport.name, schema: CajaChicaReportSchema },
+      { name: AccountingEntriesFile.name, schema: AccountingEntriesFileSchema },
     ]),
     AuditLogModule,
     EmailModule,

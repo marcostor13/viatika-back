@@ -166,19 +166,32 @@ export class ProjectService {
   ) {
     const clientIdObject = new Types.ObjectId(clientId)
     const filter: any = { clientId: clientIdObject }
+    const andConditions: any[] = []
 
     if (opts?.isActive !== undefined) {
       filter.isActive = opts.isActive
     }
     // Filtro por perfiles de categoría (para colaboradores: solo sus centros de costo).
+    // Tolera nulos: los centros de costo sin perfil (legacy) siguen visibles para
+    // todos los colaboradores hasta que un admin les asigne un perfil.
     if (opts?.categoryGroupIds && opts.categoryGroupIds.length > 0) {
-      filter.categoryGroupId = {
-        $in: opts.categoryGroupIds.map(id => new Types.ObjectId(id)),
-      }
+      andConditions.push({
+        $or: [
+          {
+            categoryGroupId: {
+              $in: opts.categoryGroupIds.map(id => new Types.ObjectId(id)),
+            },
+          },
+          { categoryGroupId: null },
+        ],
+      })
     }
     if (opts?.search) {
       const re = new RegExp(opts.search, 'i')
-      filter.$or = [{ name: re }, { code: re }]
+      andConditions.push({ $or: [{ name: re }, { code: re }] })
+    }
+    if (andConditions.length > 0) {
+      filter.$and = andConditions
     }
 
     const usePagination = opts?.page !== undefined || opts?.limit !== undefined
@@ -243,12 +256,14 @@ export class ProjectService {
         : null
     }
 
-    // Perfil de categoría: cadena vacía/null limpia la asignación; valor válido la actualiza.
+    // Perfil de categoría: obligatorio. No se permite dejar el centro de costo sin perfil.
     if ('categoryGroupId' in updatePayload) {
       const raw = (updatePayload.categoryGroupId ?? '').toString().trim()
-      ;(updatePayload as Record<string, unknown>).categoryGroupId = raw
-        ? new Types.ObjectId(raw)
-        : null
+      if (!raw) {
+        throw new BadRequestException('El perfil de categoría es obligatorio')
+      }
+      ;(updatePayload as Record<string, unknown>).categoryGroupId =
+        new Types.ObjectId(raw)
     }
 
     if (updatePayload.code) {

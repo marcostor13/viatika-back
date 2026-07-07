@@ -12,6 +12,8 @@ export interface UserPermissions {
   modules: string[]
   canApproveL1: boolean
   canApproveL2: boolean
+  /** Permite elegir fechas anteriores a hoy en la solicitud de viáticos. Por defecto false. */
+  canBackdateViaticos?: boolean
   /** Categorías sueltas asignadas directamente (independientes de los perfiles). */
   categoryIds: string[]
   /** @deprecated usar categoryProfileIds. Se conserva para migración. */
@@ -105,6 +107,7 @@ export class User {
       modules: { type: [String], default: [] },
       canApproveL1: { type: Boolean, default: false },
       canApproveL2: { type: Boolean, default: false },
+      canBackdateViaticos: { type: Boolean, default: false },
       categoryIds: { type: [String], default: [] },
       categoryProfileId: { type: String, default: null },
       categoryProfileIds: { type: [String], default: [] },

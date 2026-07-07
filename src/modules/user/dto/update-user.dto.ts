@@ -41,6 +41,10 @@ export class UpdatePermissionsDto {
   @IsOptional()
   canApproveL2?: boolean
 
+  @IsBoolean()
+  @IsOptional()
+  canBackdateViaticos?: boolean
+
   @IsArray()
   @IsOptional()
   categoryIds?: string[]

@@ -7,6 +7,7 @@ import { createHash } from 'crypto'
 import OpenAI from 'openai'
 import { ExpenseReport } from '../expense-report/entities/expense-report.entity'
 import { Expense } from '../expense/entities/expense.entity'
+import { parseFechaEmisionInput } from '../expense/utils/fecha-emision.util'
 import { Advance } from '../advance/entities/advance.entity'
 import { Project } from '../project/entities/project.entity'
 import { User } from '../user/schemas/user.schema'
@@ -370,7 +371,7 @@ export class AccountingEntriesService {
     const [rateMap, cargosMap] = await Promise.all([
       this.prefetchRates(report, expenses, advances, config),
       tipos.includes('compra') && expenses.length > 0
-        ? this.resolveCargosClasificacion(expenses)
+        ? this.resolveCargosClasificacion(expenses, config.inafectoKeywords ?? [])
         : Promise.resolve(new Map<string, ExpenseCargoClasificado[]>()),
     ])
 
@@ -709,6 +710,7 @@ export class AccountingEntriesService {
               _id: { $in: this.toObjectIds(ids) },
               clientId: this.toObjectId(clientId),
             })
+            .populate('lineaNegocioId', 'name code')
             .lean()
             .exec()
         : []
@@ -728,9 +730,17 @@ export class AccountingEntriesService {
     }
   }
 
-  /** Fecha del asiento: fechaEmision del comprobante o fecha del reporte. */
+  /**
+   * Fecha del asiento: fechaEmision del comprobante o fecha del reporte.
+   * `expense.fechaEmision` se persiste como texto dd/MM/yyyy (ver
+   * fecha-emision.util.ts); `new Date(raw)` nativo la interpreta como
+   * MM/DD/YYYY y produce fechas incorrectas o inválidas, por eso se parsea
+   * con `parseFechaEmisionInput` en vez de pasarla directo al constructor.
+   */
   private asientoDate(expense: any, report: any): Date {
-    const raw = expense?.fechaEmision || report?.createdAt || report?.updatedAt
+    const fromComprobante = parseFechaEmisionInput(expense?.fechaEmision)
+    if (fromComprobante) return fromComprobante
+    const raw = report?.createdAt || report?.updatedAt
     const d = raw ? new Date(raw) : new Date()
     return Number.isNaN(d.getTime()) ? new Date() : d
   }
@@ -946,16 +956,18 @@ export class AccountingEntriesService {
 
   /**
    * Aplica el centro de costo del proyecto a una línea. El "Codigo Centro Costo"
-   * y el "Codigo Sub Centro Costo" reciben el código del centro de costo
-   * (proyecto). Prioriza los campos contables explícitos del proyecto y, si no,
-   * usa el `code` del centro de costo.
+   * recibe el código de la línea de negocio del proyecto (ej. SC), no el del
+   * proyecto/centro de costo en sí; si el proyecto no tiene línea de negocio
+   * asignada, cae a `project.centroCosto`/`project.code`. El "Codigo Sub Centro
+   * Costo" sigue identificando al centro de costo (proyecto) en sí.
    */
   private applyProjectCostCenter(
     line: ContanetLine,
     project: any | undefined
   ): void {
     if (!project) return
-    const cc = project.centroCosto || project.code || ''
+    const cc =
+      project.lineaNegocioId?.code || project.centroCosto || project.code || ''
     const sub =
       project.subCentroCosto || project.centroCosto || project.code || ''
     if (cc) line.centroCosto = cc
@@ -1001,6 +1013,31 @@ export class AccountingEntriesService {
   }
 
   /**
+   * true si el comprobante (comentario, ítems, leyendas, observaciones)
+   * contiene alguna de las `inafectoKeywords` configuradas (ej. "descuento").
+   * En ese caso sus otrosCargos/otrosTributos se excluyen del asiento: ya
+   * están implícitos en la base del comprobante (SUNAT calcula gravada/
+   * exonerada neta de descuentos), no son un gasto adicional que amerite su
+   * propia línea 9X/6X.
+   */
+  private matchesInafectoKeyword(expense: any, keywords: string[]): boolean {
+    if (!keywords?.length) return false
+    const det = expense?.comprobanteDetallado ?? {}
+    const items = (det.items ?? [])
+      .map((it: any) => String(it?.descripcion || ''))
+      .join(' ')
+    const text = [expense?.comentario, items, det?.leyendas, det?.observaciones]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+    if (!text) return false
+    return keywords.some(k => {
+      const kw = String(k || '').trim().toLowerCase()
+      return kw.length > 0 && text.includes(kw)
+    })
+  }
+
+  /**
    * Clasifica los cargos ≠ IGV de las facturas de la rendición.
    * Orden de resolución (para minimizar IA):
    *  1. Sin cargos desconocidos → nada que hacer (caso común, 0 IA).
@@ -1010,7 +1047,8 @@ export class AccountingEntriesService {
    * Si la IA falla, los cargos se tratan como deducibles (revisión manual).
    */
   private async resolveCargosClasificacion(
-    expenses: any[]
+    expenses: any[],
+    inafectoKeywords: string[] = []
   ): Promise<Map<string, ExpenseCargoClasificado[]>> {
     const map = new Map<string, ExpenseCargoClasificado[]>()
     const pendientes: Array<{
@@ -1021,6 +1059,7 @@ export class AccountingEntriesService {
 
     for (const expense of expenses) {
       if (expense.expenseType && expense.expenseType !== 'factura') continue
+      if (this.matchesInafectoKeyword(expense, inafectoKeywords)) continue
       const cargos = this.extractCargosDesconocidos(expense)
       if (!cargos.length) continue
       const hash = this.cargosHash(cargos)
@@ -1267,7 +1306,11 @@ export class AccountingEntriesService {
           baseTotal + igv
       )
 
-      const serie = det?.comprobante?.serie || data.serie || ''
+      // Numero Serie: solo la factura (01) lleva la serie real del comprobante;
+      // el resto de tipos de documento va con la serie de control fija 0001.
+      const serie = esFactura
+        ? det?.comprobante?.serie || data.serie || ''
+        : '0001'
       const nroDoc =
         det?.comprobante?.correlativo ||
         data.correlativo ||
@@ -1321,7 +1364,9 @@ export class AccountingEntriesService {
         }
       }
 
-      // (2) Cuenta 40 — IGV (Debe), solo facturas con IGV
+      // (2) Cuenta 40 — IGV (Debe), solo facturas con IGV.
+      // Las cuentas 40x son tributos por pagar, no llevan Numero Serie /
+      // Numero Documento (esos campos identifican al proveedor en la 42/9X).
       if (igv > 0) {
         const cuenta40 = this.resolveCuenta40(config, expense.tasaIgv)
         push(
@@ -1334,9 +1379,6 @@ export class AccountingEntriesService {
             periodDate,
             {
               nroCuenta: cuenta40,
-              codTipDoc,
-              nroSerie: serie,
-              nroDoc,
               montoDebe: igv,
               montoDebeME: this.toME(igv, tc),
             }
@@ -1560,6 +1602,12 @@ export class AccountingEntriesService {
         ''
       const glosa = 'APLICACION'
       const codTipDoc = resolveCodTipDoc(expense, data.tipoComprobante)
+      // Numero Serie: solo la factura (01) lleva la serie real del comprobante;
+      // el resto de tipos de documento va con la serie de control fija 0001.
+      const serie =
+        codTipDoc === TIPO_DOCUMENTO.FT
+          ? det?.comprobante?.serie || data.serie || ''
+          : '0001'
 
       // 42 (Debe) — cancela la provisión del proveedor
       lines.push({
@@ -1573,7 +1621,7 @@ export class AccountingEntriesService {
           {
             nroCuenta: config.cuenta42,
             codTipDoc,
-            nroSerie: det?.comprobante?.serie || data.serie || '',
+            nroSerie: serie,
             nroDoc: det?.comprobante?.correlativo || data.correlativo || '',
             montoDebe: total,
             montoDebeME: this.toME(total, tc),

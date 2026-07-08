@@ -380,6 +380,46 @@ describe('AccountingEntriesService — tipo de documento y no deducibles', () =>
   })
 })
 
+describe('AccountingEntriesService — palabras clave de conceptos inafectos', () => {
+  const service = newService()
+
+  it('matchesInafectoKeyword: detecta la palabra clave en comentario/ítems/leyendas/observaciones', () => {
+    const match = (service as any).matchesInafectoKeyword.bind(service)
+    expect(
+      match({ comentario: 'Factura con DESCUENTO comercial' }, ['descuento'])
+    ).toBe(true)
+    expect(
+      match(
+        { comprobanteDetallado: { items: [{ descripcion: 'Descuento por pronto pago' }] } },
+        ['descuento']
+      )
+    ).toBe(true)
+    expect(
+      match({ comprobanteDetallado: { leyendas: 'Incluye descuento' } }, ['descuento'])
+    ).toBe(true)
+    expect(match({ comentario: 'Servicio de transporte' }, ['descuento'])).toBe(
+      false
+    )
+    expect(match({ comentario: 'Con descuento' }, [])).toBe(false)
+  })
+
+  it('resolveCargosClasificacion: excluye los cargos del comprobante cuyo concepto matchea una palabra clave (no genera 9X/6X extra)', async () => {
+    const expense = {
+      _id: 'e-descuento',
+      expenseType: 'factura',
+      comentario: 'Factura con descuento por volumen',
+      comprobanteDetallado: {
+        totales: { operacionGravada: 90, otrosCargos: 10, importeTotal: 100 },
+      },
+    }
+    const map = await (service as any).resolveCargosClasificacion(
+      [expense],
+      ['descuento']
+    )
+    expect(map.has('e-descuento')).toBe(false)
+  })
+})
+
 describe('AccountingEntriesService — avisos cuando falta la cuenta 9X', () => {
   const service = newService()
   const config = makeConfig()

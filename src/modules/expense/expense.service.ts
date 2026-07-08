@@ -1208,6 +1208,7 @@ export class ExpenseService {
     countOnly?: boolean
     limit?: number
     clientId?: string
+    expenseReportId?: string
     concurrency?: number
   } = {}): Promise<{
     total: number
@@ -1234,13 +1235,22 @@ export class ExpenseService {
         ? new Types.ObjectId(opts.clientId)
         : opts.clientId
     }
+    if (opts.expenseReportId) {
+      if (!Types.ObjectId.isValid(opts.expenseReportId)) {
+        throw new BadRequestException(
+          `expenseReportId inválido: ${opts.expenseReportId}`
+        )
+      }
+      filter.expenseReportId = new Types.ObjectId(opts.expenseReportId)
+    }
 
     // Solo contar (no llama a OpenAI): útil para dimensionar antes de correr.
     if (opts.countOnly) {
       const total = await this.expenseRepository.countDocuments(filter).exec()
       this.logger.log(
         `[backfill] COUNT: ${total} factura(s) sin comprobanteDetallado` +
-          (opts.clientId ? ` [clientId=${opts.clientId}]` : '')
+          (opts.clientId ? ` [clientId=${opts.clientId}]` : '') +
+          (opts.expenseReportId ? ` [expenseReportId=${opts.expenseReportId}]` : '')
       )
       return { total, updated: 0, skipped: 0, failed: 0, dryRun: true, failures: [] }
     }
@@ -1259,7 +1269,8 @@ export class ExpenseService {
     this.logger.log(
       `[backfill] ${total} factura(s) sin comprobanteDetallado` +
         (dryRun ? ' (DRY-RUN, no se escribe)' : '') +
-        (opts.clientId ? ` [clientId=${opts.clientId}]` : '')
+        (opts.clientId ? ` [clientId=${opts.clientId}]` : '') +
+        (opts.expenseReportId ? ` [expenseReportId=${opts.expenseReportId}]` : '')
     )
 
     let updated = 0

@@ -2,9 +2,16 @@ import { Types } from 'mongoose'
 import { AccountingEntriesService } from './accounting-entries.service'
 import * as ContanetExport from './entities/contanet-export'
 
-/** Emula el encadenado `.find(...).lean().exec()` / `.findById(...).lean().exec()` de Mongoose. */
+/**
+ * Emula el encadenado `.find(...).lean().exec()` / `.findById(...).lean().exec()`
+ * de Mongoose, incluyendo `.populate(...)` como no-op encadenable (buildProjectMap).
+ */
 function mockQuery(result: any) {
-  return { lean: () => ({ exec: async () => result }) }
+  const query: any = {
+    lean: () => ({ exec: async () => result }),
+  }
+  query.populate = () => query
+  return query
 }
 
 /** Emula `.findOneAndUpdate(...).exec()` / `.updateMany(...).exec()`. */

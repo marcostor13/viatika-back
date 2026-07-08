@@ -24,6 +24,7 @@ function applyOptionalNodeDnsServers(): void {
  *   npm run backfill:comprobante -- --dry-run --limit=5 # re-escanea 5 pero NO escribe (valida)
  *   npm run backfill:comprobante -- --limit=10          # procesa y escribe solo 10 (prueba)
  *   npm run backfill:comprobante -- --client=<clientId> # solo una empresa
+ *   npm run backfill:comprobante -- --report=<expenseReportId> # solo una rendición
  *   npm run backfill:comprobante -- --concurrency=5     # workers en paralelo (1-8)
  *   npm run backfill:comprobante                        # corre todo
  *
@@ -41,6 +42,7 @@ function parseArgs(argv: string[]) {
     countOnly: argv.includes('--count') || argv.includes('--count-only'),
     limit: get('limit') ? Number(get('limit')) : undefined,
     clientId: get('client') || get('clientId'),
+    expenseReportId: get('report') || get('expenseReportId'),
     concurrency: get('concurrency') ? Number(get('concurrency')) : undefined,
   }
 }

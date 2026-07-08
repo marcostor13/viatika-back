@@ -371,7 +371,7 @@ export class AccountingEntriesService {
     const [rateMap, cargosMap] = await Promise.all([
       this.prefetchRates(report, expenses, advances, config),
       tipos.includes('compra') && expenses.length > 0
-        ? this.resolveCargosClasificacion(expenses, config.inafectoKeywords ?? [])
+        ? this.resolveCargosClasificacion(expenses)
         : Promise.resolve(new Map<string, ExpenseCargoClasificado[]>()),
     ])
 
@@ -1013,31 +1013,6 @@ export class AccountingEntriesService {
   }
 
   /**
-   * true si el comprobante (comentario, ítems, leyendas, observaciones)
-   * contiene alguna de las `inafectoKeywords` configuradas (ej. "descuento").
-   * En ese caso sus otrosCargos/otrosTributos se excluyen del asiento: ya
-   * están implícitos en la base del comprobante (SUNAT calcula gravada/
-   * exonerada neta de descuentos), no son un gasto adicional que amerite su
-   * propia línea 9X/6X.
-   */
-  private matchesInafectoKeyword(expense: any, keywords: string[]): boolean {
-    if (!keywords?.length) return false
-    const det = expense?.comprobanteDetallado ?? {}
-    const items = (det.items ?? [])
-      .map((it: any) => String(it?.descripcion || ''))
-      .join(' ')
-    const text = [expense?.comentario, items, det?.leyendas, det?.observaciones]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase()
-    if (!text) return false
-    return keywords.some(k => {
-      const kw = String(k || '').trim().toLowerCase()
-      return kw.length > 0 && text.includes(kw)
-    })
-  }
-
-  /**
    * Clasifica los cargos ≠ IGV de las facturas de la rendición.
    * Orden de resolución (para minimizar IA):
    *  1. Sin cargos desconocidos → nada que hacer (caso común, 0 IA).
@@ -1045,10 +1020,16 @@ export class AccountingEntriesService {
    *  3. Restantes → UN solo request batcheado a DeepSeek; el veredicto se
    *     persiste en el expense (sin tocar updatedAt, no invalida la caché).
    * Si la IA falla, los cargos se tratan como deducibles (revisión manual).
+   *
+   * NOTA: excluir un cargo aquí (por palabra clave u otro criterio) sin
+   * ajustar también el total que recibe la cuenta 42 (Haber) desincuadra el
+   * asiento — el Debe (9X/6X) queda corto en exactamente ese monto frente al
+   * Haber (42), que sigue reflejando el importeTotal íntegro del comprobante.
+   * Ver descuadres reportados en documentos REPSOL (2026-07-08): la exclusión
+   * por `inafectoKeywords` se revirtió por esta razón.
    */
   private async resolveCargosClasificacion(
-    expenses: any[],
-    inafectoKeywords: string[] = []
+    expenses: any[]
   ): Promise<Map<string, ExpenseCargoClasificado[]>> {
     const map = new Map<string, ExpenseCargoClasificado[]>()
     const pendientes: Array<{
@@ -1059,7 +1040,6 @@ export class AccountingEntriesService {
 
     for (const expense of expenses) {
       if (expense.expenseType && expense.expenseType !== 'factura') continue
-      if (this.matchesInafectoKeyword(expense, inafectoKeywords)) continue
       const cargos = this.extractCargosDesconocidos(expense)
       if (!cargos.length) continue
       const hash = this.cargosHash(cargos)

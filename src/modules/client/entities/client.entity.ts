@@ -84,4 +84,4 @@ export class Client {
 }
 
 export const ClientSchema = SchemaFactory.createForClass(Client)
-ClientSchema.index({ codigo: 1 }, { unique: true })
+// El índice único de `codigo` ya lo crea `@Prop({ unique: true })`.

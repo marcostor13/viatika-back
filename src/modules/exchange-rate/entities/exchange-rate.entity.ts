@@ -23,4 +23,4 @@ export class ExchangeRate {
 }
 
 export const ExchangeRateSchema = SchemaFactory.createForClass(ExchangeRate)
-ExchangeRateSchema.index({ fecha: 1 }, { unique: true })
+// El índice único de `fecha` ya lo crea `@Prop({ unique: true })`.

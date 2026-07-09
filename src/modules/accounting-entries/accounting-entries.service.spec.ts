@@ -547,6 +547,111 @@ describe('AccountingEntriesService — avisos cuando falta la cuenta 9X', () => 
   })
 })
 
+describe('AccountingEntriesService — absorción de residuo de redondeo', () => {
+  const service = newService()
+  const config = makeConfig()
+  const categoryMap = new Map<string, any>([
+    ['cat1', { _id: 'cat1', cuenta: '91.3.1.410', cuentaDestino6x: '63.1.4.100' }],
+  ])
+  const projectMap = new Map<string, any>()
+  const rateMap = new Map<string, number>([['2026-04-15', TC]])
+  const report = { createdAt: new Date('2026-04-15') }
+  const periodDate = new Date('2026-04-01')
+
+  async function build(expenses: any[]) {
+    return (service as any).buildCompraLines({
+      report,
+      config,
+      expenses,
+      projectMap,
+      categoryMap,
+      periodDate,
+      rateMap,
+      cargosMap: new Map(),
+      warnings: [],
+    }) as Promise<ContanetLine[]>
+  }
+
+  it('residuo de -0.01 (base+IGV suman 1 centavo menos que importeTotal): cuadra absorbiendo en la porción 9X', async () => {
+    // Debe reconstruido = 205.10 (gravada) + 36.92 (IGV) = 242.02;
+    // Haber = importeTotal 242.03. Sin absorción, descuadre de -0.01.
+    const expense = {
+      _id: 'e-538',
+      categoryId: 'cat1',
+      igv: 36.92,
+      tasaIgv: 18,
+      comprobanteDetallado: {
+        emisor: { ruc: '10123456789', razonSocial: 'APONTE JARA MERCEDES VIOLETA' },
+        comprobante: { serie: 'E001', correlativo: '538' },
+        totales: { operacionGravada: 205.1, igv: 36.92, importeTotal: 242.03 },
+      },
+      data: '{}',
+    }
+    const lines = await build([expense])
+
+    expect(service.validateCuadre(lines)).toHaveLength(0)
+    // El centavo se absorbe en la porción 9X afecta: 205.10 → 205.11.
+    const nine = lines.find(l => l.nroCuenta === '91.3.1.410')!
+    expect(nine.montoDebe).toBe(205.11)
+    // La cuenta 42 conserva el importeTotal íntegro del comprobante.
+    const l42 = lines.find(l => l.nroCuenta === '42.1.2.100')!
+    expect(l42.montoHaber).toBe(242.03)
+  })
+
+  it('el residuo se absorbe en la porción de MAYOR monto', async () => {
+    // Gravada 200 (afecta) + inafecta 40.01 + IGV 36 = 276.01; total 276.02.
+    // El centavo debe ir a la porción de 200, no a la de 40.01.
+    const expense = {
+      _id: 'e-mix',
+      categoryId: 'cat1',
+      igv: 36,
+      tasaIgv: 18,
+      comprobanteDetallado: {
+        emisor: { ruc: '10123456789', razonSocial: 'PROVEEDOR MIXTO' },
+        comprobante: { serie: 'E001', correlativo: '900' },
+        totales: {
+          operacionGravada: 200,
+          operacionInafecta: 40.01,
+          igv: 36,
+          importeTotal: 276.02,
+        },
+      },
+      data: '{}',
+    }
+    const lines = await build([expense])
+
+    expect(service.validateCuadre(lines)).toHaveLength(0)
+    const afecta = lines.find(
+      l => l.nroCuenta === '91.3.1.410' && l.identTipAfecto === 'S'
+    )!
+    const inafecta = lines.find(
+      l => l.nroCuenta === '91.3.1.410' && l.identTipAfecto === 'N'
+    )!
+    expect(afecta.montoDebe).toBe(200.01)
+    expect(inafecta.montoDebe).toBe(40.01)
+  })
+
+  it('un desfase mayor al umbral (> 0.05) NO se absorbe: se sigue reportando el descuadre', async () => {
+    // Gravada 200 + IGV 36 = 236; importeTotal 236.50 → desfase 0.50, no es
+    // residuo de redondeo (probablemente falta un cargo). No debe enmascararse.
+    const expense = {
+      _id: 'e-big',
+      categoryId: 'cat1',
+      igv: 36,
+      tasaIgv: 18,
+      comprobanteDetallado: {
+        emisor: { ruc: '10123456789', razonSocial: 'PROVEEDOR DESCUADRADO' },
+        comprobante: { serie: 'E001', correlativo: '901' },
+        totales: { operacionGravada: 200, igv: 36, importeTotal: 236.5 },
+      },
+      data: '{}',
+    }
+    const lines = await build([expense])
+
+    expect(service.validateCuadre(lines).length).toBeGreaterThan(0)
+  })
+})
+
 describe('resolveCodTipDoc — catálogo codigos.md', () => {
   const { resolveCodTipDoc } = require('./constants/tipo-documento')
 

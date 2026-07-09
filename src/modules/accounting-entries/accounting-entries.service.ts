@@ -1286,6 +1286,27 @@ export class AccountingEntriesService {
           baseTotal + igv
       )
 
+      // Absorción del residuo de redondeo. La analítica (Debe) se reconstruye
+      // redondeando cada porción y el IGV por separado, mientras el Haber
+      // (cuenta 42) usa el importeTotal impreso del comprobante. Como
+      // round-cada-parte-y-sumar != round-del-total, aparece una deriva de
+      // ±0.01 que descuadra el asiento sin que haya error contable. Si el
+      // desfase es un residuo de centavos (no un descuadre real por falta de
+      // cuenta 9X u otro dato), se suma a la porción de mayor monto para que
+      // Debe iguale exactamente al importeTotal del Haber. El par destino
+      // 6X/79 se recalcula desde la misma porción, así que sigue cuadrando.
+      const RESIDUO_MAX = 0.05
+      if (cuenta9x && portions.length) {
+        const residuo = this.round2(total - baseTotal - igv)
+        if (residuo !== 0 && Math.abs(residuo) <= RESIDUO_MAX) {
+          let maxIdx = 0
+          for (let i = 1; i < portions.length; i++) {
+            if (portions[i].monto > portions[maxIdx].monto) maxIdx = i
+          }
+          portions[maxIdx].monto = this.round2(portions[maxIdx].monto + residuo)
+        }
+      }
+
       // Numero Serie: solo la factura (01) lleva la serie real del comprobante;
       // el resto de tipos de documento va con la serie de control fija 0001.
       const serie = esFactura

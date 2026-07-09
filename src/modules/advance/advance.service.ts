@@ -51,7 +51,7 @@ export class AdvanceService {
     private readonly saldoService: SaldoService
   ) {}
 
-  async create(dto: CreateAdvanceDto): Promise<Advance> {
+  async create(dto: CreateAdvanceDto, allowBackdate = false): Promise<Advance> {
     if (!dto.clientId) throw new BadRequestException('clientId es requerido')
     if (!dto.userId) throw new BadRequestException('userId es requerido')
 
@@ -62,7 +62,7 @@ export class AdvanceService {
     }
 
     const advance = this.isViaticoSolicitud(dto)
-      ? await this.createViaticoSolicitud(dto)
+      ? await this.createViaticoSolicitud(dto, allowBackdate)
       : await this.createSimpleAdvance(dto)
 
     // Solicitud financiada con saldos de la bolsa (mismo centro de costo, consumo completo).
@@ -270,7 +270,8 @@ export class AdvanceService {
       observations?: string
       amount: number
     },
-    clientId: string
+    clientId: string,
+    allowBackdate = false
   ): Promise<{
     lineDocs: {
       categoryId: Types.ObjectId
@@ -294,7 +295,7 @@ export class AdvanceService {
     }
 
     const today = this.startOfDay(new Date())
-    if (start < today) {
+    if (!allowBackdate && start < today) {
       throw new BadRequestException('La fecha de inicio no puede ser anterior a hoy.')
     }
 
@@ -358,7 +359,8 @@ export class AdvanceService {
   }
 
   private async createViaticoSolicitud(
-    dto: CreateAdvanceDto
+    dto: CreateAdvanceDto,
+    allowBackdate = false
   ): Promise<Advance> {
     const profile = await this.userService.findTransactionalProfile(dto.userId!)
     if (!profile?.signature?.trim()) {
@@ -381,7 +383,8 @@ export class AdvanceService {
           observations: dto.observations,
           amount: linesOnlyAmount,
         },
-        dto.clientId!
+        dto.clientId!,
+        allowBackdate
       )
 
     const totalAmount = Math.round((roundedSum + pendingAmt) * 100) / 100
@@ -2238,7 +2241,8 @@ export class AdvanceService {
     id: string,
     dto: ResubmitAdvanceDto,
     actingUserId: string,
-    clientId: string
+    clientId: string,
+    allowBackdate = false
   ): Promise<Advance> {
     const advance = await this.advanceModel.findById(id)
     if (!advance) throw new NotFoundException(`Viático ${id} no encontrado`)
@@ -2280,7 +2284,8 @@ export class AdvanceService {
           observations: dto.observations,
           amount: dto.amount,
         },
-        clientId
+        clientId,
+        allowBackdate
       )
 
     const wasEditing = advance.status === 'pending_l1'

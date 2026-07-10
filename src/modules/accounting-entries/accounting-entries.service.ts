@@ -1270,20 +1270,15 @@ export class AccountingEntriesService {
 
       // IGV: solo la factura da derecho a crédito fiscal (línea 40). Si
       // Contabilidad revisó el desglose manualmente, sus valores ganan; si no,
-      // manda `comprobanteDetallado`.
-      const igv = !esFactura
-        ? 0
-        : this.round2(
-            expense.desgloseRevisado
-              ? Number(expense.igv) || 0
-              : num(det?.totales?.igv) || Number(expense.igv) || 0
-          )
-      const cargos = esFactura
-        ? (cargosMap.get(expense._id.toString()) ?? [])
-        : []
-      const portions = esFactura
-        ? this.resolvePortions(expense, cargos)
-        : this.resolveNonFacturaPortions(expense)
+      // manda `comprobanteDetallado`. (Este builder solo procesa facturas,
+      // ver `if (!esFactura) continue` arriba.)
+      const igv = this.round2(
+        expense.desgloseRevisado
+          ? Number(expense.igv) || 0
+          : num(det?.totales?.igv) || Number(expense.igv) || 0
+      )
+      const cargos = cargosMap.get(expense._id.toString()) ?? []
+      const portions = this.resolvePortions(expense, cargos)
       const baseTotal = this.round2(portions.reduce((s, p) => s + p.monto, 0))
       const total = this.round2(
         num(det?.totales?.importeTotal) ||
@@ -1312,11 +1307,7 @@ export class AccountingEntriesService {
         }
       }
 
-      // Numero Serie: solo la factura (01) lleva la serie real del comprobante;
-      // el resto de tipos de documento va con la serie de control fija 0001.
-      const serie = esFactura
-        ? det?.comprobante?.serie || data.serie || ''
-        : '0001'
+      const serie = det?.comprobante?.serie || data.serie || ''
       const nroDoc =
         det?.comprobante?.correlativo ||
         data.correlativo ||
@@ -1570,12 +1561,15 @@ export class AccountingEntriesService {
     config: AccountingConfigDocument
     expenses: any[]
     colaborador: any
+    projectMap: Map<string, any>
+    categoryMap: Map<string, any>
     periodDate: Date
     rateMap: Map<string, number>
     warnings: string[]
   }): Promise<ContanetLine[]> {
-    const { config, expenses, colaborador, report, periodDate, rateMap, warnings } = ctx
+    const { config, expenses, colaborador, report, projectMap, categoryMap, periodDate, rateMap, warnings } = ctx
     const lines: ContanetLine[] = []
+    const warnedCategoryKeys = new Set<string>()
     let relacionado = 1
     let correlativo = 1
     const trabDni = colaborador?.dni || ''
@@ -1591,22 +1585,31 @@ export class AccountingEntriesService {
         data.razonSocial ||
         expense.providerName ||
         ''
-      const glosaBase = 'APLICACION'
       const codTipDoc = resolveCodTipDoc(expense, data.tipoComprobante)
+      const esFactura = codTipDoc === TIPO_DOCUMENTO.FT
       // Numero Serie: solo la factura (01) lleva la serie real del comprobante;
       // el resto de tipos de documento va con la serie de control fija 0001.
-      const serie =
-        codTipDoc === TIPO_DOCUMENTO.FT
-          ? det?.comprobante?.serie || data.serie || ''
-          : '0001'
+      const serie = esFactura ? det?.comprobante?.serie || data.serie || '' : '0001'
       const nroDoc = det?.comprobante?.correlativo || data.correlativo || ''
 
-      // Un par 42(Debe)/14(Haber) por `total`; cada par es su propio grupo
-      // `relacionado` (cuadra por separado).
-      const pushPar = (date: Date, total: number, glosa: string) => {
+      // FACTURA: su gasto (9X/40/42/6X/79) ya se registró en `buildCompraLines`.
+      // Aquí solo se cruza el total rendido (42) contra el anticipo del
+      // colaborador (14) — par 42(Debe)/14(Haber).
+      if (esFactura) {
+        const total = this.round2(
+          Number(det?.totales?.importeTotal) || Number(expense.total) || 0
+        )
+        if (total <= 0) {
+          const label = razonSocial || expense.comentario || expense._id
+          warnings.push(
+            `El comprobante "${label}" tiene total 0 y no genera asiento de aplicación (revisa el desglose del comprobante).`
+          )
+          continue
+        }
+        const date = this.asientoDate(expense, report)
         const tc = this.tcFor(date, rateMap, config)
         lines.push({
-          ...this.baseLine(config, date, config.fuenteAplicacion, glosa, tc, periodDate, {
+          ...this.baseLine(config, date, config.fuenteAplicacion, 'APLICACION', tc, periodDate, {
             nroCuenta: config.cuenta42,
             codTipDoc,
             nroSerie: serie,
@@ -1621,7 +1624,7 @@ export class AccountingEntriesService {
           correlativo: correlativo++,
         })
         lines.push({
-          ...this.baseLine(config, date, config.fuenteAplicacion, glosa, tc, periodDate, {
+          ...this.baseLine(config, date, config.fuenteAplicacion, 'APLICACION', tc, periodDate, {
             nroCuenta: cuenta14,
             montoHaber: total,
             montoHaberME: this.toME(total, tc),
@@ -1633,12 +1636,125 @@ export class AccountingEntriesService {
           correlativo: correlativo++,
         })
         relacionado++
+        continue
       }
 
-      // Planilla de movilidad: una fecha rendida por cada fila de `mobilityRows`
-      // (cada una topada al límite diario, p.ej. S/40) en vez de un único monto
-      // lump-sum por el total de la planilla — refleja el detalle real de días
-      // rendidos, no un solo comprobante.
+      // NO-FACTURA (boleta/ticket/planilla/recibo/otros, código ≠ 01): no dan
+      // crédito fiscal y ya no pasan por `buildCompraLines`. Su gasto se
+      // reconoce aquí con la misma estructura que antes tenía Compra, sin la
+      // línea 40: 9X(Debe)/42(Haber) — bloque (a) — y 6X(Debe)/79(Haber) —
+      // bloque (b). A diferencia de la factura, este bloque NO cancela la
+      // cuenta 14 (decisión explícita del usuario, 2026-07-10): el 42(Haber)
+      // que genera no tiene par 42(Debe) en este builder.
+      const category = expense.categoryId
+        ? categoryMap.get(expense.categoryId.toString())
+        : undefined
+      const cuenta9x = category?.cuenta || ''
+      const cuenta6xCat = category?.cuentaDestino6x || config.cuenta79
+
+      if (!cuenta9x) {
+        const categoryKey = category?._id?.toString() || expense.categoryId?.toString() || 'sin-categoria'
+        if (!warnedCategoryKeys.has(categoryKey)) {
+          warnedCategoryKeys.add(categoryKey)
+          const msg = category
+            ? `La categoría "${category.name}" no tiene la Cuenta Analítica 9X configurada (Categorías → editar categoría). Sus comprobantes quedarán descuadrados hasta configurarla.`
+            : expense.categoryId
+              ? `Un comprobante tiene asignada una categoría (id ${categoryKey}) que ya no existe o no pertenece a esta empresa. Reasígnale una categoría válida desde el detalle del gasto.`
+              : 'Hay comprobantes sin categoría asignada: no se puede generar su línea analítica 9X. Asígnales una categoría desde el detalle del gasto.'
+          warnings.push(msg)
+          this.logger.warn(`[asientos] ${msg} (categoryId=${categoryKey})`)
+        }
+      }
+      if (category && !category.cuentaDestino6x) {
+        const dest6xKey = `${category._id?.toString()}:6x`
+        if (!warnedCategoryKeys.has(dest6xKey)) {
+          warnedCategoryKeys.add(dest6xKey)
+          const msg = `La categoría "${category.name}" no tiene la Cuenta Destino 6X configurada (Categorías → editar categoría). El asiento de destino saldrá como 79/79 en vez de 6X/79, sin registrar el gasto por naturaleza.`
+          warnings.push(msg)
+          this.logger.warn(`[asientos] ${msg} (categoryId=${category._id?.toString()})`)
+        }
+      }
+
+      const expenseProject = expense.proyectId
+        ? projectMap.get(expense.proyectId.toString())
+        : undefined
+
+      // Bloque 9X/42/6X/79 para un conjunto de porciones (una factura puede
+      // dividirse en varias 9X; una planilla se llama una vez por fila).
+      const pushBloque = (
+        date: Date,
+        portions: AnalyticPortion[],
+        glosaBase: string,
+        docFields: { codTipDoc: string; nroSerie: string; nroDoc: string }
+      ) => {
+        const total = this.round2(portions.reduce((s, p) => s + p.monto, 0))
+        if (total <= 0) return
+        const tc = this.tcFor(date, rateMap, config)
+        const push = (line: ContanetLine) => {
+          this.applyProjectCostCenter(line, expenseProject)
+          line.relacionado = relacionado
+          line.correlativo = correlativo++
+          lines.push(line)
+        }
+
+        if (cuenta9x) {
+          for (const p of portions) {
+            const glosa = p.etiqueta ? `${glosaBase} (${p.etiqueta})` : glosaBase
+            const pFields = p.serieNoDeducible
+              ? { codTipDoc: '', nroSerie: '', nroDoc: p.serieNoDeducible }
+              : docFields
+            push(
+              this.baseLine(config, date, config.fuenteAplicacion, glosa, tc, periodDate, {
+                nroCuenta: cuenta9x,
+                ...pFields,
+                identTipAfecto: p.condicion === 'afecto' ? 'S' : 'N',
+                montoDebe: this.round2(p.monto),
+                montoDebeME: this.toME(p.monto, tc),
+              })
+            )
+          }
+        }
+
+        push(
+          this.baseLine(config, date, config.fuenteAplicacion, glosaBase, tc, periodDate, {
+            nroCuenta: config.cuenta42,
+            ...docFields,
+            montoHaber: total,
+            montoHaberME: this.toME(total, tc),
+            esProvision: 1,
+            codTipDocIdentProv: ruc ? '06' : '',
+            nroDocProv: ruc,
+            razonSocialProv: razonSocial,
+          })
+        )
+
+        for (const p of portions) {
+          const glosa = p.etiqueta ? `${glosaBase} (${p.etiqueta})` : glosaBase
+          push(
+            this.baseLine(config, date, config.fuenteAplicacion, glosa, tc, periodDate, {
+              nroCuenta: cuenta6xCat,
+              montoDebe: this.round2(p.monto),
+              montoDebeME: this.toME(p.monto, tc),
+              esDestino: 1,
+            })
+          )
+          push(
+            this.baseLine(config, date, config.fuenteAplicacion, glosa, tc, periodDate, {
+              nroCuenta: config.cuenta79,
+              montoHaber: this.round2(p.monto),
+              montoHaberME: this.toME(p.monto, tc),
+              esDestino: 1,
+            })
+          )
+        }
+
+        relacionado++
+      }
+
+      // Planilla de movilidad: un bloque 9X/42/6X/79 por cada fila de
+      // `mobilityRows` (cada una topada al límite diario, p.ej. S/40) en vez
+      // de un único bloque lump-sum por el total de la planilla — refleja el
+      // detalle real de días rendidos, no un solo comprobante.
       const mobilityRows =
         expense.expenseType === 'planilla_movilidad' &&
         Array.isArray(expense.mobilityRows) &&
@@ -1654,7 +1770,12 @@ export class AccountingEntriesService {
           any = true
           const rowDate =
             parseFechaEmisionInput(row?.fecha) || this.asientoDate(expense, report)
-          pushPar(rowDate, rowTotal, `${glosaBase} ${row?.fecha || ''}`.trim())
+          pushBloque(
+            rowDate,
+            [{ proyectId: expense.proyectId?.toString(), condicion: 'inafecto', monto: rowTotal }],
+            `APLICACION ${row?.fecha || ''}`.trim(),
+            { codTipDoc, nroSerie: serie, nroDoc }
+          )
         }
         if (!any) {
           const label = expense.comentario || expense.internalCode || expense._id
@@ -1665,21 +1786,22 @@ export class AccountingEntriesService {
         continue
       }
 
-      // Resto de comprobantes: mismo total que el asiento de compra
-      // (comprobanteDetallado primero) para que compra y aplicación
-      // descarguen importes idénticos.
-      const total = this.round2(
-        Number(det?.totales?.importeTotal) || Number(expense.total) || 0
-      )
-      if (total <= 0) {
-        const label =
-          det?.emisor?.razonSocial || data.razonSocial || expense.providerName || expense.comentario || expense._id
+      // Resto de documentos no-factura: respeta `detalleAnalitico` si
+      // Contabilidad lo corrigió manualmente; si no, todo el importe es una
+      // sola porción inafecta (`resolveNonFacturaPortions`).
+      const portions = this.resolveNonFacturaPortions(expense)
+      if (!portions.length) {
+        const label = razonSocial || expense.comentario || expense._id
         warnings.push(
           `El comprobante "${label}" tiene total 0 y no genera asiento de aplicación (revisa el desglose del comprobante).`
         )
         continue
       }
-      pushPar(this.asientoDate(expense, report), total, glosaBase)
+      pushBloque(this.asientoDate(expense, report), portions, 'APLICACION', {
+        codTipDoc,
+        nroSerie: serie,
+        nroDoc,
+      })
     }
 
     return lines

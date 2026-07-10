@@ -12,6 +12,7 @@ import { Advance } from '../advance/entities/advance.entity'
 import { Project } from '../project/entities/project.entity'
 import { User } from '../user/schemas/user.schema'
 import { Category } from '../category/entities/category.entity'
+import { Client } from '../client/entities/client.entity'
 import { ExchangeRateService } from '../exchange-rate/exchange-rate.service'
 import { AccountingConfigService } from '../accounting-config/accounting-config.service'
 import { AccountingConfigDocument } from '../accounting-config/entities/accounting-config.entity'
@@ -58,6 +59,14 @@ interface AnalyticPortion {
 
 /** Series de control interno de gastos no deducibles (nodeducible.md). */
 const SERIES_NO_DEDUCIBLE = new Set(['0001', '0003', '0008'])
+
+/**
+ * Tope diario de movilidad (declaración jurada, S/ sin comprobante) cuando la
+ * empresa no configuró `Client.limits.movilidadDiario`. En el asiento de
+ * Aplicación, el total de cada planilla de movilidad se reexpresa en bloques
+ * de este monto (más un resto) en vez de usar el desglose real por fecha.
+ */
+const MOVILIDAD_DAILY_CAP_DEFAULT = 40
 
 /**
  * Tiempo tras el cual un job "processing" se considera huérfano (proceso
@@ -132,6 +141,8 @@ export class AccountingEntriesService {
     private userModel: Model<any>,
     @InjectModel(Category.name)
     private categoryModel: Model<any>,
+    @InjectModel(Client.name)
+    private clientModel: Model<any>,
     @InjectModel(AccountingEntriesFile.name)
     private fileModel: Model<any>,
     private accountingConfigService: AccountingConfigService,
@@ -177,7 +188,7 @@ export class AccountingEntriesService {
       )
     }
 
-    const [config, expenses, advances, colaborador] = await Promise.all([
+    const [config, expenses, advances, colaborador, client] = await Promise.all([
       this.accountingConfigService.getEffective(reportClientId ?? clientId),
       this.expenseModel
         .find({ expenseReportId: report._id, status: { $ne: 'rejected' } })
@@ -190,10 +201,13 @@ export class AccountingEntriesService {
             .exec()
         : Promise.resolve([])) as Promise<any[]>,
       this.userModel.findById(report.userId).lean().exec(),
+      this.clientModel.findById(this.toObjectId(reportClientId ?? clientId)).lean().exec() as Promise<any>,
     ])
+    const movilidadDiario =
+      Number(client?.limits?.movilidadDiario) || MOVILIDAD_DAILY_CAP_DEFAULT
 
     const fingerprint = this.computeFingerprint(report, expenses, advances, config)
-    return { report, config, expenses, advances, colaborador, fingerprint }
+    return { report, config, expenses, advances, colaborador, movilidadDiario, fingerprint }
   }
 
   /** Estado actual (para pintar la UI) de los tipos solicitados, con URL firmada si hay archivo listo. */
@@ -332,6 +346,7 @@ export class AccountingEntriesService {
       expenses: any[]
       advances: any[]
       colaborador: any
+      movilidadDiario: number
       fingerprint: string
     }
   ): Promise<void> {
@@ -353,10 +368,11 @@ export class AccountingEntriesService {
       expenses: any[]
       advances: any[]
       colaborador: any
+      movilidadDiario: number
       fingerprint: string
     }
   ): Promise<void> {
-    const { report, config, expenses, advances, colaborador, fingerprint } = ctx
+    const { report, config, expenses, advances, colaborador, movilidadDiario, fingerprint } = ctx
     // Alcance de datos = la empresa DUEÑA de la rendición, no la del caller (ya
     // verificadas iguales en `loadContext`, pero se usa report.clientId explícitamente
     // para que categorías/proyectos jamás se resuelvan contra el clientId equivocado).
@@ -387,6 +403,7 @@ export class AccountingEntriesService {
           expenses,
           advances,
           colaborador,
+          movilidadDiario,
           projectMap,
           categoryMap,
           periodDate,
@@ -409,6 +426,7 @@ export class AccountingEntriesService {
       expenses: any[]
       advances: any[]
       colaborador: any
+      movilidadDiario: number
       projectMap: Map<string, any>
       categoryMap: Map<string, any>
       periodDate: Date
@@ -617,6 +635,7 @@ export class AccountingEntriesService {
       expenses: any[]
       advances: any[]
       colaborador: any
+      movilidadDiario: number
       projectMap: Map<string, any>
       categoryMap: Map<string, any>
       periodDate: Date
@@ -1561,13 +1580,25 @@ export class AccountingEntriesService {
     config: AccountingConfigDocument
     expenses: any[]
     colaborador: any
+    movilidadDiario: number
     projectMap: Map<string, any>
     categoryMap: Map<string, any>
     periodDate: Date
     rateMap: Map<string, number>
     warnings: string[]
   }): Promise<ContanetLine[]> {
-    const { config, expenses, colaborador, report, projectMap, categoryMap, periodDate, rateMap, warnings } = ctx
+    const {
+      config,
+      expenses,
+      colaborador,
+      report,
+      movilidadDiario,
+      projectMap,
+      categoryMap,
+      periodDate,
+      rateMap,
+      warnings,
+    } = ctx
     const lines: ContanetLine[] = []
     const warnedCategoryKeys = new Set<string>()
     let relacionado = 1
@@ -1751,37 +1782,41 @@ export class AccountingEntriesService {
         relacionado++
       }
 
-      // Planilla de movilidad: un bloque 9X/42/6X/79 por cada fila de
-      // `mobilityRows` (cada una topada al límite diario, p.ej. S/40) en vez
-      // de un único bloque lump-sum por el total de la planilla — refleja el
-      // detalle real de días rendidos, no un solo comprobante.
-      const mobilityRows =
-        expense.expenseType === 'planilla_movilidad' &&
-        Array.isArray(expense.mobilityRows) &&
-        expense.mobilityRows.length
-          ? (expense.mobilityRows as Array<{ fecha?: string; total?: number }>)
-          : null
-
-      if (mobilityRows) {
-        let any = false
-        for (const row of mobilityRows) {
-          const rowTotal = this.round2(Number(row?.total) || 0)
-          if (rowTotal <= 0) continue
-          any = true
-          const rowDate =
-            parseFechaEmisionInput(row?.fecha) || this.asientoDate(expense, report)
-          pushBloque(
-            rowDate,
-            [{ proyectId: expense.proyectId?.toString(), condicion: 'inafecto', monto: rowTotal }],
-            `APLICACION ${row?.fecha || ''}`.trim(),
-            { codTipDoc, nroSerie: serie, nroDoc }
-          )
-        }
-        if (!any) {
+      // Planilla de movilidad: el total del comprobante se reexpresa en
+      // bloques del tope diario de movilidad (`movilidadDiario`, p.ej. S/40)
+      // más un resto, en vez del desglose real por fecha de `mobilityRows`
+      // (decisión explícita del usuario, 2026-07-10: Contanet espera la
+      // planilla en unidades del tope diario, no en los montos reales por
+      // trayecto). Todos los bloques comparten la fecha del comprobante.
+      if (expense.expenseType === 'planilla_movilidad') {
+        const total = this.round2(
+          Number(expense.total) ||
+            Number(det?.totales?.importeTotal) ||
+            (Array.isArray(expense.mobilityRows)
+              ? (expense.mobilityRows as Array<{ total?: number }>).reduce(
+                  (s, r) => s + (Number(r?.total) || 0),
+                  0
+                )
+              : 0)
+        )
+        if (total <= 0) {
           const label = expense.comentario || expense.internalCode || expense._id
           warnings.push(
-            `La planilla de movilidad "${label}" no tiene filas con monto y no genera asiento de aplicación.`
+            `La planilla de movilidad "${label}" no tiene monto y no genera asiento de aplicación.`
           )
+          continue
+        }
+        const date = this.asientoDate(expense, report)
+        let remaining = total
+        while (remaining > 0.005) {
+          const chunk = this.round2(Math.min(movilidadDiario, remaining))
+          pushBloque(
+            date,
+            [{ proyectId: expense.proyectId?.toString(), condicion: 'inafecto', monto: chunk }],
+            'APLICACION',
+            { codTipDoc, nroSerie: serie, nroDoc }
+          )
+          remaining = this.round2(remaining - chunk)
         }
         continue
       }

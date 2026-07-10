@@ -1208,10 +1208,15 @@ export class AccountingEntriesService {
       const tc = this.tcFor(date, rateMap, config)
       const num = (v: unknown) => (typeof v === 'number' ? v : Number(v) || 0)
 
-      // Tipo de documento Contanet (codigos.md). Solo la factura (01) otorga
-      // crédito fiscal; boletas/tickets/planillas/recibos van íntegros al gasto.
+      // Tipo de documento Contanet (codigos.md). Solo la factura (01) entra al
+      // registro de compra: es la única que otorga crédito fiscal y requiere
+      // provisión formal de proveedor. Boleta/ticket/planilla/recibo/otros
+      // (código != 01) no generan asiento de compra — solo cancelan la cuenta
+      // 14 en el asiento de Aplicación (`buildAplicacionLines`, que sí procesa
+      // todos los comprobantes sin filtrar por tipo de documento).
       const codTipDoc = resolveCodTipDoc(expense, data.tipoComprobante)
       const esFactura = codTipDoc === TIPO_DOCUMENTO.FT
+      if (!esFactura) continue
 
       // Cuenta principal: SIEMPRE de la categoría seleccionada en el documento.
       // Destino 6X: category.cuentaDestino6x → config.cuenta79 (fallback).
@@ -1580,10 +1585,89 @@ export class AccountingEntriesService {
     for (const expense of expenses) {
       const data = this.parseData(expense)
       const det = expense.comprobanteDetallado ?? {}
-      const date = this.asientoDate(expense, report)
-      const tc = this.tcFor(date, rateMap, config)
-      // Mismo total que el asiento de compra (comprobanteDetallado primero)
-      // para que compra y aplicación descarguen importes idénticos.
+      const ruc = det?.emisor?.ruc || data.rucEmisor || ''
+      const razonSocial =
+        det?.emisor?.razonSocial ||
+        data.razonSocial ||
+        expense.providerName ||
+        ''
+      const glosaBase = 'APLICACION'
+      const codTipDoc = resolveCodTipDoc(expense, data.tipoComprobante)
+      // Numero Serie: solo la factura (01) lleva la serie real del comprobante;
+      // el resto de tipos de documento va con la serie de control fija 0001.
+      const serie =
+        codTipDoc === TIPO_DOCUMENTO.FT
+          ? det?.comprobante?.serie || data.serie || ''
+          : '0001'
+      const nroDoc = det?.comprobante?.correlativo || data.correlativo || ''
+
+      // Un par 42(Debe)/14(Haber) por `total`; cada par es su propio grupo
+      // `relacionado` (cuadra por separado).
+      const pushPar = (date: Date, total: number, glosa: string) => {
+        const tc = this.tcFor(date, rateMap, config)
+        lines.push({
+          ...this.baseLine(config, date, config.fuenteAplicacion, glosa, tc, periodDate, {
+            nroCuenta: config.cuenta42,
+            codTipDoc,
+            nroSerie: serie,
+            nroDoc,
+            montoDebe: total,
+            montoDebeME: this.toME(total, tc),
+            codTipDocIdentProv: ruc ? '06' : '',
+            nroDocProv: ruc,
+            razonSocialProv: razonSocial,
+          }),
+          relacionado,
+          correlativo: correlativo++,
+        })
+        lines.push({
+          ...this.baseLine(config, date, config.fuenteAplicacion, glosa, tc, periodDate, {
+            nroCuenta: cuenta14,
+            montoHaber: total,
+            montoHaberME: this.toME(total, tc),
+            codTipDocIdentTrab: trabDni ? '01' : '',
+            nroDocTrab: trabDni,
+            razonSocialTrab: trabNombre,
+          }),
+          relacionado,
+          correlativo: correlativo++,
+        })
+        relacionado++
+      }
+
+      // Planilla de movilidad: una fecha rendida por cada fila de `mobilityRows`
+      // (cada una topada al límite diario, p.ej. S/40) en vez de un único monto
+      // lump-sum por el total de la planilla — refleja el detalle real de días
+      // rendidos, no un solo comprobante.
+      const mobilityRows =
+        expense.expenseType === 'planilla_movilidad' &&
+        Array.isArray(expense.mobilityRows) &&
+        expense.mobilityRows.length
+          ? (expense.mobilityRows as Array<{ fecha?: string; total?: number }>)
+          : null
+
+      if (mobilityRows) {
+        let any = false
+        for (const row of mobilityRows) {
+          const rowTotal = this.round2(Number(row?.total) || 0)
+          if (rowTotal <= 0) continue
+          any = true
+          const rowDate =
+            parseFechaEmisionInput(row?.fecha) || this.asientoDate(expense, report)
+          pushPar(rowDate, rowTotal, `${glosaBase} ${row?.fecha || ''}`.trim())
+        }
+        if (!any) {
+          const label = expense.comentario || expense.internalCode || expense._id
+          warnings.push(
+            `La planilla de movilidad "${label}" no tiene filas con monto y no genera asiento de aplicación.`
+          )
+        }
+        continue
+      }
+
+      // Resto de comprobantes: mismo total que el asiento de compra
+      // (comprobanteDetallado primero) para que compra y aplicación
+      // descarguen importes idénticos.
       const total = this.round2(
         Number(det?.totales?.importeTotal) || Number(expense.total) || 0
       )
@@ -1595,69 +1679,7 @@ export class AccountingEntriesService {
         )
         continue
       }
-      const ruc = det?.emisor?.ruc || data.rucEmisor || ''
-      const razonSocial =
-        det?.emisor?.razonSocial ||
-        data.razonSocial ||
-        expense.providerName ||
-        ''
-      const glosa = 'APLICACION'
-      const codTipDoc = resolveCodTipDoc(expense, data.tipoComprobante)
-      // Numero Serie: solo la factura (01) lleva la serie real del comprobante;
-      // el resto de tipos de documento va con la serie de control fija 0001.
-      const serie =
-        codTipDoc === TIPO_DOCUMENTO.FT
-          ? det?.comprobante?.serie || data.serie || ''
-          : '0001'
-
-      // 42 (Debe) — cancela la provisión del proveedor
-      lines.push({
-        ...this.baseLine(
-          config,
-          date,
-          config.fuenteAplicacion,
-          glosa,
-          tc,
-          periodDate,
-          {
-            nroCuenta: config.cuenta42,
-            codTipDoc,
-            nroSerie: serie,
-            nroDoc: det?.comprobante?.correlativo || data.correlativo || '',
-            montoDebe: total,
-            montoDebeME: this.toME(total, tc),
-            codTipDocIdentProv: ruc ? '06' : '',
-            nroDocProv: ruc,
-            razonSocialProv: razonSocial,
-          }
-        ),
-        relacionado,
-        correlativo: correlativo++,
-      })
-
-      // 14 (Haber) — reduce la cuenta por cobrar del colaborador
-      lines.push({
-        ...this.baseLine(
-          config,
-          date,
-          config.fuenteAplicacion,
-          glosa,
-          tc,
-          periodDate,
-          {
-            nroCuenta: cuenta14,
-            montoHaber: total,
-            montoHaberME: this.toME(total, tc),
-            codTipDocIdentTrab: trabDni ? '01' : '',
-            nroDocTrab: trabDni,
-            razonSocialTrab: trabNombre,
-          }
-        ),
-        relacionado,
-        correlativo: correlativo++,
-      })
-
-      relacionado++
+      pushPar(this.asientoDate(expense, report), total, glosaBase)
     }
 
     return lines

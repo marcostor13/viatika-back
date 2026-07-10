@@ -336,7 +336,7 @@ describe('AccountingEntriesService — tipo de documento y no deducibles', () =>
     expect(icbper.identTipAfecto).toBe('N')
   })
 
-  it('boleta: código 03, sin línea 40 y todo el importe al gasto', async () => {
+  it('boleta: código 03, no genera asiento de compra (solo factura entra al registro de compra)', async () => {
     const expense = {
       _id: 'e5',
       expenseType: 'factura',
@@ -350,18 +350,10 @@ describe('AccountingEntriesService — tipo de documento y no deducibles', () =>
       },
     }
     const lines = await build([expense])
-    expect(service.validateCuadre(lines)).toHaveLength(0)
-    expect(lines.some(l => l.nroCuenta === '40.1.1.100')).toBe(false)
-    const nine = lines.find(l => l.nroCuenta === '91.3.1.410')!
-    expect(nine.montoDebe).toBe(59)
-    expect(nine.codTipDoc).toBe('03')
-    expect(nine.identTipAfecto).toBe('N')
-    const l42 = lines.find(l => l.nroCuenta === '42.1.2.100')!
-    expect(l42.codTipDoc).toBe('03')
-    expect(l42.montoHaber).toBe(59)
+    expect(lines).toHaveLength(0)
   })
 
-  it('planilla de movilidad: código 94, sin IGV, total al gasto', async () => {
+  it('planilla de movilidad: código 94, no genera asiento de compra', async () => {
     const expense = {
       _id: 'e6',
       expenseType: 'planilla_movilidad',
@@ -371,12 +363,7 @@ describe('AccountingEntriesService — tipo de documento y no deducibles', () =>
       data: '{}',
     }
     const lines = await build([expense])
-    expect(service.validateCuadre(lines)).toHaveLength(0)
-    const nine = lines.find(l => l.nroCuenta === '91.3.1.410')!
-    expect(nine.codTipDoc).toBe('94')
-    expect(nine.montoDebe).toBe(45)
-    expect(nine.nroDoc).toBe('PM-001')
-    expect(lines.some(l => l.nroCuenta === '40.1.1.100')).toBe(false)
+    expect(lines).toHaveLength(0)
   })
 })
 
@@ -649,6 +636,95 @@ describe('AccountingEntriesService — absorción de residuo de redondeo', () =>
     const lines = await build([expense])
 
     expect(service.validateCuadre(lines).length).toBeGreaterThan(0)
+  })
+})
+
+describe('AccountingEntriesService — asiento de aplicación', () => {
+  const service = newService()
+  const config = makeConfig()
+  const rateMap = new Map<string, number>([
+    ['2026-04-15', TC],
+    ['2026-05-02', TC],
+    ['2026-05-03', TC],
+    ['2026-05-05', TC],
+  ])
+  const report = { createdAt: new Date('2026-04-15') }
+  const periodDate = new Date('2026-04-01')
+  const colaborador = { dni: '12345678', name: 'JUAN PEREZ' }
+
+  async function build(expenses: any[], warnings: string[] = []) {
+    return (service as any).buildAplicacionLines({
+      report,
+      config,
+      expenses,
+      colaborador,
+      periodDate,
+      rateMap,
+      warnings,
+    }) as Promise<ContanetLine[]>
+  }
+
+  it('boleta (código 03) genera su par 42/14 en Aplicación aunque no entre a Compra', async () => {
+    const expense = {
+      _id: 'e10',
+      expenseType: 'factura',
+      total: 59,
+      data: '{}',
+      comprobanteDetallado: {
+        comprobante: { tipo: 'Boleta', serie: 'B001', correlativo: '55' },
+        totales: { importeTotal: 59 },
+      },
+    }
+    const lines = await build([expense])
+    expect(lines).toHaveLength(2)
+    const l42 = lines.find(l => l.nroCuenta === '42.1.2.100')!
+    expect(l42.codTipDoc).toBe('03')
+    expect(l42.montoDebe).toBe(59)
+    const l14 = lines.find(l => l.nroCuenta === '14.1.3.100')!
+    expect(l14.montoHaber).toBe(59)
+    expect(service.validateCuadre(lines)).toHaveLength(0)
+  })
+
+  it('planilla de movilidad: un par 42/14 de S/40 por cada fecha de mobilityRows, no un total lump-sum', async () => {
+    const expense = {
+      _id: 'e11',
+      expenseType: 'planilla_movilidad',
+      internalCode: 'PM-002',
+      total: 120,
+      data: '{}',
+      mobilityRows: [
+        { fecha: '2026-05-02', total: 40 },
+        { fecha: '2026-05-03', total: 40 },
+        { fecha: '2026-05-05', total: 40 },
+      ],
+    }
+    const lines = await build([expense])
+    expect(lines).toHaveLength(6) // 3 pares 42/14
+    const l42s = lines.filter(l => l.nroCuenta === '42.1.2.100')
+    expect(l42s).toHaveLength(3)
+    expect(l42s.every(l => l.montoDebe === 40)).toBe(true)
+    expect(l42s.every(l => l.codTipDoc === '94')).toBe(true)
+    const l14s = lines.filter(l => l.nroCuenta === '14.1.3.100')
+    expect(l14s).toHaveLength(3)
+    expect(l14s.every(l => l.montoHaber === 40)).toBe(true)
+    // Cada par es su propio grupo relacionado y cuadra por separado.
+    const relacionados = new Set(lines.map(l => l.relacionado))
+    expect(relacionados.size).toBe(3)
+    expect(service.validateCuadre(lines)).toHaveLength(0)
+  })
+
+  it('planilla sin filas con monto: no genera líneas y avisa', async () => {
+    const expense = {
+      _id: 'e12',
+      expenseType: 'planilla_movilidad',
+      total: 0,
+      data: '{}',
+      mobilityRows: [{ fecha: '2026-05-02', total: 0 }],
+    }
+    const warnings: string[] = []
+    const lines = await build([expense], warnings)
+    expect(lines).toHaveLength(0)
+    expect(warnings.some(w => w.includes('no genera asiento de aplicación'))).toBe(true)
   })
 })
 

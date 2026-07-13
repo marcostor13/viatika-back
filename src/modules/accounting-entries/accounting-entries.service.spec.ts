@@ -1,5 +1,5 @@
 import { AccountingEntriesService } from './accounting-entries.service'
-import { ContanetLine } from './entities/contanet-columns'
+import { ContanetLine, toExcelSerial } from './entities/contanet-columns'
 import {
   buildContanetAoa,
   generateContanetExcel,
@@ -728,7 +728,16 @@ describe('AccountingEntriesService — asiento de aplicación', () => {
     expect(warnings.some(w => w.includes('no genera asiento de aplicación'))).toBe(true)
   })
 
-  it('varias planillas de movilidad de la misma rendición comparten un único Numero Documento (la más antigua)', async () => {
+  it('varias planillas de movilidad de la misma rendición se consolidan: un único Numero Documento y fechas sintéticas desde startDate+1 (igual que el PDF completo)', async () => {
+    // Ambos expense se combinan en UN total (80) repartido en bloques de
+    // movilidadDiario (40): la primera fecha es startDate+1 (2026-05-02), la
+    // segunda 2026-05-03 — mismo algoritmo que buildConsolidatedMobilityPageData
+    // en el frontend, no las fechas reales de mobilityRows.
+    const movilidadReport = {
+      ...report,
+      startDate: new Date('2026-05-01'),
+      endDate: new Date('2026-05-10'),
+    }
     const expenses = [
       {
         _id: 'e20',
@@ -750,7 +759,7 @@ describe('AccountingEntriesService — asiento de aplicación', () => {
       },
     ]
     const lines = await (service as any).buildAplicacionLines({
-      report,
+      report: movilidadReport,
       config,
       expenses,
       colaborador,
@@ -766,6 +775,8 @@ describe('AccountingEntriesService — asiento de aplicación', () => {
     // Aunque cada expense trae su propio internalCode, el asiento usa el de
     // la planilla más antigua (MT001) para AMBOS bloques.
     expect(l42s.every((l: ContanetLine) => l.nroDoc === 'MT001')).toBe(true)
+    const fechas = l42s.map((l: ContanetLine) => l.fechaEmision).sort()
+    expect(fechas).toEqual([toExcelSerial(new Date('2026-05-02')), toExcelSerial(new Date('2026-05-03'))].sort())
   })
 
   it('sortExpensesForAsiento ordena planillas de movilidad por su fecha real (mobilityRows), no por report.createdAt', () => {
@@ -789,6 +800,40 @@ describe('AccountingEntriesService — asiento de aplicación', () => {
     }
     const sorted = (service as any).sortExpensesForAsiento([late, early, mid], report)
     expect(sorted.map((e: any) => e._id)).toEqual(['early', 'mid', 'late'])
+  })
+})
+
+describe('AccountingEntriesService — prefetchRates cubre las fechas sintéticas de movilidad', () => {
+  it('agrega los días de los bloques de Aplicación (startDate+1, +2, ...), no solo la fecha del expense', async () => {
+    // Sin esto, tcFor() no encuentra el tipo de cambio de esos días y cae
+    // al fallback config.tipoCambio (columna "Cambio Moneda" saliendo en 1).
+    const service = newService()
+    const config = makeConfig()
+    const report = {
+      createdAt: new Date('2026-05-01'),
+      startDate: new Date('2026-05-01'),
+      endDate: new Date('2026-05-10'),
+    }
+    const expenses = [
+      {
+        _id: 'e1',
+        expenseType: 'planilla_movilidad',
+        total: 80,
+        mobilityRows: [{ fecha: '2026-05-01', total: 80 }],
+      },
+    ]
+    const requestedIsoLists: string[][] = []
+    ;(service as any).exchangeRateService = {
+      getRatesBatch: async (isoList: string[]) => {
+        requestedIsoLists.push(isoList)
+        return new Map<string, number>()
+      },
+    }
+    await (service as any).prefetchRates(report, expenses, [], config, 40)
+    const requested = requestedIsoLists[0]
+    // Bloques sintéticos: día siguiente a startDate (05-02) y el que sigue (05-03).
+    expect(requested).toContain('2026-05-02')
+    expect(requested).toContain('2026-05-03')
   })
 })
 

@@ -52,8 +52,9 @@ function newService(): AccountingEntriesService {
   const exchangeStub: any = { getRate: async () => TC }
   const configStub: any = { get: () => 'test-api-key' }
   const uploadStub: any = {}
-  // (reportModel, expenseModel, advanceModel, projectModel, userModel, categoryModel, fileModel, accountingConfigService, exchangeService, configService, uploadService)
+  // (reportModel, expenseModel, advanceModel, projectModel, userModel, categoryModel, clientModel, fileModel, accountingConfigService, exchangeService, configService, uploadService)
   return new AccountingEntriesService(
+    stub,
     stub,
     stub,
     stub,
@@ -725,6 +726,69 @@ describe('AccountingEntriesService — asiento de aplicación', () => {
     const lines = await build([expense], warnings)
     expect(lines).toHaveLength(0)
     expect(warnings.some(w => w.includes('no genera asiento de aplicación'))).toBe(true)
+  })
+
+  it('varias planillas de movilidad de la misma rendición comparten un único Numero Documento (la más antigua)', async () => {
+    const expenses = [
+      {
+        _id: 'e20',
+        expenseType: 'planilla_movilidad',
+        internalCode: 'MT002',
+        createdAt: new Date('2026-05-05'),
+        total: 40,
+        data: '{}',
+        mobilityRows: [{ fecha: '2026-05-05', total: 40 }],
+      },
+      {
+        _id: 'e21',
+        expenseType: 'planilla_movilidad',
+        internalCode: 'MT001',
+        createdAt: new Date('2026-05-01'),
+        total: 40,
+        data: '{}',
+        mobilityRows: [{ fecha: '2026-05-02', total: 40 }],
+      },
+    ]
+    const lines = await (service as any).buildAplicacionLines({
+      report,
+      config,
+      expenses,
+      colaborador,
+      movilidadDiario: 40,
+      projectMap: new Map(),
+      categoryMap: new Map(),
+      periodDate,
+      rateMap,
+      warnings: [],
+    })
+    const l42s = lines.filter((l: ContanetLine) => l.nroCuenta === '42.1.2.100')
+    expect(l42s).toHaveLength(2)
+    // Aunque cada expense trae su propio internalCode, el asiento usa el de
+    // la planilla más antigua (MT001) para AMBOS bloques.
+    expect(l42s.every((l: ContanetLine) => l.nroDoc === 'MT001')).toBe(true)
+  })
+
+  it('sortExpensesForAsiento ordena planillas de movilidad por su fecha real (mobilityRows), no por report.createdAt', () => {
+    // Ninguna trae `fechaEmision` propio (nunca se persiste para
+    // planilla_movilidad) — antes caían todas al mismo fallback
+    // report.createdAt y el orden por fecha no hacía nada.
+    const late = {
+      _id: 'late',
+      expenseType: 'planilla_movilidad',
+      mobilityRows: [{ fecha: '2026-05-20', total: 40 }],
+    }
+    const early = {
+      _id: 'early',
+      expenseType: 'planilla_movilidad',
+      mobilityRows: [{ fecha: '2026-05-02', total: 40 }],
+    }
+    const mid = {
+      _id: 'mid',
+      expenseType: 'planilla_movilidad',
+      mobilityRows: [{ fecha: '2026-05-10', total: 40 }],
+    }
+    const sorted = (service as any).sortExpensesForAsiento([late, early, mid], report)
+    expect(sorted.map((e: any) => e._id)).toEqual(['early', 'mid', 'late'])
   })
 })
 

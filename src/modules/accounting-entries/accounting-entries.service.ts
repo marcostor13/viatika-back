@@ -372,7 +372,10 @@ export class AccountingEntriesService {
       fingerprint: string
     }
   ): Promise<void> {
-    const { report, config, expenses, advances, colaborador, movilidadDiario, fingerprint } = ctx
+    const { report, config, expenses: rawExpenses, advances, colaborador, movilidadDiario, fingerprint } = ctx
+    // Orden pedido por Contabilidad para revisar el Excel: agrupado por tipo de
+    // documento y, dentro de un mismo tipo, por fecha de emisión ascendente.
+    const expenses = this.sortExpensesForAsiento(rawExpenses, report)
     // Alcance de datos = la empresa DUEÑA de la rendición, no la del caller (ya
     // verificadas iguales en `loadContext`, pero se usa report.clientId explícitamente
     // para que categorías/proyectos jamás se resuelvan contra el clientId equivocado).
@@ -755,13 +758,64 @@ export class AccountingEntriesService {
    * fecha-emision.util.ts); `new Date(raw)` nativo la interpreta como
    * MM/DD/YYYY y produce fechas incorrectas o inválidas, por eso se parsea
    * con `parseFechaEmisionInput` en vez de pasarla directo al constructor.
+   *
+   * Planilla de movilidad NUNCA trae `fechaEmision` propio (solo
+   * `mobilityRows[].fecha` por trayecto; ver `createMobilityExpense` en
+   * expense.service.ts) — sin este caso especial caía siempre al fallback
+   * `report.createdAt`, igual para TODAS las planillas de la rendición, y el
+   * orden por fecha (`sortExpensesForAsiento`) no tenía nada que ordenar. Se
+   * usa la fecha MÁS ANTIGUA de `mobilityRows`, igual que el frontend
+   * (`getExpenseDate` en rendicion-detail.component.ts) para que ambos
+   * documentos (PDF completo y Excel de asientos) muestren la misma fecha.
    */
   private asientoDate(expense: any, report: any): Date {
+    if (expense?.expenseType === 'planilla_movilidad' && Array.isArray(expense.mobilityRows)) {
+      const rowDates = (expense.mobilityRows as Array<{ fecha?: string }>)
+        .map(r => parseFechaEmisionInput(r?.fecha))
+        .filter((d): d is Date => !!d)
+        .sort((a, b) => a.getTime() - b.getTime())
+      if (rowDates.length) return rowDates[0]
+    }
     const fromComprobante = parseFechaEmisionInput(expense?.fechaEmision)
     if (fromComprobante) return fromComprobante
     const raw = report?.createdAt || report?.updatedAt
     const d = raw ? new Date(raw) : new Date()
     return Number.isNaN(d.getTime()) ? new Date() : d
+  }
+
+  /**
+   * Orden de los comprobantes para los builders que listan un bloque por
+   * documento (compra/aplicación): agrupados por "Codigo Tipo Document"
+   * (resolveCodTipDoc) y, dentro de un mismo tipo, por fecha de emisión
+   * ascendente. No muta `expenses` (se usa también para prefetch/mapas).
+   */
+  private sortExpensesForAsiento(expenses: any[], report: any): any[] {
+    return [...expenses].sort((a, b) => {
+      const codA = resolveCodTipDoc(a, this.parseData(a).tipoComprobante)
+      const codB = resolveCodTipDoc(b, this.parseData(b).tipoComprobante)
+      if (codA !== codB) return codA.localeCompare(codB)
+      return this.asientoDate(a, report).getTime() - this.asientoDate(b, report).getTime()
+    })
+  }
+
+  /**
+   * "Numero Documento" único para TODA la planilla de movilidad de la
+   * rendición. Puede haber varios `expense` de tipo planilla_movilidad (cada
+   * uno con su propio internalCode asignado al crearse), pero representan la
+   * misma planilla física — se toma el internalCode del más antiguo
+   * (createdAt) como el número canónico para todos los bloques.
+   */
+  private resolveSharedMovilidadNroDoc(expenses: any[]): string {
+    const movilidad = expenses.filter(
+      e => e.expenseType === 'planilla_movilidad' && e.internalCode
+    )
+    if (!movilidad.length) return ''
+    const oldest = [...movilidad].sort((a, b) => {
+      const ta = new Date(a.createdAt || 0).getTime()
+      const tb = new Date(b.createdAt || 0).getTime()
+      return ta - tb
+    })[0]
+    return oldest.internalCode || ''
   }
 
   /**
@@ -1606,6 +1660,14 @@ export class AccountingEntriesService {
     const trabDni = colaborador?.dni || ''
     const trabNombre = colaborador?.name || ''
     const cuenta14 = this.cuenta14(config, colaborador)
+    // La rendición completa es UNA sola planilla de movilidad física, aunque
+    // el colaborador haya cargado varios `expense` de tipo planilla_movilidad
+    // (el PDF ya los consolida en una sola hoja, ver
+    // buildConsolidatedMobilityPageData en el frontend). Todos sus bloques en
+    // el asiento de Aplicación deben compartir el mismo "Numero Documento";
+    // usar el internalCode de cada expense por separado hacía que Contanet
+    // viera varias planillas distintas dentro de la misma rendición.
+    const movilidadNroDoc = this.resolveSharedMovilidadNroDoc(expenses)
 
     for (const expense of expenses) {
       const data = this.parseData(expense)
@@ -1621,7 +1683,15 @@ export class AccountingEntriesService {
       // Numero Serie: solo la factura (01) lleva la serie real del comprobante;
       // el resto de tipos de documento va con la serie de control fija 0001.
       const serie = esFactura ? det?.comprobante?.serie || data.serie || '' : '0001'
-      const nroDoc = det?.comprobante?.correlativo || data.correlativo || ''
+      // Planilla de movilidad / comprobante de caja no traen `comprobante.correlativo`
+      // (no son comprobantes SUNAT): su número es el internalCode generado al crearlos
+      // (expense.service.ts `generateInternalCode`, ej. "MT001"). Sin este fallback
+      // "Numero Documento" queda vacío para código 94/66 en el asiento de Aplicación.
+      const nroDoc =
+        det?.comprobante?.correlativo ||
+        data.correlativo ||
+        expense.internalCode ||
+        ''
 
       // FACTURA: su gasto (9X/40/42/6X/79) ya se registró en `buildCompraLines`.
       // Aquí solo se cruza el total rendido (42) contra el anticipo del
@@ -1784,10 +1854,14 @@ export class AccountingEntriesService {
 
       // Planilla de movilidad: el total del comprobante se reexpresa en
       // bloques del tope diario de movilidad (`movilidadDiario`, p.ej. S/40)
-      // más un resto, en vez del desglose real por fecha de `mobilityRows`
-      // (decisión explícita del usuario, 2026-07-10: Contanet espera la
-      // planilla en unidades del tope diario, no en los montos reales por
-      // trayecto). Todos los bloques comparten la fecha del comprobante.
+      // más un resto, en vez de los montos reales por trayecto de
+      // `mobilityRows` (decisión explícita del usuario, 2026-07-10: Contanet
+      // espera la planilla en unidades del tope diario). Pero cada bloque SÍ
+      // lleva su propia fecha — una por día, tomada en orden de las fechas
+      // reales de `mobilityRows` (las mismas que ya lista el PDF de
+      // descarga) — nunca la misma fecha repetida en todos los bloques. Si
+      // hay más bloques que fechas registradas, los sobrantes caen a la
+      // fecha del comprobante.
       if (expense.expenseType === 'planilla_movilidad') {
         const total = this.round2(
           Number(expense.total) ||
@@ -1806,17 +1880,28 @@ export class AccountingEntriesService {
           )
           continue
         }
-        const date = this.asientoDate(expense, report)
+        const fallbackDate = this.asientoDate(expense, report)
+        const rowDates: Date[] = Array.isArray(expense.mobilityRows)
+          ? (expense.mobilityRows as Array<{ fecha?: string }>)
+              .map(r => parseFechaEmisionInput(r?.fecha))
+              .filter((d): d is Date => !!d)
+          : []
         let remaining = total
+        let blockIndex = 0
         while (remaining > 0.005) {
           const chunk = this.round2(Math.min(movilidadDiario, remaining))
+          const date = rowDates[blockIndex] || fallbackDate
+          const fechaLabel = rowDates[blockIndex]
+            ? date.toISOString().slice(0, 10)
+            : ''
           pushBloque(
             date,
             [{ proyectId: expense.proyectId?.toString(), condicion: 'inafecto', monto: chunk }],
-            'APLICACION',
-            { codTipDoc, nroSerie: serie, nroDoc }
+            `APLICACION ${fechaLabel}`.trim(),
+            { codTipDoc, nroSerie: serie, nroDoc: movilidadNroDoc || nroDoc }
           )
           remaining = this.round2(remaining - chunk)
+          blockIndex++
         }
         continue
       }

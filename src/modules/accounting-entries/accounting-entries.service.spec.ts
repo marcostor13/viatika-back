@@ -652,6 +652,156 @@ describe('AccountingEntriesService — absorción de residuo de redondeo', () =>
   })
 })
 
+describe('AccountingEntriesService — centro de costo en solicitud/aplicación/devolución-reembolso', () => {
+  const service = newService()
+  const config = makeConfig()
+  const periodDate = new Date('2026-04-01')
+  const rateMap = new Map<string, number>([['2026-04-15', TC]])
+  const projectMap = new Map<string, any>([
+    [
+      'p-adv',
+      { _id: 'p-adv', code: 'CC-ADV', centroCosto: 'SC-ADV', subCentroCosto: '111' },
+    ],
+    [
+      'p-exp',
+      { _id: 'p-exp', code: 'CC-EXP', centroCosto: 'SC-EXP', subCentroCosto: '222' },
+    ],
+    [
+      'p-report',
+      { _id: 'p-report', code: 'CC-REP', centroCosto: 'SC-REP', subCentroCosto: '333' },
+    ],
+  ])
+
+  it('solicitud: toma el centro de costo del proyecto del anticipo', async () => {
+    const report = { createdAt: new Date('2026-04-15') }
+    const advance = {
+      _id: 'a1',
+      amount: 500,
+      projectId: 'p-adv',
+      startDate: new Date('2026-04-15'),
+    }
+    const lines = (await (service as any).buildSolicitudLines({
+      report,
+      config,
+      advances: [advance],
+      colaborador: { dni: '12345678', name: 'Colaborador' },
+      projectMap,
+      periodDate,
+      rateMap,
+      warnings: [],
+    })) as ContanetLine[]
+
+    expect(lines.length).toBe(2)
+    expect(lines.every(l => l.centroCosto === 'SC-ADV')).toBe(true)
+    expect(lines.every(l => l.subCentroCosto === '111')).toBe(true)
+  })
+
+  it('solicitud: si el anticipo no tiene proyecto, cae al proyecto de la rendición', async () => {
+    const report = { createdAt: new Date('2026-04-15'), projectId: 'p-report' }
+    const advance = { _id: 'a2', amount: 500, startDate: new Date('2026-04-15') }
+    const lines = (await (service as any).buildSolicitudLines({
+      report,
+      config,
+      advances: [advance],
+      colaborador: {},
+      projectMap,
+      periodDate,
+      rateMap,
+      warnings: [],
+    })) as ContanetLine[]
+
+    expect(lines.every(l => l.centroCosto === 'SC-REP')).toBe(true)
+  })
+
+  it('solicitud: sin proyecto propio ni de la rendición, cae al centro de costo global de la config', async () => {
+    const report = { createdAt: new Date('2026-04-15') }
+    const advance = { _id: 'a3', amount: 500, startDate: new Date('2026-04-15') }
+    const lines = (await (service as any).buildSolicitudLines({
+      report,
+      config,
+      advances: [advance],
+      colaborador: {},
+      projectMap,
+      periodDate,
+      rateMap,
+      warnings: [],
+    })) as ContanetLine[]
+
+    expect(lines.every(l => l.centroCosto === config.centroCosto)).toBe(true)
+  })
+
+  it('aplicación: toma el centro de costo del proyecto del comprobante', async () => {
+    const report = { createdAt: new Date('2026-04-15') }
+    const expense = {
+      _id: 'e1',
+      proyectId: 'p-exp',
+      total: 100,
+      data: '{}',
+      comprobanteDetallado: { totales: { importeTotal: 100 } },
+    }
+    const lines = (await (service as any).buildAplicacionLines({
+      report,
+      config,
+      expenses: [expense],
+      colaborador: { dni: '12345678', name: 'Colaborador' },
+      projectMap,
+      periodDate,
+      rateMap,
+      warnings: [],
+    })) as ContanetLine[]
+
+    expect(lines.length).toBe(2)
+    expect(lines.every(l => l.centroCosto === 'SC-EXP')).toBe(true)
+    expect(lines.every(l => l.subCentroCosto === '222')).toBe(true)
+  })
+
+  it('devolución: toma el centro de costo del proyecto de la rendición', async () => {
+    const report = {
+      updatedAt: new Date('2026-04-15'),
+      projectId: 'p-report',
+      settlement: { type: 'devolucion', difference: -50 },
+    }
+    const lines = (await (service as any).buildDevolucionReembolsoLines(
+      {
+        report,
+        config,
+        advances: [],
+        colaborador: {},
+        projectMap,
+        periodDate,
+        rateMap,
+      },
+      'devolucion'
+    )) as ContanetLine[]
+
+    expect(lines.length).toBe(2)
+    expect(lines.every(l => l.centroCosto === 'SC-REP')).toBe(true)
+  })
+
+  it('reembolso: si la rendición no tiene proyecto, cae al proyecto del primer anticipo', async () => {
+    const report = {
+      updatedAt: new Date('2026-04-15'),
+      settlement: { type: 'reembolso', difference: 50 },
+    }
+    const advance = { _id: 'a4', projectId: 'p-adv' }
+    const lines = (await (service as any).buildDevolucionReembolsoLines(
+      {
+        report,
+        config,
+        advances: [advance],
+        colaborador: {},
+        projectMap,
+        periodDate,
+        rateMap,
+      },
+      'reembolso'
+    )) as ContanetLine[]
+
+    expect(lines.length).toBe(2)
+    expect(lines.every(l => l.centroCosto === 'SC-ADV')).toBe(true)
+  })
+})
+
 describe('resolveCodTipDoc — catálogo codigos.md', () => {
   const { resolveCodTipDoc } = require('./constants/tipo-documento')
 

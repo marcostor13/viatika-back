@@ -1520,7 +1520,14 @@ export class ExpenseService {
     }
 
     const subTipo = body.subTipo || 'OT'
-    const isDJ = subTipo === 'DJ'
+    // La Declaración Jurada (DJ) tiene su propio flujo estructurado por filas
+    // (Alimentación/Movilidad) — ver `createDeclaracionJurada`.
+    if (subTipo === 'DJ') {
+      throw new HttpException(
+        'Usa el endpoint de Declaración Jurada (declaracion-jurada) para este sub-tipo',
+        HttpStatus.BAD_REQUEST
+      )
+    }
 
     // RUC Emisor obligatorio para los sub-tipos con documento físico (TK, BV, RC)
     if (['TK', 'BV', 'RC'].includes(subTipo) && !body.rucEmisor?.trim()) {
@@ -1528,27 +1535,6 @@ export class ExpenseService {
         'Se requiere el RUC del emisor',
         HttpStatus.BAD_REQUEST
       )
-    }
-
-    // Solo la DJ requiere firma y aceptación del checkbox
-    if (isDJ) {
-      if (!body.declaracionJurada) {
-        throw new HttpException(
-          'Se requiere firmar la declaración jurada',
-          HttpStatus.BAD_REQUEST
-        )
-      }
-      if (body.userId) {
-        const profile = await this.userService.findTransactionalProfile(
-          body.userId
-        )
-        if (!profile?.signature) {
-          throw new HttpException(
-            'Debes registrar tu firma digital antes de enviar una Declaración Jurada. Ve a tu perfil para añadirla.',
-            HttpStatus.UNPROCESSABLE_ENTITY
-          )
-        }
-      }
     }
 
     const normalizedFecha = this.normalizeFechaEmisionValue(body.fechaEmision)

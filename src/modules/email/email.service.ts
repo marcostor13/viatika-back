@@ -827,6 +827,7 @@ export class EmailService {
       reportTitle: string
       budgetFormatted: string
       expenseCount: number
+      isDirecta?: boolean
       hasDirectaDeposit?: boolean
       depositFormatted?: string
       expenseTotalFormatted?: string

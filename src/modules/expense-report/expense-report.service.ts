@@ -145,6 +145,26 @@ export class ExpenseReportService implements OnModuleInit {
   private async computeReportBudgetDisplay(report: any): Promise<number> {
     if (!report?._id) return Number(report?.budget) || 0
     const reportId = String(report._id)
+
+    // Rendición directa: no usa anticipo ni presupuesto. El monto relevante para
+    // los correos (reembolso al colaborador) es el total gastado = suma de gastos
+    // no-rechazados. Sin esto, budget=0 y anticipos=0 hacían mostrar "S/ 0.00".
+    if (report.isDirecta === true) {
+      const directa = await this.expenseReportModel
+        .findById(reportId)
+        .populate('expenseIds', 'total status')
+        .exec()
+      const exps = (directa?.expenseIds ?? []) as any[]
+      const gastado = exps.reduce(
+        (s: number, e: any) =>
+          String(e?.status || '').toLowerCase() === 'rejected'
+            ? s
+            : s + (Number(e?.total) || 0),
+        0
+      )
+      return gastado > 0 ? gastado : Number(report.budget) || 0
+    }
+
     const rawAdvanceIds: string[] = (
       Array.isArray(report.advanceIds) ? report.advanceIds : []
     ).map((x: any) =>
@@ -1512,6 +1532,7 @@ export class ExpenseReportService implements OnModuleInit {
                 reportTitle: emailData.reportTitle,
                 budgetFormatted: emailData.budgetFormatted,
                 expenseCount: emailData.expenseCount,
+                isDirecta: emailData.isDirecta,
                 hasDirectaDeposit: emailData.hasDirectaDeposit,
                 depositFormatted: emailData.depositFormatted,
                 expenseTotalFormatted: emailData.expenseTotalFormatted,

@@ -254,6 +254,54 @@ export class ExpenseService {
     ]
   }
 
+  /**
+   * Longitud mínima de texto para considerar que un PDF trae capa de texto real.
+   * Un PDF escaneado (una foto metida dentro de un PDF, p. ej. CamScanner)
+   * devuelve texto vacío o casi vacío en pdf-parse; por debajo de este umbral lo
+   * tratamos como imagen y mandamos el archivo a Vision para que haga OCR.
+   */
+  private static readonly PDF_MIN_TEXT_LENGTH = 20
+
+  /** Mensaje para Vision con el texto ya extraído del PDF (tiene capa de texto). */
+  private buildVisionTextMessages(prompt: string, text: string) {
+    return [
+      {
+        role: 'user' as const,
+        content: [
+          { type: 'text' as const, text: prompt },
+          { type: 'text' as const, text },
+        ],
+      },
+    ]
+  }
+
+  /**
+   * Mensaje de Vision con el PDF adjunto como archivo (base64). Se usa cuando el
+   * PDF no tiene capa de texto extraíble: el modelo lee las páginas como imágenes
+   * (OCR), igual que hace con una foto JPG/PNG.
+   */
+  private buildPdfFileMessages(
+    prompt: string,
+    buffer: Buffer,
+    filename = 'comprobante.pdf'
+  ) {
+    return [
+      {
+        role: 'user' as const,
+        content: [
+          { type: 'text' as const, text: prompt },
+          {
+            type: 'file' as const,
+            file: {
+              filename,
+              file_data: `data:application/pdf;base64,${buffer.toString('base64')}`,
+            },
+          },
+        ],
+      },
+    ]
+  }
+
   // Parseo robusto del contenido JSON devuelto por OpenAI
   private parseOpenAiJsonContent(
     content?: string | null
@@ -841,18 +889,22 @@ export class ExpenseService {
         const pdfParse: (data: Buffer) => Promise<{ text: string }> =
           pdfModule.default ?? pdfModule
         const parsed = await pdfParse(buffer)
-        const text = (parsed.text || '').substring(0, 15000)
+        const textFromPdf = parsed.text || ''
+        // PDF escaneado (sin capa de texto, p. ej. CamScanner) → mandamos el
+        // archivo a Vision para OCR en vez de un texto vacío que no se puede leer.
+        const hasTextLayer =
+          textFromPdf.trim().length >= ExpenseService.PDF_MIN_TEXT_LENGTH
+        if (!hasTextLayer) {
+          this.logger.warn(
+            'PDF sin capa de texto (escaneado); se envía el archivo a Vision para OCR'
+          )
+        }
+        const messages = hasTextLayer
+          ? this.buildVisionTextMessages(prompt, textFromPdf.substring(0, 15000))
+          : this.buildPdfFileMessages(prompt, buffer)
         const completion = await this.openai.chat.completions.create({
           model: this.visionModel,
-          messages: [
-            {
-              role: 'user',
-              content: [
-                { type: 'text', text: prompt },
-                { type: 'text', text },
-              ],
-            },
-          ],
+          messages,
           temperature: 0,
           max_completion_tokens: 512,
         })
@@ -946,18 +998,22 @@ export class ExpenseService {
         const pdfParse: (data: Buffer) => Promise<{ text: string }> =
           pdfModule.default ?? pdfModule
         const parsed = await pdfParse(buffer)
-        const text = (parsed.text || '').substring(0, 15000)
+        const textFromPdf = parsed.text || ''
+        // PDF escaneado (sin capa de texto, p. ej. CamScanner) → mandamos el
+        // archivo a Vision para OCR en vez de un texto vacío que no se puede leer.
+        const hasTextLayer =
+          textFromPdf.trim().length >= ExpenseService.PDF_MIN_TEXT_LENGTH
+        if (!hasTextLayer) {
+          this.logger.warn(
+            'PDF sin capa de texto (escaneado); se envía el archivo a Vision para OCR'
+          )
+        }
+        const messages = hasTextLayer
+          ? this.buildVisionTextMessages(prompt, textFromPdf.substring(0, 15000))
+          : this.buildPdfFileMessages(prompt, buffer)
         const completion = await this.openai.chat.completions.create({
           model: this.visionModel,
-          messages: [
-            {
-              role: 'user',
-              content: [
-                { type: 'text', text: prompt },
-                { type: 'text', text },
-              ],
-            },
-          ],
+          messages,
           temperature: 0,
           max_completion_tokens: 512,
         })
@@ -1086,20 +1142,25 @@ export class ExpenseService {
       const parsed = await pdfParse(file.buffer)
       const textFromPdf = parsed.text || ''
 
-      console.log('textFromPdf', textFromPdf)
+      // PDF con texto real → mandamos el texto extraído. PDF escaneado (sin capa
+      // de texto, p. ej. CamScanner) → mandamos el archivo a Vision para OCR, así
+      // se procesa igual que una foto en vez de fallar con "no es legible".
+      const hasTextLayer =
+        textFromPdf.trim().length >= ExpenseService.PDF_MIN_TEXT_LENGTH
+      if (!hasTextLayer) {
+        this.logger.warn(
+          'PDF sin capa de texto (escaneado); se envía el archivo a Vision para OCR'
+        )
+      }
 
       const prompt = PROMPT1
+      const messages = hasTextLayer
+        ? this.buildVisionTextMessages(prompt, textFromPdf.substring(0, 15000))
+        : this.buildPdfFileMessages(prompt, file.buffer, file.originalname)
+
       const completion = await this.openai.chat.completions.create({
         model: this.visionModel,
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: prompt },
-              { type: 'text', text: textFromPdf.substring(0, 15000) },
-            ],
-          },
-        ],
+        messages,
         temperature: 0,
         max_completion_tokens: 8192,
       })
@@ -1170,17 +1231,16 @@ export class ExpenseService {
       const pdfParse: (data: Buffer) => Promise<{ text: string }> =
         (pdfModule as any).default ?? pdfModule
       const parsed = await pdfParse(buffer)
+      const textFromPdf = parsed.text || ''
+      // PDF escaneado (sin capa de texto) → OCR con el archivo en Vision.
+      const hasTextLayer =
+        textFromPdf.trim().length >= ExpenseService.PDF_MIN_TEXT_LENGTH
+      const messages = hasTextLayer
+        ? this.buildVisionTextMessages(PROMPT1, textFromPdf.substring(0, 15000))
+        : this.buildPdfFileMessages(PROMPT1, buffer)
       const completion = await this.openai.chat.completions.create({
         model: this.visionModel,
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: PROMPT1 },
-              { type: 'text', text: (parsed.text || '').substring(0, 15000) },
-            ],
-          },
-        ],
+        messages,
         temperature: 0,
         max_completion_tokens: 8192,
       })

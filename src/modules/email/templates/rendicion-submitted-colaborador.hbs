@@ -43,9 +43,15 @@
           <span class="detail-label">Saldo disponible:</span> S/ {{saldoFormatted}}
         </div>
         {{else}}
+        {{#if isDirecta}}
+        <div class="detail-item">
+          <span class="detail-label">Total gastado:</span> S/ {{expenseTotalFormatted}}
+        </div>
+        {{else}}
         <div class="detail-item">
           <span class="detail-label">Presupuesto:</span> S/ {{budgetFormatted}}
         </div>
+        {{/if}}
         {{/if}}
         <div class="detail-item">
           <span class="detail-label">Documentos adjuntos:</span> {{expenseCount}}

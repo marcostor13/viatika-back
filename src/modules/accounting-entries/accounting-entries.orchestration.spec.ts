@@ -38,6 +38,7 @@ describe('AccountingEntriesService — orquestación async (status, trigger, S3)
   let expenseModel: any
   let advanceModel: any
   let userModel: any
+  let clientModel: any
   let fileModel: any
   let accountingConfigService: any
   let exchangeRateService: any
@@ -49,6 +50,7 @@ describe('AccountingEntriesService — orquestación async (status, trigger, S3)
     expenseModel = { find: jest.fn().mockReturnValue(mockQuery([])) }
     advanceModel = { find: jest.fn().mockReturnValue(mockQuery([])) }
     userModel = { findById: jest.fn().mockReturnValue(mockQuery(colaborador)) }
+    clientModel = { findById: jest.fn().mockReturnValue(mockQuery({})) }
     fileModel = {
       find: jest.fn().mockReturnValue(mockQuery([])),
       findOneAndUpdate: jest.fn().mockReturnValue(mockExec(undefined)),
@@ -69,6 +71,7 @@ describe('AccountingEntriesService — orquestación async (status, trigger, S3)
       {} as any, // projectModel — no usado en estos tests
       userModel,
       {} as any, // categoryModel — no usado en estos tests
+      clientModel,
       fileModel,
       accountingConfigService,
       exchangeRateService,

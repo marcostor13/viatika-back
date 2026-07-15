@@ -15,6 +15,7 @@ import { UserService } from '../user/user.service'
 import { EmailService } from '../email/email.service'
 import { NotificationsService } from '../notifications/notifications.service'
 import { SaldoService } from '../saldo/saldo.service'
+import { CurrencyService } from '../exchange-rate/currency.service'
 import { ROLES } from '../auth/enums/roles.enum'
 
 const advanceId = new Types.ObjectId().toString()
@@ -102,6 +103,14 @@ const mockSaldoService = {
   sumAmounts: jest.fn().mockResolvedValue(0),
 }
 
+const mockCurrencyService = {
+  getConfig: jest.fn().mockResolvedValue({ monedaBase: 'PEN', supportedCurrencies: [] }),
+  toBase: jest.fn().mockImplementation((amount: number) =>
+    Promise.resolve({ montoBase: amount, tipoCambio: 1, tcFecha: '2026-01-01' })
+  ),
+  resolveApprovalThresholdL1: jest.fn().mockResolvedValue(ADVANCE_THRESHOLDS.L1_MAX),
+}
+
 const mockEmailService = {
   buildAppUrl: jest.fn().mockReturnValue('http://localhost:4200/app'),
   formatDateDDMMYYYY: jest.fn().mockReturnValue('01/01/2026'),
@@ -130,6 +139,7 @@ describe('AdvanceService', () => {
         { provide: EmailService, useValue: mockEmailService },
         { provide: NotificationsService, useValue: mockNotificationsService },
         { provide: SaldoService, useValue: mockSaldoService },
+        { provide: CurrencyService, useValue: mockCurrencyService },
       ],
     }).compile()
     service = module.get<AdvanceService>(AdvanceService)

@@ -123,6 +123,20 @@ export interface ExpenseReportDocument extends Document {
   title: string
   description: string
   budget: number
+  /** Moneda operativa de la rendición (ISO 4217), heredada del anticipo/depósito. Default 'PEN'. */
+  moneda?: string
+  /** Equivalente de `budget` en la moneda base del cliente, congelado al registrar. */
+  budgetBase?: number
+  /** Equivalente de `viaticoAmount` en moneda base. */
+  viaticoAmountBase?: number
+  /** Equivalente de `viaticoPaidAmount` en moneda base. */
+  viaticoPaidAmountBase?: number
+  /** Equivalente de `pendingBalanceAmount` en moneda base. */
+  pendingBalanceAmountBase?: number
+  /** TC moneda→base usado para los campos *Base (1 si moneda === base). */
+  tipoCambio?: number
+  /** Fecha (YYYY-MM-DD) del TC aplicado. */
+  tcFecha?: string
   userId: Types.ObjectId
   clientId: Types.ObjectId
   status: ExpenseReportStatus
@@ -210,6 +224,27 @@ export class ExpenseReport {
 
   @Prop({ required: false, default: 0 })
   budget: number
+
+  @Prop({ type: String, default: 'PEN' })
+  moneda?: string
+
+  @Prop({ type: Number, required: false })
+  budgetBase?: number
+
+  @Prop({ type: Number, required: false })
+  viaticoAmountBase?: number
+
+  @Prop({ type: Number, required: false })
+  viaticoPaidAmountBase?: number
+
+  @Prop({ type: Number, required: false })
+  pendingBalanceAmountBase?: number
+
+  @Prop({ type: Number, required: false })
+  tipoCambio?: number
+
+  @Prop({ type: String, required: false })
+  tcFecha?: string
 
   @Prop({ required: false })
   motivo?: string

@@ -135,6 +135,14 @@ export interface AdvanceDocument extends Document {
   observations?: string
   coordinatorNotification?: CoordinatorNotificationLog
   amount: number
+  /** Moneda original en que se solicitó/pagó el anticipo (ISO 4217). Default 'PEN'. */
+  moneda?: string
+  /** Equivalente de `amount` en la moneda base del cliente, congelado al registrar. */
+  montoBase?: number
+  /** TC moneda→base usado para `montoBase` (1 si moneda === base). */
+  tipoCambio?: number
+  /** Fecha (YYYY-MM-DD) del TC aplicado. */
+  tcFecha?: string
   description: string
   status: AdvanceStatus
   approvalLevel: number
@@ -248,6 +256,18 @@ export class Advance {
 
   @Prop({ required: true, min: 0 })
   amount: number
+
+  @Prop({ type: String, default: 'PEN' })
+  moneda?: string
+
+  @Prop({ type: Number, required: false })
+  montoBase?: number
+
+  @Prop({ type: Number, required: false })
+  tipoCambio?: number
+
+  @Prop({ type: String, required: false })
+  tcFecha?: string
 
   @Prop({ required: true })
   description: string

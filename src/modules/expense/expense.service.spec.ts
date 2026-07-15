@@ -15,6 +15,7 @@ import { NotificationsService } from '../notifications/notifications.service'
 import { CategoryService } from '../category/category.service'
 import { CreateExpenseDto } from './dto/create-expense.dto'
 import { Client } from '../client/entities/client.entity'
+import { CurrencyService } from '../exchange-rate/currency.service'
 
 describe('ExpenseService — email gating (isEmailEnabled)', () => {
   let service: ExpenseService
@@ -61,6 +62,13 @@ describe('ExpenseService — email gating (isEmailEnabled)', () => {
           useValue: { create: jest.fn().mockResolvedValue(undefined) },
         },
         { provide: CategoryService, useValue: mockCategoryServiceGating },
+        {
+          provide: CurrencyService,
+          useValue: {
+            getConfig: jest.fn().mockResolvedValue({ monedaBase: 'PEN', supportedCurrencies: [] }),
+            toBase: jest.fn().mockResolvedValue({ montoBase: 0, tipoCambio: 1, tcFecha: '2026-01-01' }),
+          },
+        },
       ],
     }).compile()
 
@@ -165,6 +173,13 @@ describe('ExpenseService — Fase 5 (plazos y límites de categoría)', () => {
           useValue: noopDeps.notificationsService,
         },
         { provide: CategoryService, useValue: mockCategoryService },
+        {
+          provide: CurrencyService,
+          useValue: {
+            getConfig: jest.fn().mockResolvedValue({ monedaBase: 'PEN', supportedCurrencies: [] }),
+            toBase: jest.fn().mockResolvedValue({ montoBase: 0, tipoCambio: 1, tcFecha: '2026-01-01' }),
+          },
+        },
       ],
     }).compile()
 

@@ -41,6 +41,8 @@ export interface SaldoDocument extends Document {
   userId: Types.ObjectId
   type: SaldoType
   amount: number
+  /** Moneda del monto (ISO 4217) — siempre la moneda base del cliente, porque el saldo nace de un remanente de liquidación ya convertido. */
+  moneda?: string
   status: SaldoStatus
   /** Gestión / motivo libre que escribe quien origina el saldo (opcional). */
   concepto?: string
@@ -73,6 +75,9 @@ export class Saldo {
 
   @Prop({ required: true, default: 0 })
   amount: number
+
+  @Prop({ type: String, default: 'PEN' })
+  moneda?: string
 
   @Prop({ required: true, default: 'available', enum: ['available', 'consumed'] })
   status: SaldoStatus

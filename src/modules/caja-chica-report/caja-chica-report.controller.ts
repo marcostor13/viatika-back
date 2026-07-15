@@ -27,10 +27,19 @@ export class CajaChicaReportController {
     private readonly auditLogService: AuditLogService
   ) {}
 
+  /** Lanza 400 si la sesión no tiene cliente resuelto (p. ej. hub token sin empresa seleccionada). */
   private resolveClientId(req: any): string {
     const raw = req?.user?.clientId
-    if (raw && typeof raw === 'object' && '_id' in raw) return String(raw._id)
-    return raw != null && raw !== '' ? String(raw) : ''
+    const clientId =
+      raw && typeof raw === 'object' && '_id' in raw
+        ? String(raw._id)
+        : raw != null && raw !== ''
+          ? String(raw)
+          : ''
+    if (!clientId) {
+      throw new BadRequestException('Cliente no identificado en la sesión.')
+    }
+    return clientId
   }
 
   @Post()

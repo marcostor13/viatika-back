@@ -87,6 +87,10 @@ export class CreateExpenseDto {
 
   @IsString()
   @IsOptional()
+  moneda?: string
+
+  @IsString()
+  @IsOptional()
   comentario?: string
 
   @IsString()

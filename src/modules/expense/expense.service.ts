@@ -1553,10 +1553,6 @@ export class ExpenseService {
       description: body.data,
       expenseType: 'otros_gastos',
       subTipo,
-      declaracionJurada: isDJ ? true : false,
-      declaracionJuradaFirmante: isDJ
-        ? body.declaracionJuradaFirmante
-        : undefined,
       file: body.imageUrl || undefined,
       status: 'pending',
       createdBy: body.userId || 'system',
@@ -1569,8 +1565,6 @@ export class ExpenseService {
       data: JSON.stringify({
         type: 'otros_gastos',
         subTipo,
-        declaracionJurada: isDJ,
-        firmante: isDJ ? body.declaracionJuradaFirmante : undefined,
         description: body.data,
         serie: body.serie || undefined,
         correlativo: body.correlativo || undefined,

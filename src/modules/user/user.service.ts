@@ -722,6 +722,8 @@ export class UserService {
 
   /** Alias de encabezados (ES/EN) a los campos canónicos del importador. */
   private static readonly BULK_HEADER_ALIASES: Record<string, string> = {
+    id: 'id',
+    _id: 'id',
     name: 'name',
     nombre: 'name',
     nombres: 'name',
@@ -736,6 +738,7 @@ export class UserService {
     'nro documento': 'dni',
     'numero de documento': 'dni',
     employeecode: 'employeeCode',
+    codigoempleado: 'employeeCode',
     codigo: 'employeeCode',
     'codigo empleado': 'employeeCode',
     'codigo de empleado': 'employeeCode',
@@ -762,6 +765,7 @@ export class UserService {
     banco: 'bankName',
     'nombre banco': 'bankName',
     accountnumber: 'accountNumber',
+    numerocuenta: 'accountNumber',
     'numero cuenta': 'accountNumber',
     'numero de cuenta': 'accountNumber',
     cuenta: 'accountNumber',
@@ -831,16 +835,65 @@ export class UserService {
     }
   }
 
+  /**
+   * Devuelve todos los usuarios de la empresa en el mismo formato que la
+   * plantilla de carga masiva (incluye la columna `id` para poder
+   * reimportar el Excel y actualizar a los mismos usuarios).
+   */
+  async getUsersForExport(clientId: string): Promise<Record<string, string>[]> {
+    if (!clientId || !Types.ObjectId.isValid(clientId)) return []
+    const clientObjectId = new Types.ObjectId(clientId)
+    const users = await this.userModel
+      .find({ clientId: clientObjectId })
+      .populate('roleId')
+      .sort({ name: 1 })
+      .lean()
+      .exec()
+
+    // Mapa id -> email para resolver el email del coordinador asignado.
+    const idToEmail = new Map<string, string>()
+    for (const u of users as any[]) {
+      idToEmail.set(u._id.toString(), u.email || '')
+    }
+
+    return (users as any[]).map(u => ({
+      id: u._id.toString(),
+      nombre: u.name || '',
+      email: u.email || '',
+      dni: u.dni || '',
+      codigoEmpleado: u.employeeCode || '',
+      area: u.area || '',
+      cargo: u.cargo || '',
+      telefono: u.phone || '',
+      direccion: u.address || '',
+      rol: (u.roleId as any)?.name || '',
+      emailCoordinador: u.coordinatorId
+        ? idToEmail.get(u.coordinatorId.toString()) || ''
+        : '',
+      banco: u.bankAccount?.bankName || '',
+      numeroCuenta: u.bankAccount?.accountNumber || '',
+      cci: u.bankAccount?.cci || '',
+      tipoCuenta: u.bankAccount?.accountType || '',
+    }))
+  }
+
   async bulkImportUsers(
     rawRows: Array<Record<string, any>>,
-    clientId: string
+    clientId: string,
+    opts?: { dryRun?: boolean; updateExisting?: boolean }
   ): Promise<{
     created: number
+    updated: number
     skipped: string[]
     errors: string[]
     credentials: { name: string; email: string; temporaryPassword: string }[]
   }> {
+    // dryRun: calcula el resultado sin escribir en la BD (vista previa).
+    // updateExisting=false: solo crea usuarios nuevos; no toca a los existentes.
+    const dryRun = opts?.dryRun === true
+    const updateExisting = opts?.updateExisting !== false
     let created = 0
+    let updated = 0
     const skipped: string[] = []
     const errors: string[] = []
     const credentials: {
@@ -852,12 +905,20 @@ export class UserService {
     if (!clientId) {
       return {
         created,
+        updated,
         skipped,
         errors: ['No se pudo determinar la empresa destino'],
         credentials,
       }
     }
     const clientObjectId = new Types.ObjectId(clientId)
+
+    // Búsqueda de email tolerante a mayúsculas/minúsculas. La creación manual
+    // guarda el email tal cual se escribió, así que un match exacto en
+    // minúsculas podría no encontrar a un usuario existente y crear un
+    // duplicado. No reescribimos el email guardado (para no romper su login).
+    const ciEmail = (e: string) =>
+      new RegExp(`^${e.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i')
 
     const allowedRoles = [
       'Colaborador',
@@ -887,7 +948,7 @@ export class UserService {
       const key = email.toLowerCase()
       if (coordinatorCache.has(key)) return coordinatorCache.get(key)!
       const u = await this.userModel
-        .findOne({ email: key, clientId: clientObjectId })
+        .findOne({ email: ciEmail(key), clientId: clientObjectId })
         .select('_id')
         .exec()
       const id = u ? u._id : null
@@ -900,6 +961,7 @@ export class UserService {
       rowNumber++
       const row = this.mapBulkRow(raw)
       const email = (row.email || '').toLowerCase()
+      const rowId = (row.id || '').trim()
       try {
         if (!email) {
           errors.push(`Fila ${rowNumber}: sin email`)
@@ -909,26 +971,38 @@ export class UserService {
           errors.push(`Fila ${rowNumber} (${email}): email inválido`)
           continue
         }
-        const exists = await this.userModel
-          .findOne({ email, clientId: clientObjectId })
-          .exec()
-        if (exists) {
-          skipped.push(email)
-          continue
+
+        // Localiza al usuario destino: primero por `id` (columna de la
+        // exportación), luego por email dentro de la empresa. Si no aparece,
+        // se creará uno nuevo.
+        let existing: UserDocument | null = null
+        if (rowId && Types.ObjectId.isValid(rowId)) {
+          existing = await this.userModel
+            .findOne({
+              _id: new Types.ObjectId(rowId),
+              clientId: clientObjectId,
+            })
+            .exec()
+        }
+        if (!existing) {
+          existing = await this.userModel
+            .findOne({ email: ciEmail(email), clientId: clientObjectId })
+            .exec()
         }
 
-        const roleName =
-          allowedRoles.find(
-            r => r.toLowerCase() === (row.role || '').toLowerCase()
-          ) || 'Colaborador'
-        const roleId = await resolveRole(roleName)
-        if (!roleId) {
+        // Rol: obligatorio con defecto en creación; opcional en actualización.
+        const roleProvided = !!(row.role && row.role.trim())
+        const matchedRoleName = allowedRoles.find(
+          r => r.toLowerCase() === (row.role || '').toLowerCase()
+        )
+        if (roleProvided && !matchedRoleName) {
           errors.push(
-            `Fila ${rowNumber} (${email}): rol "${roleName}" no existe`
+            `Fila ${rowNumber} (${email}): rol "${row.role}" no válido`
           )
           continue
         }
 
+        // Coordinador (si viene) — se valida una sola vez para ambos flujos.
         let coordinatorId: Types.ObjectId | undefined
         if (row.coordinatorEmail) {
           const coordId = await resolveCoordinator(row.coordinatorEmail)
@@ -941,54 +1015,174 @@ export class UserService {
           coordinatorId = coordId
         }
 
-        const accountType =
-          row.accountType?.toLowerCase() === 'corriente'
-            ? 'corriente'
-            : row.accountType?.toLowerCase() === 'ahorros'
-              ? 'ahorros'
+        if (existing) {
+          // ---------- ACTUALIZAR usuario existente ----------
+          // Si el usuario optó por no editar existentes, se omite sin tocarlo.
+          if (!updateExisting) {
+            skipped.push(email)
+            continue
+          }
+          if (
+            coordinatorId &&
+            coordinatorId.toString() === existing._id.toString()
+          ) {
+            errors.push(
+              `Fila ${rowNumber} (${email}): un usuario no puede ser su propio coordinador`
+            )
+            continue
+          }
+
+          const update: Record<string, any> = {}
+
+          // Cambio de email (típicamente al ubicar por id). Verifica que no
+          // colisione con otro usuario de la misma empresa.
+          if (email !== (existing.email || '').toLowerCase()) {
+            const collision = await this.userModel
+              .findOne({
+                email: ciEmail(email),
+                clientId: clientObjectId,
+                _id: { $ne: existing._id },
+              })
+              .select('_id')
+              .exec()
+            if (collision) {
+              errors.push(
+                `Fila ${rowNumber} (${email}): ya existe otro usuario con ese email en la empresa`
+              )
+              continue
+            }
+            update.email = email
+          }
+
+          // Celdas vacías NO borran el dato actual: solo se actualiza lo que
+          // trae valor y difiere de lo guardado.
+          const setIfChanged = (field: string, value?: string) => {
+            if (value && value !== ((existing as any)[field] || '')) {
+              update[field] = value
+            }
+          }
+          setIfChanged('name', row.name)
+          setIfChanged('dni', row.dni)
+          setIfChanged('employeeCode', row.employeeCode)
+          setIfChanged('area', row.area)
+          setIfChanged('cargo', row.cargo)
+          setIfChanged('phone', row.phone)
+          setIfChanged('address', row.address)
+
+          if (roleProvided && matchedRoleName) {
+            const roleId = await resolveRole(matchedRoleName)
+            if (roleId && roleId.toString() !== existing.roleId?.toString()) {
+              update.roleId = roleId
+            }
+          }
+
+          if (
+            coordinatorId &&
+            coordinatorId.toString() !== existing.coordinatorId?.toString()
+          ) {
+            update.coordinatorId = coordinatorId
+          }
+
+          // Banco: fusiona con lo existente; celdas vacías no borran subcampos.
+          if (row.bankName || row.accountNumber || row.cci || row.accountType) {
+            const cur: any = existing.bankAccount || {}
+            const nextType =
+              row.accountType?.toLowerCase() === 'corriente'
+                ? 'corriente'
+                : row.accountType?.toLowerCase() === 'ahorros'
+                  ? 'ahorros'
+                  : cur.accountType || 'ahorros'
+            const merged = {
+              bankName: row.bankName || cur.bankName || '',
+              accountNumber: row.accountNumber || cur.accountNumber || '',
+              cci: row.cci || cur.cci || '',
+              accountType: nextType,
+            }
+            const before = {
+              bankName: cur.bankName || '',
+              accountNumber: cur.accountNumber || '',
+              cci: cur.cci || '',
+              accountType: cur.accountType || 'ahorros',
+            }
+            if (JSON.stringify(merged) !== JSON.stringify(before)) {
+              update.bankAccount = merged
+            }
+          }
+
+          if (Object.keys(update).length === 0) {
+            skipped.push(email)
+            continue
+          }
+          if (!dryRun) {
+            await this.userModel.findByIdAndUpdate(existing._id, update).exec()
+          }
+          updated++
+        } else {
+          // ---------- CREAR usuario nuevo ----------
+          const roleName = matchedRoleName || 'Colaborador'
+          const roleId = await resolveRole(roleName)
+          if (!roleId) {
+            errors.push(
+              `Fila ${rowNumber} (${email}): rol "${roleName}" no existe`
+            )
+            continue
+          }
+
+          const accountType =
+            row.accountType?.toLowerCase() === 'corriente'
+              ? 'corriente'
+              : row.accountType?.toLowerCase() === 'ahorros'
+                ? 'ahorros'
+                : undefined
+          const bankAccount =
+            row.bankName || row.accountNumber || row.cci
+              ? {
+                  bankName: row.bankName || '',
+                  accountNumber: row.accountNumber || '',
+                  cci: row.cci || '',
+                  accountType: accountType || 'ahorros',
+                }
               : undefined
-        const bankAccount =
-          row.bankName || row.accountNumber || row.cci
-            ? {
-                bankName: row.bankName || '',
-                accountNumber: row.accountNumber || '',
-                cci: row.cci || '',
-                accountType: accountType || 'ahorros',
-              }
-            : undefined
 
-        const temporaryPassword =
-          Math.random().toString(36).slice(-8) +
-          Math.random().toString(36).slice(-4).toUpperCase()
-        const hashed = await bcrypt.hash(temporaryPassword, 10)
+          const name = row.name || email
+          if (dryRun) {
+            // Vista previa: cuenta la creación sin generar contraseña ni escribir.
+            created++
+            continue
+          }
 
-        const name = row.name || email
-        await this.userModel.create({
-          name,
-          email,
-          password: hashed,
-          roleId,
-          clientId: clientObjectId,
-          mustChangePassword: true,
-          permissions: this.defaultPermissionsForRole(roleName),
-          ...(coordinatorId ? { coordinatorId } : {}),
-          ...(row.dni ? { dni: row.dni } : {}),
-          ...(row.employeeCode ? { employeeCode: row.employeeCode } : {}),
-          ...(row.area ? { area: row.area } : {}),
-          ...(row.cargo ? { cargo: row.cargo } : {}),
-          ...(row.address ? { address: row.address } : {}),
-          ...(row.phone ? { phone: row.phone } : {}),
-          ...(bankAccount ? { bankAccount } : {}),
-        })
-        credentials.push({ name, email, temporaryPassword })
-        created++
+          const temporaryPassword =
+            Math.random().toString(36).slice(-8) +
+            Math.random().toString(36).slice(-4).toUpperCase()
+          const hashed = await bcrypt.hash(temporaryPassword, 10)
+
+          await this.userModel.create({
+            name,
+            email,
+            password: hashed,
+            roleId,
+            clientId: clientObjectId,
+            mustChangePassword: true,
+            permissions: this.defaultPermissionsForRole(roleName),
+            ...(coordinatorId ? { coordinatorId } : {}),
+            ...(row.dni ? { dni: row.dni } : {}),
+            ...(row.employeeCode ? { employeeCode: row.employeeCode } : {}),
+            ...(row.area ? { area: row.area } : {}),
+            ...(row.cargo ? { cargo: row.cargo } : {}),
+            ...(row.address ? { address: row.address } : {}),
+            ...(row.phone ? { phone: row.phone } : {}),
+            ...(bankAccount ? { bankAccount } : {}),
+          })
+          credentials.push({ name, email, temporaryPassword })
+          created++
+        }
       } catch (e: any) {
         errors.push(
           `Fila ${rowNumber} (${email || 'sin email'}): ${e?.message || 'error desconocido'}`
         )
       }
     }
-    return { created, skipped, errors, credentials }
+    return { created, updated, skipped, errors, credentials }
   }
 
   async findAdminsByClient(clientId: string): Promise<UserDocument[]> {

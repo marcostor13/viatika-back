@@ -233,7 +233,8 @@ export class UserController {
   @UseInterceptors(FileInterceptor('file'))
   async bulkImport(
     @UploadedFile() file: Express.Multer.File,
-    @Body() body: { clientId: string },
+    @Body()
+    body: { clientId: string; dryRun?: string; updateExisting?: string },
     @Request() req: any
   ) {
     if (!file) throw new Error('No se recibió archivo')
@@ -248,16 +249,105 @@ export class UserController {
       role === ROLES.SUPER_ADMIN
         ? body.clientId || req.user?.clientId
         : req.user?.clientId
-    const result = await this.userService.bulkImportUsers(rows, clientId)
-    this.auditLogService.log({
-      userId: req.user._id || req.user.sub,
-      userName: req.user.name || req.user.email,
-      action: 'bulk_import_users',
-      module: 'usuarios',
-      details: `Creados: ${result.created}, Omitidos: ${result.skipped.length}, Errores: ${result.errors.length}`,
-      clientId,
+    // Multipart envía todo como texto: 'true'/'false'.
+    const dryRun = body.dryRun === 'true'
+    const updateExisting = body.updateExisting !== 'false'
+    const result = await this.userService.bulkImportUsers(rows, clientId, {
+      dryRun,
+      updateExisting,
     })
+    // La vista previa (dryRun) no modifica datos: no se registra en auditoría.
+    if (!dryRun) {
+      this.auditLogService.log({
+        userId: req.user._id || req.user.sub,
+        userName: req.user.name || req.user.email,
+        action: 'bulk_import_users',
+        module: 'usuarios',
+        details: `Creados: ${result.created}, Actualizados: ${result.updated}, Sin cambios: ${result.skipped.length}, Errores: ${result.errors.length}`,
+        clientId,
+      })
+    }
     return result
+  }
+
+  /**
+   * Exporta todos los usuarios de la empresa en el mismo formato que la
+   * plantilla de carga masiva (con columna `id`). Sirve para editar en Excel
+   * y reimportar: los usuarios con `id` se actualizan y los que no lo traen
+   * se crean.
+   */
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
+  @Get('bulk-import/export')
+  async exportUsers(
+    @Query('clientId') clientIdQuery: string,
+    @Request() req: any
+  ) {
+    // El Administrador/Contabilidad solo exporta su propia empresa; el
+    // Superadministrador puede indicar la empresa vía query.clientId.
+    const role: string = req?.user?.roles?.[0] ?? ''
+    const clientId =
+      role === ROLES.SUPER_ADMIN
+        ? clientIdQuery || req.user?.clientId
+        : req.user?.clientId
+    const rows = await this.userService.getUsersForExport(clientId)
+    const xlsx = await import('xlsx')
+    const header = [
+      'id',
+      'nombre',
+      'email',
+      'dni',
+      'codigoEmpleado',
+      'area',
+      'cargo',
+      'telefono',
+      'direccion',
+      'rol',
+      'emailCoordinador',
+      'banco',
+      'numeroCuenta',
+      'cci',
+      'tipoCuenta',
+    ]
+    const aoa = [header, ...rows.map(r => header.map(h => (r as any)[h] ?? ''))]
+    const ws = xlsx.utils.aoa_to_sheet(aoa)
+    const help = xlsx.utils.aoa_to_sheet([
+      ['Campo', 'Detalle'],
+      [
+        'id',
+        'NO editar ni borrar. Identifica al usuario para actualizarlo. Déjalo vacío en filas nuevas.',
+      ],
+      ['nombre', 'Obligatorio'],
+      [
+        'email',
+        'Obligatorio. Único por empresa. Si cambias el email de un usuario con id, se renombra su acceso.',
+      ],
+      [
+        'rol',
+        'Colaborador, Coordinador, Contabilidad o Administrador. Por defecto: Colaborador',
+      ],
+      [
+        'emailCoordinador',
+        'Email de un usuario ya existente que aprobará sus viáticos (opcional)',
+      ],
+      ['tipoCuenta', 'ahorros o corriente'],
+      [
+        'Celdas vacías',
+        'En usuarios existentes, una celda vacía NO borra el dato actual.',
+      ],
+      [
+        'Contraseña',
+        'Solo se genera para usuarios nuevos; los existentes conservan la suya.',
+      ],
+    ])
+    const wb = xlsx.utils.book_new()
+    xlsx.utils.book_append_sheet(wb, ws, 'Usuarios')
+    xlsx.utils.book_append_sheet(wb, help, 'Instrucciones')
+    const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' })
+    return {
+      file: buffer.toString('base64'),
+      filename: 'usuarios_actuales.xlsx',
+    }
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)

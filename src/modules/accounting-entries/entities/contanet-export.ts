@@ -31,7 +31,8 @@ const XLSM_CONTENT_TYPE =
 // base (mismas columnas/hojas) para compra/solicitud/aplicación/devolución/
 // reembolso; los 3 archivos previos (compras/aplicacion/reembolso.xlsm) eran
 // copias idénticas de esa misma plantilla, no formatos distintos.
-const TEMPLATE_FILE = 'template.xlsm'
+const TEMPLATE_FILE =
+  'F_Importacion_ModImportacion_ModContabilidad_Contabilidad.xlsm'
 
 const TEMPLATE_MAP: Record<string, string> = {
   compra: TEMPLATE_FILE,

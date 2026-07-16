@@ -2412,8 +2412,17 @@ export class ExpenseReportService implements OnModuleInit {
 
   /**
    * Garantiza (perezosamente, al abrir el detalle) que una directa financiada con
-   * bolsa ya aprobada con sobrante tenga su remanente en la bolsa. Solo actúa si aún
-   * no fue liquidada (`!settlement`) y hay sobrante; idempotente y no bloqueante.
+   * bolsa ya aprobada tenga su `settlement` calculado, tanto si sobra saldo
+   * (devolución, va de vuelta a la bolsa) como si el colaborador gastó de más
+   * (reembolso). Solo actúa si aún no fue liquidada (`!settlement`) y hay
+   * diferencia; idempotente y no bloqueante.
+   *
+   * El guard usaba `budget - gastado <= 0.01` (solo devolución): una rendición
+   * con `gastado > budget` (reembolso) nunca disparaba `settleDirectaFinanciadaConBolsa`,
+   * dejando `settlement` indefinido para siempre y ocultando en el front los
+   * asientos contables de aplicación/compra/reembolso (que dependen de
+   * `expenseIds`/`settlement.type`, ver `applicableTipos` en el componente de
+   * Asientos Contables).
    */
   private async ensureDirectaBolsaRemnant(
     reportId: string,
@@ -2437,7 +2446,7 @@ export class ExpenseReportService implements OnModuleInit {
       (s, e) => s + this.expenseSettlementAmountBase(e),
       0
     )
-    if (budget - gastado <= 0.01) return
+    if (Math.abs(budget - gastado) <= 0.01) return
     const owner = report.userId
     const ownerId = owner?._id ? String(owner._id) : String(owner)
     await this.settleDirectaFinanciadaConBolsa(reportId, report, ownerId)

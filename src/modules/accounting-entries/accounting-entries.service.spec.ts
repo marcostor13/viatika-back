@@ -864,9 +864,9 @@ describe('AccountingEntriesService — asiento de aplicación', () => {
       ],
     }
     const lines = await build([expense])
-    // Sin report.startDate/endDate, buildMovilidadBlocks cae a UN bloque con
-    // el total consolidado (120) en vez de repartir por fecha — ver el test
-    // "varias planillas... se consolidan" para el caso con fechas de viaje.
+    // Sin report.startDate/endDate, buildMovilidadBlocks cae a UN bloque por
+    // planilla con su total (120) en vez de repartir por fecha — ver el test
+    // "cada una con su propio Numero Documento" para el caso con fechas de viaje.
     expect(lines).toHaveLength(4)
     const l42s = lines.filter(l => l.nroCuenta === '42.1.2.100')
     expect(l42s).toHaveLength(1)
@@ -892,11 +892,12 @@ describe('AccountingEntriesService — asiento de aplicación', () => {
     expect(warnings.some(w => w.includes('no genera asiento de aplicación'))).toBe(true)
   })
 
-  it('varias planillas de movilidad de la misma rendición se consolidan: un único Numero Documento y fechas sintéticas desde startDate+1 (igual que el PDF completo)', async () => {
-    // Ambos expense se combinan en UN total (80) repartido en bloques de
-    // movilidadDiario (40): la primera fecha es startDate+1 (2026-05-02), la
-    // segunda 2026-05-03 — mismo algoritmo que buildConsolidatedMobilityPageData
-    // en el frontend, no las fechas reales de mobilityRows.
+  it('varias planillas de movilidad de la misma rendición: cada una con su propio Numero Documento y fechas sintéticas corridas desde startDate+1', async () => {
+    // Cada expense es un documento independiente: su total se reparte en
+    // bloques de movilidadDiario (40) con un cursor de fechas SINTÉTICAS
+    // corrido entre planillas (2026-05-02, 2026-05-03), ordenadas por su
+    // fecha real (mobilityRows). El bloque de cada planilla lleva SU propio
+    // internalCode como Numero Documento, no uno compartido.
     const movilidadReport = {
       ...report,
       startDate: new Date('2026-05-01'),
@@ -936,11 +937,13 @@ describe('AccountingEntriesService — asiento de aplicación', () => {
     })
     const l42s = lines.filter((l: ContanetLine) => l.nroCuenta === '42.1.2.100')
     expect(l42s).toHaveLength(2)
-    // Aunque cada expense trae su propio internalCode, el asiento usa el de
-    // la planilla más antigua (MT001) para AMBOS bloques.
-    expect(l42s.every((l: ContanetLine) => l.nroDoc === 'MT001')).toBe(true)
-    const fechas = l42s.map((l: ContanetLine) => l.fechaEmision).sort()
-    expect(fechas).toEqual([toExcelSerial(new Date('2026-05-02')), toExcelSerial(new Date('2026-05-03'))].sort())
+    // MT001 (fecha real 2026-05-02) va primero en 2026-05-02; MT002 sigue en
+    // 2026-05-03. Cada bloque conserva el internalCode de SU planilla.
+    const byDoc = new Map(
+      l42s.map((l: ContanetLine) => [l.nroDoc, l.fechaEmision])
+    )
+    expect(byDoc.get('MT001')).toBe(toExcelSerial(new Date('2026-05-02')))
+    expect(byDoc.get('MT002')).toBe(toExcelSerial(new Date('2026-05-03')))
   })
 
   it('sortExpensesForAsiento ordena planillas de movilidad por su fecha real (mobilityRows), no por report.createdAt', () => {

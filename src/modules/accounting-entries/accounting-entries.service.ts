@@ -816,33 +816,20 @@ export class AccountingEntriesService {
   }
 
   /**
-   * "Numero Documento" único para TODA la planilla de movilidad de la
-   * rendición. Puede haber varios `expense` de tipo planilla_movilidad (cada
-   * uno con su propio internalCode asignado al crearse), pero representan la
-   * misma planilla física — se toma el internalCode del más antiguo
-   * (createdAt) como el número canónico para todos los bloques.
+   * Planillas de movilidad ordenadas para el asiento: por su fecha real
+   * (mobilityRows, vía asientoDate) ascendente y, a igualdad, por createdAt.
+   * Cada planilla es un documento INDEPENDIENTE con su propio internalCode
+   * (correlativo AML012, AML013, ...); el asiento ya no las consolida.
    */
-  private resolveSharedMovilidadNroDoc(expenses: any[]): string {
-    const movilidad = expenses.filter(
-      e => e.expenseType === 'planilla_movilidad' && e.internalCode
-    )
-    return this.resolveCanonicalMovilidadExpense(movilidad)?.internalCode || ''
-  }
-
-  /**
-   * Expense de planilla_movilidad "canónico" de la rendición: el más
-   * antiguo (createdAt). Todas las planillas de una rendición son UN solo
-   * documento físico (ver buildConsolidatedMobilityPageData en
-   * rendicion-detail.component.ts), así que comparten Numero Documento,
-   * cuenta 9X/6X y centro de costo — los de esta planilla canónica.
-   */
-  private resolveCanonicalMovilidadExpense(movilidadExpenses: any[]): any | undefined {
-    if (!movilidadExpenses.length) return undefined
+  private orderMovilidadForAsiento(movilidadExpenses: any[], report: any): any[] {
     return [...movilidadExpenses].sort((a, b) => {
-      const ta = new Date(a.createdAt || 0).getTime()
-      const tb = new Date(b.createdAt || 0).getTime()
-      return ta - tb
-    })[0]
+      const da = this.asientoDate(a, report).getTime()
+      const db = this.asientoDate(b, report).getTime()
+      if (da !== db) return da - db
+      const ca = new Date(a.createdAt || 0).getTime()
+      const cb = new Date(b.createdAt || 0).getTime()
+      return ca - cb
+    })
   }
 
   private toDateOrNull(value: unknown): Date | null {
@@ -852,37 +839,37 @@ export class AccountingEntriesService {
   }
 
   /**
-   * Bloques (fecha, monto) de la planilla de movilidad CONSOLIDADA de toda
-   * la rendición: el total de TODOS los expense de tipo planilla_movilidad
-   * se reparte en tramos de `movilidadDiario` (p.ej. S/40) con fechas
-   * SINTÉTICAS, replicando exactamente `buildConsolidatedMobilityPageData`
-   * del frontend (rendicion-detail.component.ts) — el PDF completo NO usa
-   * las fechas reales de `mobilityRows` para esto, usa una secuencia de
-   * días consecutivos empezando el día siguiente a
-   * report.startDate/viaticoStartDate. Si no hay suficientes días de viaje
-   * para cubrir todos los bloques, arranca en startDate. Sin
-   * startDate/endDate, cae a un único bloque en la fecha del comprobante
-   * más antiguo (mismo fallback que antes de esta consolidación).
+   * Bloques (fecha, monto, expense) de las planillas de movilidad de la
+   * rendición. Cada planilla es un documento INDEPENDIENTE: su total se
+   * reparte en tramos de `movilidadDiario` (p.ej. S/40) y cada bloque queda
+   * asociado a SU expense — el asiento emite luego cada tramo con el
+   * internalCode (Numero Documento) de la planilla a la que pertenece.
+   *
+   * Fechas SINTÉTICAS: una secuencia de días consecutivos empezando el día
+   * siguiente a report.startDate/viaticoStartDate, con un cursor CORRIDO
+   * entre planillas para que no colisionen en las mismas fechas (el PDF NO
+   * usa las fechas reales de `mobilityRows` para esto). Si no hay suficientes
+   * días de viaje para cubrir todos los bloques, arranca en startDate. Sin
+   * startDate/endDate, cae a un único bloque por planilla en la fecha de su
+   * comprobante más antiguo.
    */
   private buildMovilidadBlocks(
     movilidadExpenses: any[],
     report: any,
     movilidadDiario: number
-  ): Array<{ date: Date; monto: number }> {
-    const total = this.round2(
-      movilidadExpenses.reduce((sum, e) => {
-        const rowsTotal = Array.isArray(e.mobilityRows)
-          ? (e.mobilityRows as Array<{ total?: number }>).reduce(
-            (s, r) => s + (Number(r?.total) || 0),
-            0
-          )
-          : 0
-        return sum + (Number(e.total) || rowsTotal || 0)
-      }, 0)
-    )
-    if (total <= 0) return []
+  ): Array<{ date: Date; monto: number; expense: any }> {
+    const ordered = this.orderMovilidadForAsiento(movilidadExpenses, report)
+    const totalOf = (e: any): number => {
+      const rowsTotal = Array.isArray(e.mobilityRows)
+        ? (e.mobilityRows as Array<{ total?: number }>).reduce(
+          (s, r) => s + (Number(r?.total) || 0),
+          0
+        )
+        : 0
+      return this.round2(Number(e.total) || rowsTotal || 0)
+    }
 
-    const blocks: Array<{ date: Date; monto: number }> = []
+    const blocks: Array<{ date: Date; monto: number; expense: any }> = []
     const startDate = this.toDateOrNull(report?.startDate ?? report?.viaticoStartDate)
     const endDate = this.toDateOrNull(report?.endDate ?? report?.viaticoEndDate)
 
@@ -894,18 +881,25 @@ export class AccountingEntriesService {
         0,
         Math.round((endDate.getTime() - day2.getTime()) / msPerDay) + 1
       )
-      const rowsNeeded = Math.ceil(total / movilidadDiario)
+      const grandTotal = this.round2(ordered.reduce((s, e) => s + totalOf(e), 0))
+      const rowsNeeded = Math.ceil(grandTotal / movilidadDiario)
       const cur = rowsNeeded <= daysFromDay2 ? new Date(day2) : new Date(startDate)
-      let remaining = total
-      while (remaining > 0.005) {
-        const monto = this.round2(Math.min(movilidadDiario, remaining))
-        blocks.push({ date: new Date(cur), monto })
-        remaining = this.round2(remaining - monto)
-        cur.setDate(cur.getDate() + 1)
+      for (const e of ordered) {
+        let remaining = totalOf(e)
+        while (remaining > 0.005) {
+          const monto = this.round2(Math.min(movilidadDiario, remaining))
+          blocks.push({ date: new Date(cur), monto, expense: e })
+          remaining = this.round2(remaining - monto)
+          cur.setDate(cur.getDate() + 1)
+        }
       }
     } else {
-      const canonical = this.resolveCanonicalMovilidadExpense(movilidadExpenses)
-      blocks.push({ date: this.asientoDate(canonical, report), monto: total })
+      for (const e of ordered) {
+        const monto = totalOf(e)
+        if (monto > 0.005) {
+          blocks.push({ date: this.asientoDate(e, report), monto, expense: e })
+        }
+      }
     }
     return blocks
   }
@@ -1826,14 +1820,11 @@ export class AccountingEntriesService {
     const trabDni = colaborador?.dni || ''
     const trabNombre = colaborador?.name || ''
     const cuenta14 = this.cuenta14(config, colaborador)
-    // La rendición completa es UNA sola planilla de movilidad física, aunque
-    // el colaborador haya cargado varios `expense` de tipo planilla_movilidad
-    // (el PDF ya los consolida en una sola hoja, ver
-    // buildConsolidatedMobilityPageData en el frontend). Todos sus bloques en
-    // el asiento de Aplicación deben compartir el mismo "Numero Documento";
-    // usar el internalCode de cada expense por separado hacía que Contanet
-    // viera varias planillas distintas dentro de la misma rendición.
-    const movilidadNroDoc = this.resolveSharedMovilidadNroDoc(expenses)
+    // Cada `expense` de tipo planilla_movilidad es un documento independiente
+    // con su propio internalCode (correlativo AML012, AML013, ...). El asiento
+    // de Aplicación ya NO consolida: cada bloque de S/40 se emite con el
+    // "Numero Documento" de la planilla a la que pertenece (ver el bloque de
+    // movilidad al final de esta función).
     const movilidadExpenses = expenses.filter(e => e.expenseType === 'planilla_movilidad')
 
     for (const expense of expenses) {
@@ -2060,16 +2051,15 @@ export class AccountingEntriesService {
       })
     }
 
-    // Planilla de movilidad: TODAS las de la rendición son un solo
-    // documento físico (ver resolveSharedMovilidadNroDoc), así que se
-    // consolidan en un único total y se reparten en bloques de
-    // `movilidadDiario` con las mismas fechas SINTÉTICAS que ya muestra el
-    // PDF completo (buildConsolidatedMobilityPageData en
-    // rendicion-detail.component.ts): empiezan al día siguiente de
-    // report.startDate/viaticoStartDate y avanzan un día por bloque — nunca
-    // las fechas reales de `mobilityRows`, que el PDF tampoco usa para esto.
-    // Se procesa acá, fuera del loop de arriba, porque necesita el total de
-    // TODOS los expense de movilidad juntos antes de repartirlo.
+    // Planilla de movilidad: cada `expense` es un documento INDEPENDIENTE con
+    // su propio internalCode (correlativo AML012, AML013, ...). Su total se
+    // reparte en bloques de `movilidadDiario` con fechas SINTÉTICAS (día
+    // siguiente a report.startDate/viaticoStartDate, avanzando un día por
+    // bloque con cursor corrido entre planillas — nunca las fechas reales de
+    // `mobilityRows`). Cada bloque se emite con el "Numero Documento",
+    // categoría (cuentas 9X/6X) y centro de costo de SU planilla. Se procesa
+    // acá, fuera del loop de arriba, porque las fechas sintéticas se asignan
+    // de forma corrida sobre el conjunto de planillas de la rendición.
     if (movilidadExpenses.length) {
       const blocks = this.buildMovilidadBlocks(movilidadExpenses, report, movilidadDiario)
       if (!blocks.length) {
@@ -2080,59 +2070,72 @@ export class AccountingEntriesService {
           `La planilla de movilidad "${label}" no tiene monto y no genera asiento de aplicación.`
         )
       } else {
-        const canonical = this.resolveCanonicalMovilidadExpense(movilidadExpenses)
-        const category = canonical?.categoryId
-          ? categoryMap.get(canonical.categoryId.toString())
-          : undefined
-        const cuenta9x = category?.cuenta || ''
-        const cuenta6xCat = category?.cuentaDestino6x || config.cuenta79
+        // Metadatos contables por planilla (categoría/cuentas/proyecto), con
+        // avisos deduplicados por categoría vía `warnedCategoryKeys`.
+        const metaCache = new Map<
+          string,
+          { cuenta9x: string; cuenta6xCat: string; project: any; nroDoc: string }
+        >()
+        const resolveMovMeta = (expense: any) => {
+          const cacheKey = expense?._id?.toString() || ''
+          const cached = metaCache.get(cacheKey)
+          if (cached) return cached
 
-        if (!cuenta9x) {
-          const categoryKey =
-            category?._id?.toString() || canonical?.categoryId?.toString() || 'sin-categoria'
-          if (!warnedCategoryKeys.has(categoryKey)) {
-            warnedCategoryKeys.add(categoryKey)
-            const msg = category
-              ? `La categoría "${category.name}" no tiene la Cuenta Analítica 9X configurada (Categorías → editar categoría). Sus comprobantes quedarán descuadrados hasta configurarla.`
-              : canonical?.categoryId
-                ? `Un comprobante tiene asignada una categoría (id ${categoryKey}) que ya no existe o no pertenece a esta empresa. Reasígnale una categoría válida desde el detalle del gasto.`
-                : 'Hay comprobantes sin categoría asignada: no se puede generar su línea analítica 9X. Asígnales una categoría desde el detalle del gasto.'
-            warnings.push(msg)
-            this.logger.warn(`[asientos] ${msg} (categoryId=${categoryKey})`)
-          }
-        }
-        if (category && !category.cuentaDestino6x) {
-          const dest6xKey = `${category._id?.toString()}:6x`
-          if (!warnedCategoryKeys.has(dest6xKey)) {
-            warnedCategoryKeys.add(dest6xKey)
-            const msg = `La categoría "${category.name}" no tiene la Cuenta Destino 6X configurada (Categorías → editar categoría). El asiento de destino saldrá como 79/79 en vez de 6X/79, sin registrar el gasto por naturaleza.`
-            warnings.push(msg)
-            this.logger.warn(`[asientos] ${msg} (categoryId=${category._id?.toString()})`)
-          }
-        }
+          const category = expense?.categoryId
+            ? categoryMap.get(expense.categoryId.toString())
+            : undefined
+          const cuenta9x = category?.cuenta || ''
+          const cuenta6xCat = category?.cuentaDestino6x || config.cuenta79
 
-        const movilidadProjectId =
-          report?.projectId?.toString() || canonical?.proyectId?.toString()
-        const movilidadProject = movilidadProjectId
-          ? projectMap.get(movilidadProjectId)
-          : undefined
+          if (!cuenta9x) {
+            const categoryKey =
+              category?._id?.toString() || expense?.categoryId?.toString() || 'sin-categoria'
+            if (!warnedCategoryKeys.has(categoryKey)) {
+              warnedCategoryKeys.add(categoryKey)
+              const msg = category
+                ? `La categoría "${category.name}" no tiene la Cuenta Analítica 9X configurada (Categorías → editar categoría). Sus comprobantes quedarán descuadrados hasta configurarla.`
+                : expense?.categoryId
+                  ? `Un comprobante tiene asignada una categoría (id ${categoryKey}) que ya no existe o no pertenece a esta empresa. Reasígnale una categoría válida desde el detalle del gasto.`
+                  : 'Hay comprobantes sin categoría asignada: no se puede generar su línea analítica 9X. Asígnales una categoría desde el detalle del gasto.'
+              warnings.push(msg)
+              this.logger.warn(`[asientos] ${msg} (categoryId=${categoryKey})`)
+            }
+          }
+          if (category && !category.cuentaDestino6x) {
+            const dest6xKey = `${category._id?.toString()}:6x`
+            if (!warnedCategoryKeys.has(dest6xKey)) {
+              warnedCategoryKeys.add(dest6xKey)
+              const msg = `La categoría "${category.name}" no tiene la Cuenta Destino 6X configurada (Categorías → editar categoría). El asiento de destino saldrá como 79/79 en vez de 6X/79, sin registrar el gasto por naturaleza.`
+              warnings.push(msg)
+              this.logger.warn(`[asientos] ${msg} (categoryId=${category._id?.toString()})`)
+            }
+          }
+
+          const projectId =
+            report?.projectId?.toString() || expense?.proyectId?.toString()
+          const project = projectId ? projectMap.get(projectId) : undefined
+          const meta = { cuenta9x, cuenta6xCat, project, nroDoc: expense?.internalCode || '' }
+          metaCache.set(cacheKey, meta)
+          return meta
+        }
 
         for (const block of blocks) {
+          const meta = resolveMovMeta(block.expense)
           const tc = this.tcFor(block.date, rateMap, config)
           const glosaBase = `APLICACION ${block.date.toISOString().slice(0, 10)}`
           const push = (line: ContanetLine) => {
-            this.applyProjectCostCenter(line, movilidadProject)
+            this.applyProjectCostCenter(line, meta.project)
             line.relacionado = relacionado
             line.correlativo = correlativo++
             lines.push(line)
           }
-          if (cuenta9x) {
+          if (meta.cuenta9x) {
             push(
               this.baseLine(config, block.date, config.fuenteAplicacion, glosaBase, tc, periodDate, {
-                nroCuenta: cuenta9x,
+                nroCuenta: meta.cuenta9x,
                 codTipDoc: TIPO_DOCUMENTO.PM,
                 nroSerie: '0001',
-                nroDoc: movilidadNroDoc,
+                nroDoc: meta.nroDoc,
                 identTipAfecto: 'N',
                 montoDebe: block.monto,
                 montoDebeME: this.toME(block.monto, tc),
@@ -2144,7 +2147,7 @@ export class AccountingEntriesService {
               nroCuenta: config.cuenta42,
               codTipDoc: TIPO_DOCUMENTO.PM,
               nroSerie: '0001',
-              nroDoc: movilidadNroDoc,
+              nroDoc: meta.nroDoc,
               montoHaber: block.monto,
               montoHaberME: this.toME(block.monto, tc),
               esProvision: 1,
@@ -2152,7 +2155,7 @@ export class AccountingEntriesService {
           )
           push(
             this.baseLine(config, block.date, config.fuenteAplicacion, glosaBase, tc, periodDate, {
-              nroCuenta: cuenta6xCat,
+              nroCuenta: meta.cuenta6xCat,
               montoDebe: block.monto,
               montoDebeME: this.toME(block.monto, tc),
               esDestino: 1,

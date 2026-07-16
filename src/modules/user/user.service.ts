@@ -1218,6 +1218,17 @@ export class UserService {
     return !!(u as any)?.emailNotificationsEnabled
   }
 
+  /** Nombre del rol del usuario (ej. 'Coordinador'), o null si no se encuentra. */
+  async getRoleName(userId: string): Promise<string | null> {
+    const u = await this.userModel
+      .findById(userId)
+      .populate('roleId', 'name')
+      .select('roleId')
+      .lean()
+      .exec()
+    return (u as any)?.roleId?.name ?? null
+  }
+
   async setEmailNotifications(userId: string, enabled: boolean): Promise<void> {
     await this.userModel
       .findByIdAndUpdate(userId, { emailNotificationsEnabled: enabled })

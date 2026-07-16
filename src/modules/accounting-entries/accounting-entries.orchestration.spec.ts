@@ -466,7 +466,7 @@ describe('AccountingEntriesService — orquestación async (status, trigger, S3)
       ;(service as any).projectModel = projectModel
 
       const expenses = [{ _id: 'e1', proyectId: CAT_HEX }]
-      await (service as any).buildProjectMap(expenses, { }, CLIENT_HEX)
+      await (service as any).buildProjectMap(expenses, [], { }, CLIENT_HEX)
 
       expect(captured.clientId).toBeInstanceOf(Types.ObjectId)
       expect(captured._id.$in[0]).toBeInstanceOf(Types.ObjectId)

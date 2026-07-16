@@ -196,9 +196,9 @@ export class AccountingEntriesService {
         .exec() as Promise<any[]>,
       (report.advanceIds?.length
         ? this.advanceModel
-            .find({ _id: { $in: report.advanceIds } })
-            .lean()
-            .exec()
+          .find({ _id: { $in: report.advanceIds } })
+          .lean()
+          .exec()
         : Promise.resolve([])) as Promise<any[]>,
       this.userModel.findById(report.userId).lean().exec(),
       this.clientModel.findById(this.toObjectId(reportClientId ?? clientId)).lean().exec() as Promise<any>,
@@ -382,7 +382,7 @@ export class AccountingEntriesService {
     const dataClientId = report.clientId?.toString() ?? clientId
 
     const [projectMap, categoryMap] = await Promise.all([
-      this.buildProjectMap(expenses, report, dataClientId),
+      this.buildProjectMap(expenses, advances, report, dataClientId),
       this.buildCategoryMap(expenses, dataClientId),
     ])
 
@@ -445,12 +445,12 @@ export class AccountingEntriesService {
       if (cuadreErrors.length) {
         this.logger.warn(
           `[asientos] cuadre incorrecto en tipo="${tipo}" reportId=${reportId}: ` +
-            cuadreErrors
-              .map(
-                e =>
-                  `rel=${e.relacionado} filas=${e.filaInicio}-${e.filaFin} doc="${e.documento}" diff=${e.diferencia}`
-              )
-              .join(', ')
+          cuadreErrors
+            .map(
+              e =>
+                `rel=${e.relacionado} filas=${e.filaInicio}-${e.filaFin} doc="${e.documento}" diff=${e.diferencia}`
+            )
+            .join(', ')
         )
       }
       // Formato según la config de la empresa: 'template' = .xlsm idéntico
@@ -708,12 +708,12 @@ export class AccountingEntriesService {
     const categories = (
       ids.size
         ? await this.categoryModel
-            .find({
-              _id: { $in: this.toObjectIds(ids) },
-              clientId: this.toObjectId(clientId),
-            })
-            .lean()
-            .exec()
+          .find({
+            _id: { $in: this.toObjectIds(ids) },
+            clientId: this.toObjectId(clientId),
+          })
+          .lean()
+          .exec()
         : []
     ) as any[]
     const map = new Map<string, any>()
@@ -727,6 +727,7 @@ export class AccountingEntriesService {
 
   private async buildProjectMap(
     expenses: any[],
+    advances: any[],
     report: any,
     clientId: string
   ): Promise<Map<string, any>> {
@@ -738,16 +739,19 @@ export class AccountingEntriesService {
         if (d.proyectId) ids.add(d.proyectId.toString())
       }
     }
+    for (const a of advances) {
+      if (a.projectId) ids.add(a.projectId.toString())
+    }
     const projects = (
       ids.size
         ? await this.projectModel
-            .find({
-              _id: { $in: this.toObjectIds(ids) },
-              clientId: this.toObjectId(clientId),
-            })
-            .populate('lineaNegocioId', 'name code')
-            .lean()
-            .exec()
+          .find({
+            _id: { $in: this.toObjectIds(ids) },
+            clientId: this.toObjectId(clientId),
+          })
+          .populate('lineaNegocioId', 'name code')
+          .lean()
+          .exec()
         : []
     ) as any[]
     const map = new Map<string, any>()
@@ -869,9 +873,9 @@ export class AccountingEntriesService {
       movilidadExpenses.reduce((sum, e) => {
         const rowsTotal = Array.isArray(e.mobilityRows)
           ? (e.mobilityRows as Array<{ total?: number }>).reduce(
-              (s, r) => s + (Number(r?.total) || 0),
-              0
-            )
+            (s, r) => s + (Number(r?.total) || 0),
+            0
+          )
           : 0
         return sum + (Number(e.total) || rowsTotal || 0)
       }, 0)
@@ -1139,6 +1143,25 @@ export class AccountingEntriesService {
     if (project.area) line.area = project.area
   }
 
+  /**
+   * Resuelve el proyecto de una línea probando IDs candidatos en orden de
+   * prioridad (ej. el proyecto propio del gasto/anticipo, luego el de la
+   * rendición); el primero que resuelva en `projectMap` gana. Si ninguno
+   * resuelve, `applyProjectCostCenter` cae al centro de costo global de la
+   * config (comportamiento previo).
+   */
+  private resolveLineProject(
+    projectMap: Map<string, any>,
+    ...ids: Array<{ toString(): string } | undefined | null>
+  ): any | undefined {
+    for (const id of ids) {
+      if (!id) continue
+      const project = projectMap.get(id.toString())
+      if (project) return project
+    }
+    return undefined
+  }
+
   /** Subcuenta 14 del colaborador (parametrizada o construida con la raíz). */
   private cuenta14(config: AccountingConfigDocument, colaborador: any): string {
     if (colaborador?.subcuenta14) return colaborador.subcuenta14
@@ -1285,7 +1308,7 @@ export class AccountingEntriesService {
     } catch (error) {
       this.logger.warn(
         `[asientos] IA no pudo clasificar cargos: ${(error as Error)?.message}. ` +
-          'Se tratan como deducibles.'
+        'Se tratan como deducibles.'
       )
     }
 
@@ -1443,8 +1466,8 @@ export class AccountingEntriesService {
       const baseTotal = this.round2(portions.reduce((s, p) => s + p.monto, 0))
       const total = this.round2(
         num(det?.totales?.importeTotal) ||
-          Number(expense.total) ||
-          baseTotal + igv
+        Number(expense.total) ||
+        baseTotal + igv
       )
       const cur = this.resolveComprobanteCurrency(config, expense, total, tc)
 
@@ -1697,11 +1720,12 @@ export class AccountingEntriesService {
     config: AccountingConfigDocument
     advances: any[]
     colaborador: any
+    projectMap: Map<string, any>
     periodDate: Date
     rateMap: Map<string, number>
     warnings: string[]
   }): Promise<ContanetLine[]> {
-    const { config, advances, colaborador, report, periodDate, rateMap, warnings } = ctx
+    const { config, advances, colaborador, report, projectMap, periodDate, rateMap, warnings } = ctx
     const lines: ContanetLine[] = []
     let relacionado = 1
     let correlativo = 1
@@ -1728,53 +1752,46 @@ export class AccountingEntriesService {
         .slice(0, 100)
         .toUpperCase()
 
+      // Centro de costo: proyecto del anticipo, o el de la rendición si el
+      // anticipo no tiene uno propio asignado.
+      const advProject = this.resolveLineProject(
+        projectMap,
+        adv.projectId,
+        report?.projectId
+      )
+      const push = (line: ContanetLine) => {
+        this.applyProjectCostCenter(line, advProject)
+        line.relacionado = relacionado
+        line.correlativo = correlativo++
+        lines.push(line)
+      }
+
       // 14 (Debe) — nace la obligación del colaborador
-      lines.push({
-        ...this.baseLine(
-          config,
-          date,
-          config.fuenteCajaBancos,
-          glosa,
-          cur.cambioMoneda,
-          periodDate,
-          {
-            nroCuenta: cuenta14,
-            mdaOrigen: cur.mdaOrigen,
-            montoDebe: this.round2(amount * cur.fxFactor),
-            montoDebeME: this.toMEForComprobante(amount, cur.isForeign, tc),
-            codTipDocIdentTrab: trabDni ? '01' : '',
-            nroDocTrab: trabDni,
-            razonSocialTrab: trabNombre,
-          }
-        ),
-        relacionado,
-        correlativo: correlativo++,
-      })
+      push(
+        this.baseLine(config, date, config.fuenteCajaBancos, glosa, cur.cambioMoneda, periodDate, {
+          nroCuenta: cuenta14,
+          mdaOrigen: cur.mdaOrigen,
+          montoDebe: this.round2(amount * cur.fxFactor),
+          montoDebeME: this.toMEForComprobante(amount, cur.isForeign, tc),
+          codTipDocIdentTrab: trabDni ? '01' : '',
+          nroDocTrab: trabDni,
+          razonSocialTrab: trabNombre,
+        })
+      )
 
       // 104 (Haber) — sale el dinero del banco
-      lines.push({
-        ...this.baseLine(
-          config,
-          date,
-          config.fuenteCajaBancos,
-          glosa,
-          cur.cambioMoneda,
-          periodDate,
-          {
-            nroCuenta: banco,
-            mdaOrigen: cur.mdaOrigen,
-            montoHaber: this.round2(amount * cur.fxFactor),
-            montoHaberME: this.toMEForComprobante(amount, cur.isForeign, tc),
-          }
-        ),
-        relacionado,
-        correlativo: correlativo++,
-      })
+      push(
+        this.baseLine(config, date, config.fuenteCajaBancos, glosa, cur.cambioMoneda, periodDate, {
+          nroCuenta: banco,
+          mdaOrigen: cur.mdaOrigen,
+          montoHaber: this.round2(amount * cur.fxFactor),
+          montoHaberME: this.toMEForComprobante(amount, cur.isForeign, tc),
+        })
+      )
 
       relacionado++
     }
 
-    void report
     return lines
   }
 
@@ -1866,8 +1883,21 @@ export class AccountingEntriesService {
         const date = this.asientoDate(expense, report)
         const tc = this.tcFor(date, rateMap, config)
         const cur = this.resolveComprobanteCurrency(config, expense, total, tc)
-        lines.push({
-          ...this.baseLine(config, date, config.fuenteAplicacion, 'APLICACION', cur.cambioMoneda, periodDate, {
+        // Centro de costo: proyecto del comprobante, o el de la rendición si
+        // el comprobante no tiene uno propio asignado.
+        const expProject = this.resolveLineProject(
+          projectMap,
+          expense.proyectId,
+          report?.projectId
+        )
+        const push = (line: ContanetLine) => {
+          this.applyProjectCostCenter(line, expProject)
+          line.relacionado = relacionado
+          line.correlativo = correlativo++
+          lines.push(line)
+        }
+        push(
+          this.baseLine(config, date, config.fuenteAplicacion, 'APLICACION', cur.cambioMoneda, periodDate, {
             nroCuenta: config.cuenta42,
             codTipDoc,
             nroSerie: serie,
@@ -1878,12 +1908,10 @@ export class AccountingEntriesService {
             codTipDocIdentProv: ruc ? '06' : '',
             nroDocProv: ruc,
             razonSocialProv: razonSocial,
-          }),
-          relacionado,
-          correlativo: correlativo++,
-        })
-        lines.push({
-          ...this.baseLine(config, date, config.fuenteAplicacion, 'APLICACION', cur.cambioMoneda, periodDate, {
+          })
+        )
+        push(
+          this.baseLine(config, date, config.fuenteAplicacion, 'APLICACION', cur.cambioMoneda, periodDate, {
             nroCuenta: cuenta14,
             mdaOrigen: cur.mdaOrigen,
             montoHaber: this.round2(total * cur.fxFactor),
@@ -1891,10 +1919,8 @@ export class AccountingEntriesService {
             codTipDocIdentTrab: trabDni ? '01' : '',
             nroDocTrab: trabDni,
             razonSocialTrab: trabNombre,
-          }),
-          relacionado,
-          correlativo: correlativo++,
-        })
+          })
+        )
         relacionado++
         continue
       }
@@ -2154,12 +2180,13 @@ export class AccountingEntriesService {
       config: AccountingConfigDocument
       advances: any[]
       colaborador: any
+      projectMap: Map<string, any>
       periodDate: Date
       rateMap: Map<string, number>
     },
     modo: 'devolucion' | 'reembolso'
   ): Promise<ContanetLine[]> {
-    const { config, colaborador, report, advances, periodDate, rateMap } = ctx
+    const { config, colaborador, report, advances, projectMap, periodDate, rateMap } = ctx
     const settlement = report.settlement
     const diff = this.round2(Math.abs(Number(settlement?.difference) || 0))
     if (diff <= 0) return []
@@ -2182,86 +2209,61 @@ export class AccountingEntriesService {
         ? config.cuenta46 || cuenta14
         : cuenta14
 
+    // Centro de costo: proyecto de la rendición, o el del primer anticipo si
+    // la rendición no tiene uno propio asignado.
+    const project = this.resolveLineProject(
+      projectMap,
+      report?.projectId,
+      advances?.[0]?.projectId
+    )
+
     const lines: ContanetLine[] = []
+    let correlativo = 1
+    const push = (line: ContanetLine) => {
+      this.applyProjectCostCenter(line, project)
+      line.relacionado = 1
+      line.correlativo = correlativo++
+      lines.push(line)
+    }
 
     if (modo === 'devolucion') {
       // 104 (Debe) entra al banco / 14 (Haber) reduce la CxC
-      lines.push({
-        ...this.baseLine(
-          config,
-          date,
-          config.fuenteCajaBancos,
-          glosa,
-          tc,
-          periodDate,
-          {
-            nroCuenta: banco,
-            montoDebe: diff,
-            montoDebeME: this.toME(diff, tc),
-          }
-        ),
-        relacionado: 1,
-        correlativo: 1,
-      })
-      lines.push({
-        ...this.baseLine(
-          config,
-          date,
-          config.fuenteCajaBancos,
-          glosa,
-          tc,
-          periodDate,
-          {
-            nroCuenta: cuenta14,
-            montoHaber: diff,
-            montoHaberME: this.toME(diff, tc),
-            codTipDocIdentTrab: trabDni ? '01' : '',
-            nroDocTrab: trabDni,
-            razonSocialTrab: trabNombre,
-          }
-        ),
-        relacionado: 1,
-        correlativo: 2,
-      })
+      push(
+        this.baseLine(config, date, config.fuenteCajaBancos, glosa, tc, periodDate, {
+          nroCuenta: banco,
+          montoDebe: diff,
+          montoDebeME: this.toME(diff, tc),
+        })
+      )
+      push(
+        this.baseLine(config, date, config.fuenteCajaBancos, glosa, tc, periodDate, {
+          nroCuenta: cuenta14,
+          montoHaber: diff,
+          montoHaberME: this.toME(diff, tc),
+          codTipDocIdentTrab: trabDni ? '01' : '',
+          nroDocTrab: trabDni,
+          razonSocialTrab: trabNombre,
+        })
+      )
     } else {
       // Reembolso: 14/46 (Debe) / 104 (Haber) sale del banco
-      lines.push({
-        ...this.baseLine(
-          config,
-          date,
-          config.fuenteCajaBancos,
-          glosa,
-          tc,
-          periodDate,
-          {
-            nroCuenta: cuentaColab,
-            montoDebe: diff,
-            montoDebeME: this.toME(diff, tc),
-            codTipDocIdentTrab: trabDni ? '01' : '',
-            nroDocTrab: trabDni,
-            razonSocialTrab: trabNombre,
-          }
-        ),
-        relacionado: 1,
-        correlativo: 1,
-      })
-      lines.push({
-        ...this.baseLine(
-          config,
-          date,
-          config.fuenteCajaBancos,
-          glosa,
-          tc,
-          periodDate,
-          {
-            nroCuenta: banco,
-            montoHaber: diff,
-            montoHaberME: this.toME(diff, tc),
-          }
-        ),
-        relacionado: 1,
-        correlativo: 2,
-      })
+      push(
+        this.baseLine(config, date, config.fuenteCajaBancos, glosa, tc, periodDate, {
+          nroCuenta: cuentaColab,
+          montoDebe: diff,
+          montoDebeME: this.toME(diff, tc),
+          codTipDocIdentTrab: trabDni ? '01' : '',
+          nroDocTrab: trabDni,
+          razonSocialTrab: trabNombre,
+        })
+      )
+      push(
+        this.baseLine(config, date, config.fuenteCajaBancos, glosa, tc, periodDate, {
+          nroCuenta: banco,
+          montoHaber: diff,
+          montoHaberME: this.toME(diff, tc),
+        })
+      )
     }
 
     return lines

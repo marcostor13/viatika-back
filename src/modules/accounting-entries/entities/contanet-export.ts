@@ -27,12 +27,18 @@ const XLSX_CONTENT_TYPE =
 const XLSM_CONTENT_TYPE =
   'application/vnd.ms-excel.sheet.macroEnabled.12'
 
+// Un único template para todos los tipos: Contanet usa la misma plantilla
+// base (mismas columnas/hojas) para compra/solicitud/aplicación/devolución/
+// reembolso; los 3 archivos previos (compras/aplicacion/reembolso.xlsm) eran
+// copias idénticas de esa misma plantilla, no formatos distintos.
+const TEMPLATE_FILE = 'template.xlsm'
+
 const TEMPLATE_MAP: Record<string, string> = {
-  compra: 'compras.xlsm',
-  aplicacion: 'aplicacion.xlsm',
-  solicitud: 'aplicacion.xlsm',
-  devolucion: 'reembolso.xlsm',
-  reembolso: 'reembolso.xlsm',
+  compra: TEMPLATE_FILE,
+  aplicacion: TEMPLATE_FILE,
+  solicitud: TEMPLATE_FILE,
+  devolucion: TEMPLATE_FILE,
+  reembolso: TEMPLATE_FILE,
 }
 
 export function resolveTemplatePath(tipo?: AsientoTipo): string | null {

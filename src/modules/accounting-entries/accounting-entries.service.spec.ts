@@ -640,6 +640,158 @@ describe('AccountingEntriesService — absorción de residuo de redondeo', () =>
   })
 })
 
+describe('AccountingEntriesService — centro de costo en solicitud/aplicación/devolución-reembolso', () => {
+  const service = newService()
+  const config = makeConfig()
+  const periodDate = new Date('2026-04-01')
+  const rateMap = new Map<string, number>([['2026-04-15', TC]])
+  const projectMap = new Map<string, any>([
+    [
+      'p-adv',
+      { _id: 'p-adv', code: 'CC-ADV', centroCosto: 'SC-ADV', subCentroCosto: '111' },
+    ],
+    [
+      'p-exp',
+      { _id: 'p-exp', code: 'CC-EXP', centroCosto: 'SC-EXP', subCentroCosto: '222' },
+    ],
+    [
+      'p-report',
+      { _id: 'p-report', code: 'CC-REP', centroCosto: 'SC-REP', subCentroCosto: '333' },
+    ],
+  ])
+
+  it('solicitud: toma el centro de costo del proyecto del anticipo', async () => {
+    const report = { createdAt: new Date('2026-04-15') }
+    const advance = {
+      _id: 'a1',
+      amount: 500,
+      projectId: 'p-adv',
+      startDate: new Date('2026-04-15'),
+    }
+    const lines = (await (service as any).buildSolicitudLines({
+      report,
+      config,
+      advances: [advance],
+      colaborador: { dni: '12345678', name: 'Colaborador' },
+      projectMap,
+      periodDate,
+      rateMap,
+      warnings: [],
+    })) as ContanetLine[]
+
+    expect(lines.length).toBe(2)
+    expect(lines.every(l => l.centroCosto === 'SC-ADV')).toBe(true)
+    expect(lines.every(l => l.subCentroCosto === '111')).toBe(true)
+  })
+
+  it('solicitud: si el anticipo no tiene proyecto, cae al proyecto de la rendición', async () => {
+    const report = { createdAt: new Date('2026-04-15'), projectId: 'p-report' }
+    const advance = { _id: 'a2', amount: 500, startDate: new Date('2026-04-15') }
+    const lines = (await (service as any).buildSolicitudLines({
+      report,
+      config,
+      advances: [advance],
+      colaborador: {},
+      projectMap,
+      periodDate,
+      rateMap,
+      warnings: [],
+    })) as ContanetLine[]
+
+    expect(lines.every(l => l.centroCosto === 'SC-REP')).toBe(true)
+  })
+
+  it('solicitud: sin proyecto propio ni de la rendición, cae al centro de costo global de la config', async () => {
+    const report = { createdAt: new Date('2026-04-15') }
+    const advance = { _id: 'a3', amount: 500, startDate: new Date('2026-04-15') }
+    const lines = (await (service as any).buildSolicitudLines({
+      report,
+      config,
+      advances: [advance],
+      colaborador: {},
+      projectMap,
+      periodDate,
+      rateMap,
+      warnings: [],
+    })) as ContanetLine[]
+
+    expect(lines.every(l => l.centroCosto === config.centroCosto)).toBe(true)
+  })
+
+  it('aplicación: toma el centro de costo del proyecto del comprobante', async () => {
+    const report = { createdAt: new Date('2026-04-15') }
+    const expense = {
+      _id: 'e1',
+      proyectId: 'p-exp',
+      total: 100,
+      data: '{}',
+      comprobanteDetallado: { totales: { importeTotal: 100 } },
+    }
+    const lines = (await (service as any).buildAplicacionLines({
+      report,
+      config,
+      expenses: [expense],
+      colaborador: { dni: '12345678', name: 'Colaborador' },
+      movilidadDiario: 40,
+      projectMap,
+      categoryMap: new Map(),
+      periodDate,
+      rateMap,
+      warnings: [],
+    })) as ContanetLine[]
+
+    expect(lines.length).toBe(2)
+    expect(lines.every(l => l.centroCosto === 'SC-EXP')).toBe(true)
+    expect(lines.every(l => l.subCentroCosto === '222')).toBe(true)
+  })
+
+  it('devolución: toma el centro de costo del proyecto de la rendición', async () => {
+    const report = {
+      updatedAt: new Date('2026-04-15'),
+      projectId: 'p-report',
+      settlement: { type: 'devolucion', difference: -50 },
+    }
+    const lines = (await (service as any).buildDevolucionReembolsoLines(
+      {
+        report,
+        config,
+        advances: [],
+        colaborador: {},
+        projectMap,
+        periodDate,
+        rateMap,
+      },
+      'devolucion'
+    )) as ContanetLine[]
+
+    expect(lines.length).toBe(2)
+    expect(lines.every(l => l.centroCosto === 'SC-REP')).toBe(true)
+  })
+
+  it('reembolso: si la rendición no tiene proyecto, cae al proyecto del primer anticipo', async () => {
+    const report = {
+      updatedAt: new Date('2026-04-15'),
+      settlement: { type: 'reembolso', difference: 50 },
+    }
+    const advance = { _id: 'a4', projectId: 'p-adv' }
+    const lines = (await (service as any).buildDevolucionReembolsoLines(
+      {
+        report,
+        config,
+        advances: [advance],
+        colaborador: {},
+        projectMap,
+        periodDate,
+        rateMap,
+      },
+      'reembolso'
+    )) as ContanetLine[]
+
+    expect(lines.length).toBe(2)
+    expect(lines.every(l => l.centroCosto === 'SC-ADV')).toBe(true)
+  })
+})
+
 describe('AccountingEntriesService — asiento de aplicación', () => {
   const service = newService()
   const config = makeConfig()
@@ -652,6 +804,12 @@ describe('AccountingEntriesService — asiento de aplicación', () => {
   const report = { createdAt: new Date('2026-04-15') }
   const periodDate = new Date('2026-04-01')
   const colaborador = { dni: '12345678', name: 'JUAN PEREZ' }
+  // Categoría ALIMENTACION → 9X 91.3.1.410, destino 6X 63.1.4.100 (misma que
+  // usan los tests de Compra) — los no-factura en Aplicación ya generan su
+  // propio bloque 9X/42/6X/79, así que necesitan una categoría resuelta.
+  const categoryMap = new Map<string, any>([
+    ['cat1', { _id: 'cat1', cuenta: '91.3.1.410', cuentaDestino6x: '63.1.4.100' }],
+  ])
 
   async function build(expenses: any[], warnings: string[] = []) {
     return (service as any).buildAplicacionLines({
@@ -659,16 +817,20 @@ describe('AccountingEntriesService — asiento de aplicación', () => {
       config,
       expenses,
       colaborador,
+      movilidadDiario: 40,
+      projectMap: new Map(),
+      categoryMap,
       periodDate,
       rateMap,
       warnings,
     }) as Promise<ContanetLine[]>
   }
 
-  it('boleta (código 03) genera su par 42/14 en Aplicación aunque no entre a Compra', async () => {
+  it('boleta (código 03) genera su asiento 9X/42/6X/79 en Aplicación aunque no entre a Compra', async () => {
     const expense = {
       _id: 'e10',
       expenseType: 'factura',
+      categoryId: 'cat1',
       total: 59,
       data: '{}',
       comprobanteDetallado: {
@@ -677,20 +839,22 @@ describe('AccountingEntriesService — asiento de aplicación', () => {
       },
     }
     const lines = await build([expense])
-    expect(lines).toHaveLength(2)
+    // No cancela la cuenta 14 (decisión 2026-07-10): solo 9X(Debe)/42(Haber)/6X(Debe)/79(Haber).
+    expect(lines).toHaveLength(4)
     const l42 = lines.find(l => l.nroCuenta === '42.1.2.100')!
     expect(l42.codTipDoc).toBe('03')
-    expect(l42.montoDebe).toBe(59)
-    const l14 = lines.find(l => l.nroCuenta === '14.1.3.100')!
-    expect(l14.montoHaber).toBe(59)
+    expect(l42.montoHaber).toBe(59)
+    const l9x = lines.find(l => l.nroCuenta === '91.3.1.410')!
+    expect(l9x.montoDebe).toBe(59)
     expect(service.validateCuadre(lines)).toHaveLength(0)
   })
 
-  it('planilla de movilidad: un par 42/14 de S/40 por cada fecha de mobilityRows, no un total lump-sum', async () => {
+  it('planilla de movilidad sin startDate/endDate en la rendición: cae a un único bloque con el total consolidado', async () => {
     const expense = {
       _id: 'e11',
       expenseType: 'planilla_movilidad',
       internalCode: 'PM-002',
+      categoryId: 'cat1',
       total: 120,
       data: '{}',
       mobilityRows: [
@@ -700,17 +864,17 @@ describe('AccountingEntriesService — asiento de aplicación', () => {
       ],
     }
     const lines = await build([expense])
-    expect(lines).toHaveLength(6) // 3 pares 42/14
+    // Sin report.startDate/endDate, buildMovilidadBlocks cae a UN bloque con
+    // el total consolidado (120) en vez de repartir por fecha — ver el test
+    // "varias planillas... se consolidan" para el caso con fechas de viaje.
+    expect(lines).toHaveLength(4)
     const l42s = lines.filter(l => l.nroCuenta === '42.1.2.100')
-    expect(l42s).toHaveLength(3)
-    expect(l42s.every(l => l.montoDebe === 40)).toBe(true)
+    expect(l42s).toHaveLength(1)
+    expect(l42s[0].montoHaber).toBe(120)
     expect(l42s.every(l => l.codTipDoc === '94')).toBe(true)
-    const l14s = lines.filter(l => l.nroCuenta === '14.1.3.100')
-    expect(l14s).toHaveLength(3)
-    expect(l14s.every(l => l.montoHaber === 40)).toBe(true)
-    // Cada par es su propio grupo relacionado y cuadra por separado.
-    const relacionados = new Set(lines.map(l => l.relacionado))
-    expect(relacionados.size).toBe(3)
+    const l9xs = lines.filter(l => l.nroCuenta === '91.3.1.410')
+    expect(l9xs).toHaveLength(1)
+    expect(l9xs[0].montoDebe).toBe(120)
     expect(service.validateCuadre(lines)).toHaveLength(0)
   })
 

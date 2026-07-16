@@ -3941,8 +3941,16 @@ export class ExpenseReportService implements OnModuleInit {
     if (report.type !== 'viatico') throw new BadRequestException('Esta rendición no es de tipo viático')
     if (report.status !== 'pending_l1') throw new BadRequestException(`El viático no está en pending_l1 (estado actual: ${report.status})`)
 
-    const canApprove = [ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(userRole as ROLES) || userPermissions?.canApproveL1 === true
-    if (!canApprove) throw new ForbiddenException('No tienes permiso para aprobar en nivel 1')
+    // Contabilidad NO aprueba nivel 1 aunque tenga el permiso: ese paso es del coordinador.
+    const canApprove =
+      userRole !== ROLES.CONTABILIDAD &&
+      ([ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(userRole as ROLES) || userPermissions?.canApproveL1 === true)
+    if (!canApprove)
+      throw new ForbiddenException(
+        userRole === ROLES.CONTABILIDAD
+          ? 'Contabilidad no aprueba en nivel 1: ese paso es del coordinador.'
+          : 'No tienes permiso para aprobar en nivel 1'
+      )
 
     ;(report.viaticoApprovalHistory ?? []).push({ level: 1, approvedBy: opts.approvedBy, action: 'approved', notes: opts.notes, date: new Date() })
     report.viaticoApprovalLevel = 1

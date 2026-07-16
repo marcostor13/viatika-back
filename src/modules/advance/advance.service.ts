@@ -1497,11 +1497,18 @@ export class AdvanceService {
       )
     }
 
+    // Contabilidad NO aprueba nivel 1 aunque tenga el permiso: ese paso es del
+    // coordinador. Antes contabilidad (con canApproveL1) aprobaba anticipadamente.
     const canApproveL1 =
-      [ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(userRole as ROLES) ||
-      userPermissions?.canApproveL1 === true
+      userRole !== ROLES.CONTABILIDAD &&
+      ([ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(userRole as ROLES) ||
+        userPermissions?.canApproveL1 === true)
     if (!canApproveL1)
-      throw new ForbiddenException('No tienes permiso para aprobar en nivel 1')
+      throw new ForbiddenException(
+        userRole === ROLES.CONTABILIDAD
+          ? 'Contabilidad no aprueba en nivel 1: ese paso es del coordinador.'
+          : 'No tienes permiso para aprobar en nivel 1'
+      )
 
     advance.approvalHistory.push({
       level: 1,

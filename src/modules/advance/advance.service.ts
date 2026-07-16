@@ -285,6 +285,21 @@ export class AdvanceService {
         dto.pendingBalanceFromReportId,
         (advance as any)._id.toString()
       )
+      // Si la rendición fuente había dejado su sobrante en la bolsa (liquidación
+      // automática), consumirlo: el dinero se trasladó a este anticipo. Evita el
+      // doble conteo (el saldo seguía mostrándose como disponible).
+      try {
+        await this.saldoService.removeRemnantBySourceReport(
+          dto.pendingBalanceFromReportId,
+          undefined,
+          (advance as any)._id.toString()
+        )
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.logger.error(
+          `Consumir remanente de bolsa al heredar saldo de ${dto.pendingBalanceFromReportId}: ${msg}`
+        )
+      }
     }
 
     return advance
@@ -488,6 +503,21 @@ export class AdvanceService {
         dto.pendingBalanceFromReportId,
         (advance as any)._id.toString()
       )
+      // Si la rendición fuente había dejado su sobrante en la bolsa (liquidación
+      // automática del viático), consumirlo: el dinero se trasladó a esta nueva
+      // solicitud. Evita el doble conteo (el saldo seguía mostrándose como disponible).
+      try {
+        await this.saldoService.removeRemnantBySourceReport(
+          dto.pendingBalanceFromReportId,
+          undefined,
+          (advance as any)._id.toString()
+        )
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.logger.error(
+          `Consumir remanente de bolsa al heredar saldo de ${dto.pendingBalanceFromReportId}: ${msg}`
+        )
+      }
     }
 
     void this.notifyCoordinatorViatico(

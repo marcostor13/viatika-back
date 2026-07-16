@@ -272,7 +272,7 @@ describe('AccountingEntriesService — orquestación async (status, trigger, S3)
         if (tipo === 'compra') throw new Error('fallo simulado en compra')
         return [{ relacionado: 1, montoDebe: 10, montoHaber: 10 }]
       })
-      jest.spyOn(ContanetExport, 'generateContanetExcel').mockResolvedValue({ buffer: Buffer.from('xlsx'), ext: 'xlsx', contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+      jest.spyOn(ContanetExport, 'generateContanetExcel').mockResolvedValue({ buffer: Buffer.from('xlsm'), ext: 'xlsm', contentType: 'application/vnd.ms-excel.sheet.macroEnabled.12' })
 
       const ctx = {
         report,
@@ -292,11 +292,11 @@ describe('AccountingEntriesService — orquestación async (status, trigger, S3)
         })
       )
       // "solicitud" tuvo éxito: sube a S3 con la key determinística y queda "ready".
-      const expectedKey = `accounting-entries/${CLIENT_ID}/${REPORT_ID}/solicitud.xlsx`
+      const expectedKey = `accounting-entries/${CLIENT_ID}/${REPORT_ID}/solicitud.xlsm`
       expect(uploadService.uploadBuffer).toHaveBeenCalledWith(
         expect.any(Buffer),
         expectedKey,
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        'application/vnd.ms-excel.sheet.macroEnabled.12'
       )
       expect(fileModel.findOneAndUpdate).toHaveBeenCalledWith(
         { reportId: report._id, tipo: 'solicitud' },
@@ -322,7 +322,7 @@ describe('AccountingEntriesService — orquestación async (status, trigger, S3)
       jest.spyOn(service as any, 'prefetchRates').mockResolvedValue(new Map())
       jest.spyOn(service as any, 'resolveCargosClasificacion').mockResolvedValue(new Map())
       jest.spyOn(service as any, 'buildLinesForTipo').mockResolvedValue([])
-      jest.spyOn(ContanetExport, 'generateContanetExcel').mockResolvedValue({ buffer: Buffer.from('xlsx'), ext: 'xlsx', contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+      jest.spyOn(ContanetExport, 'generateContanetExcel').mockResolvedValue({ buffer: Buffer.from('xlsm'), ext: 'xlsm', contentType: 'application/vnd.ms-excel.sheet.macroEnabled.12' })
 
       const ctx = { report, config, expenses: [], advances: [], colaborador, fingerprint: 'fp' }
       const runs = [1, 2, 3].map(i =>

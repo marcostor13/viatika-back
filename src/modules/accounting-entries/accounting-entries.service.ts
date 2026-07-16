@@ -21,11 +21,7 @@ import {
   ContanetLine,
   toExcelSerial,
 } from './entities/contanet-columns'
-import {
-  generateContanetExcel,
-  resolveTemplatePath,
-  ExcelOutputMode,
-} from './entities/contanet-export'
+import { generateContanetExcel, resolveTemplatePath } from './entities/contanet-export'
 import {
   AccountingEntryStatusDto,
   AsientoTipo,
@@ -135,9 +131,16 @@ export class AccountingEntriesService {
     if (!apiKey) throw new Error('DEEPSEEK_API_KEY no configurada')
     this.openai = new OpenAI({ apiKey, baseURL: 'https://api.deepseek.com' })
 
-    // Los templates .xlsm se usan en el modo 'template' (.xlsm idéntico). Se
-    // valida su presencia al arranque para avisar si faltan en el despliegue.
-    for (const tipo of ['compra', 'aplicacion', 'reembolso'] as AsientoTipo[]) {
+    // Todo tipo de asiento se genera exclusivamente desde el template .xlsm
+    // (sin ruta alterna en .xlsx). Se valida su presencia al arranque para
+    // avisar si falta en el despliegue.
+    for (const tipo of [
+      'compra',
+      'aplicacion',
+      'solicitud',
+      'devolucion',
+      'reembolso',
+    ] as AsientoTipo[]) {
       const p = resolveTemplatePath(tipo)
       if (p) this.logger.log(`[asientos] template OK: ${p}`)
       else this.logger.warn(`[asientos] template NO encontrado para tipo="${tipo}"`)
@@ -430,15 +433,11 @@ export class AccountingEntriesService {
             .join(', ')
         )
       }
-      // Formato según la config de la empresa: 'template' = .xlsm idéntico
-      // (macros+estilos), 'styled' = .xlsx liviano con cabeceras estilizadas.
-      const mode: ExcelOutputMode =
-        (ctx.config as any).excelOutputMode === 'template' ? 'template' : 'styled'
-      const { buffer, ext, contentType } = await generateContanetExcel(
-        lines,
-        tipo,
-        mode
-      )
+      // Siempre el .xlsm idéntico al template de Contanet (macros, estilos y
+      // hojas TABLAS/ImportCONTABILIDAD intactas). Si el template no está
+      // disponible en el servidor, `generateContanetExcel` lanza y el catch
+      // de este método deja el tipo en estado 'error' con el motivo exacto.
+      const { buffer, ext, contentType } = await generateContanetExcel(lines, tipo)
       const filename = this.fileName(tipo, report, ext)
       const asientosCount = this.countAsientos(lines)
       const s3Key = this.s3Key(report.clientId ?? clientId, reportId, tipo, ext)
@@ -485,7 +484,7 @@ export class AccountingEntriesService {
     clientId: string,
     reportId: string,
     tipo: AsientoTipo,
-    ext: 'xlsx' | 'xlsm'
+    ext: 'xlsm'
   ): string {
     return `accounting-entries/${clientId}/${reportId}/${tipo}.${ext}`
   }
@@ -549,7 +548,7 @@ export class AccountingEntriesService {
   private fileName(
     tipo: AsientoTipo,
     report: any,
-    ext: 'xlsx' | 'xlsm'
+    ext: 'xlsm'
   ): string {
     const code =
       report.codigo || report._id?.toString()?.slice(-6) || 'rendicion'

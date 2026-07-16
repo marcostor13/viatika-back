@@ -349,17 +349,17 @@ describe('AccountingEntriesService — orquestación async (status, trigger, S3)
     })
   })
 
-  describe('bloqueo por estado de la rendición (solo cerrada; solicitud siempre)', () => {
-    // La rendición del fixture está en 'approved' (no cerrada). Regla: los asientos
-    // de compra/aplicación/devolución/reembolso solo se generan con la rendición
-    // cerrada; 'solicitud' se puede generar siempre.
-    it('getStatus marca blocked=true para "compra" si la rendición no está cerrada', async () => {
+  describe('sin bloqueo por estado de la rendición', () => {
+    // La rendición del fixture está en 'approved' (no cerrada). Todos los tipos
+    // de asiento (compra/aplicación/devolución/reembolso/solicitud) deben poder
+    // generarse sin importar el estado de la rendición.
+    it('getStatus marca blocked=false para "compra" con la rendición en "approved"', async () => {
       const [status] = await service.getStatus(REPORT_ID, CLIENT_ID, ['compra'])
-      expect(status.blocked).toBe(true)
-      expect(status.blockedReason).toContain('cerrada')
+      expect(status.blocked).toBe(false)
+      expect(status.blockedReason).toBeUndefined()
     })
 
-    it('getStatus marca blocked=false para "solicitud" aunque la rendición no esté cerrada', async () => {
+    it('getStatus marca blocked=false para "solicitud" con la rendición en "approved"', async () => {
       const [status] = await service.getStatus(REPORT_ID, CLIENT_ID, ['solicitud'])
       expect(status.blocked).toBe(false)
     })
@@ -370,11 +370,10 @@ describe('AccountingEntriesService — orquestación async (status, trigger, S3)
       expect(status.blocked).toBe(false)
     })
 
-    it('triggerGeneration NO genera "compra" si la rendición no está cerrada', async () => {
+    it('triggerGeneration SÍ genera "compra" aunque la rendición no esté cerrada', async () => {
       const runGenSpy = jest.spyOn(service as any, 'runGeneration').mockResolvedValue(undefined)
       await service.triggerGeneration(REPORT_ID, CLIENT_ID, ['compra'], 'user1')
-      expect(runGenSpy).not.toHaveBeenCalled()
-      expect(fileModel.findOneAndUpdate).not.toHaveBeenCalled()
+      expect(runGenSpy).toHaveBeenCalledWith(REPORT_ID, CLIENT_ID, ['compra'], expect.anything())
     })
 
     it('triggerGeneration SÍ genera "compra" cuando la rendición está cerrada', async () => {
@@ -390,10 +389,15 @@ describe('AccountingEntriesService — orquestación async (status, trigger, S3)
       expect(runGenSpy).toHaveBeenCalledWith(REPORT_ID, CLIENT_ID, ['solicitud'], expect.anything())
     })
 
-    it('mezcla: con rendición no cerrada, genera solo "solicitud" y descarta "compra"', async () => {
+    it('mezcla: con rendición no cerrada, genera "solicitud" y "compra" por igual', async () => {
       const runGenSpy = jest.spyOn(service as any, 'runGeneration').mockResolvedValue(undefined)
       await service.triggerGeneration(REPORT_ID, CLIENT_ID, ['solicitud', 'compra'], 'user1')
-      expect(runGenSpy).toHaveBeenCalledWith(REPORT_ID, CLIENT_ID, ['solicitud'], expect.anything())
+      expect(runGenSpy).toHaveBeenCalledWith(
+        REPORT_ID,
+        CLIENT_ID,
+        ['solicitud', 'compra'],
+        expect.anything()
+      )
     })
   })
 

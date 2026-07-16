@@ -77,25 +77,6 @@ const MOVILIDAD_DAILY_CAP_DEFAULT = 40
  */
 const STALE_PROCESSING_MS = 20 * 60 * 1000
 
-/** Estado en el que la rendición está cerrada definitivamente (lista para contabilizar). */
-const CLOSED_STATUS = 'closed'
-
-/**
- * Reglas de disponibilidad de generación por tipo de asiento:
- *  - `solicitud` (desembolso del anticipo) SIEMPRE se puede generar: nace al
- *    aprobar/pagar el anticipo, mucho antes de que la rendición se cierre.
- *  - Los demás (compra/aplicación/devolución/reembolso) solo cuando la rendición
- *    está CERRADA: reflejan gastos ya liquidados y no deben contabilizarse mientras
- *    la rendición aún admite cambios.
- */
-function isTipoGeneratable(tipo: AsientoTipo, reportStatus: string): boolean {
-  if (tipo === 'solicitud') return true
-  return reportStatus === CLOSED_STATUS
-}
-
-const BLOCKED_REASON =
-  'Este asiento solo se puede generar cuando la rendición está cerrada.'
-
 @Injectable()
 export class AccountingEntriesService {
   private readonly logger = new Logger(AccountingEntriesService.name)
@@ -224,7 +205,7 @@ export class AccountingEntriesService {
     const byTipo = new Map<string, any>(docs.map(d => [d.tipo, d]))
     return Promise.all(
       tipos.map(tipo =>
-        this.toStatusDto(tipo, byTipo.get(tipo), fingerprint, report.status)
+        this.toStatusDto(tipo, byTipo.get(tipo), fingerprint)
       )
     )
   }
@@ -248,10 +229,6 @@ export class AccountingEntriesService {
     const now = new Date()
     const tiposToRun: AsientoTipo[] = []
     for (const tipo of tipos) {
-      // Bloqueo por estado: solicitud siempre; el resto solo con la rendición
-      // cerrada. Defensa de servidor ante un POST directo aunque el front ya
-      // deshabilite el botón.
-      if (!isTipoGeneratable(tipo, report.status)) continue
       const doc = byTipo.get(tipo)
       const isStuck =
         doc?.status === 'processing' &&
@@ -302,14 +279,14 @@ export class AccountingEntriesService {
   private async toStatusDto(
     tipo: AsientoTipo,
     doc: any | undefined,
-    currentFingerprint: string,
-    reportStatus: string
+    currentFingerprint: string
   ): Promise<AccountingEntryStatusDto> {
-    // `blocked` = no se puede (re)generar ahora por el estado de la rendición.
-    // Es independiente de descargar: un archivo ya listo sigue siendo descargable.
-    const blocked = !isTipoGeneratable(tipo, reportStatus)
-    const blockedReason = blocked ? BLOCKED_REASON : undefined
-    if (!doc) return { tipo, status: 'none', blocked, blockedReason }
+    // Todos los tipos son generables en cualquier estado de la rendición: ya
+    // no hay bloqueo por "rendición no cerrada" (antes solo `solicitud`
+    // escapaba a esa restricción). El campo se conserva en el DTO (siempre
+    // `false`) para no romper el contrato con el frontend.
+    const blocked = false
+    if (!doc) return { tipo, status: 'none', blocked, blockedReason: undefined }
     const hasFile = doc.status === 'ready' && !!doc.s3Key
     const url = doc.s3Key
       ? await this.uploadService.getPresignedDownloadUrl(doc.s3Key, doc.filename)
@@ -326,7 +303,7 @@ export class AccountingEntriesService {
       stale: hasFile ? doc.fingerprint !== currentFingerprint : undefined,
       completedAt: doc.completedAt,
       blocked,
-      blockedReason,
+      blockedReason: undefined,
     }
   }
 

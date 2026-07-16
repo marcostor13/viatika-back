@@ -931,13 +931,23 @@ export class ExpenseReportService implements OnModuleInit {
     const dto = updateExpenseReportDto
     const existing = await this.expenseReportModel
       .findById(id)
-      .select('status isDirecta type')
+      .select('status isDirecta type userId')
       .lean()
       .exec()
     if (!existing) {
       throw new NotFoundException(`Expense report with ID ${id} not found`)
     }
     const isDirecta = (existing as any).isDirecta === true
+    // El dueño de la rendición es Coordinador: no tiene un coordinador que apruebe el
+    // paso 1, así que su envío salta a Contabilidad igual que una directa (ver más abajo).
+    const submitOwnerId = (existing as any).userId
+      ? String((existing as any).userId)
+      : null
+    const ownerIsCoordinador =
+      dto.status === 'submitted' && submitOwnerId
+        ? (await this.userService.getRoleName(submitOwnerId)) ===
+          ROLES.COORDINADOR
+        : false
     // Viático con pago parcial: sigue en fase de carga, el colaborador puede enviarlo
     // aunque contabilidad aún no complete el depósito (lo completa tras el envío).
     const isPartialViatico =
@@ -1012,9 +1022,11 @@ export class ExpenseReportService implements OnModuleInit {
     if (dto.description !== undefined) $set.description = dto.description
     if (dto.budget !== undefined) $set.budget = dto.budget
 
-    // Rendición directa: al enviar (submitted), auto-transicionar a pending_accounting
+    // Rendición directa, o rendición cuyo dueño es Coordinador (que no tiene un
+    // coordinador que apruebe el paso 1): al enviar (submitted), auto-transicionar a
+    // pending_accounting para que la apruebe Contabilidad.
     if (dto.status !== undefined) {
-      if (dto.status === 'submitted' && isDirecta) {
+      if (dto.status === 'submitted' && (isDirecta || ownerIsCoordinador)) {
         $set.status = 'pending_accounting'
       } else {
         $set.status = dto.status
@@ -1440,8 +1452,9 @@ export class ExpenseReportService implements OnModuleInit {
           | undefined
         const ownerEmailKey = ownerEmail?.trim().toLowerCase() || ''
 
-        if (isDirecta) {
-          // Rendición directa: salta coordinador. Va directo a Contabilidad.
+        // Rendición directa, o rendición cuyo dueño es Coordinador: en ambos casos
+        // salta al coordinador y va directo a Contabilidad (mismos avisos).
+        if (isDirecta || ownerIsCoordinador) {
           await this.notificationsService.create({
             userId: ownerId2,
             title: 'Rendición enviada a Contabilidad',
@@ -1472,7 +1485,7 @@ export class ExpenseReportService implements OnModuleInit {
             await this.notificationsService.create({
               userId: u._id,
               title: 'Nueva Rendición para Revisar',
-              message: `${creatorName} ha enviado la rendición directa "${fullyUpdatedReport.title}" para tu revisión.`,
+              message: `${creatorName} ha enviado la rendición ${isDirecta ? 'directa ' : ''}"${fullyUpdatedReport.title}" para tu revisión.`,
               type: 'warning',
               actionUrl: `/mis-rendiciones/${id}/detalle`,
             })
@@ -3711,7 +3724,7 @@ export class ExpenseReportService implements OnModuleInit {
     return { lineDocs, roundedSum, description, requiredLevels: roundedSum > thresholdL1 ? 2 : 1 }
   }
 
-  async createViatico(dto: CreateViaticoExpenseReportDto, userId: string, clientId: string, allowBackdate = false): Promise<ExpenseReportDocument> {
+  async createViatico(dto: CreateViaticoExpenseReportDto, userId: string, clientId: string, allowBackdate = false, userRole?: string): Promise<ExpenseReportDocument> {
     const profile = await this.userService.findTransactionalProfile(userId)
     if (!profile?.signature?.trim()) {
       throw new ForbiddenException('Debe registrar su firma digital en el perfil antes de solicitar viáticos.')
@@ -3734,6 +3747,22 @@ export class ExpenseReportService implements OnModuleInit {
       new Date(dto.startDate)
     )
 
+    // Un coordinador no tiene un coordinador que apruebe su nivel 1: su solicitud
+    // omite la aprobación de coordinador (L1) y pasa directo a Contabilidad (L2).
+    const skipCoordinatorApproval = userRole === ROLES.COORDINADOR
+    const viaticoApprovalHistory = skipCoordinatorApproval
+      ? [
+          {
+            level: 1,
+            approvedBy: 'sistema',
+            action: 'approved' as const,
+            notes:
+              'Aprobación de coordinador omitida: el solicitante es coordinador; la solicitud pasa directo a Contabilidad.',
+            date: new Date(),
+          },
+        ]
+      : []
+
     const report = await this.expenseReportModel.create({
       type: 'viatico',
       userId: new Types.ObjectId(userId),
@@ -3741,7 +3770,7 @@ export class ExpenseReportService implements OnModuleInit {
       createdBy: new Types.ObjectId(userId),
       projectId: new Types.ObjectId(dto.projectId),
       description,
-      status: 'pending_l1',
+      status: skipCoordinatorApproval ? 'pending_l2' : 'pending_l1',
       expenseIds: [],
       budget: roundedSum,
       budgetBase: freeze.montoBase,
@@ -3750,9 +3779,9 @@ export class ExpenseReportService implements OnModuleInit {
       tcFecha: freeze.tcFecha,
       viaticoAmount: roundedSum,
       viaticoAmountBase: freeze.montoBase,
-      viaticoRequiredLevels: requiredLevels,
-      viaticoApprovalLevel: 0,
-      viaticoApprovalHistory: [],
+      viaticoRequiredLevels: skipCoordinatorApproval ? 2 : requiredLevels,
+      viaticoApprovalLevel: skipCoordinatorApproval ? 1 : 0,
+      viaticoApprovalHistory,
       viaticoSolicitudVersion: 1,
       viaticoBudgetCommitmentRecorded: false,
       viaticoPlace: dto.place.trim(),
@@ -3795,7 +3824,11 @@ export class ExpenseReportService implements OnModuleInit {
       await report.save()
     }
 
-    void this.notifyViaticoCoordinator(report as ExpenseReportDocument, userId, clientId)
+    if (skipCoordinatorApproval) {
+      void this.notifyViaticoAccountingPendingApproval(report as ExpenseReportDocument, userId, clientId)
+    } else {
+      void this.notifyViaticoCoordinator(report as ExpenseReportDocument, userId, clientId)
+    }
 
     return this.findOne(String((report as any)._id)) as Promise<ExpenseReportDocument>
   }
@@ -3940,6 +3973,80 @@ export class ExpenseReportService implements OnModuleInit {
       const msg = err instanceof Error ? err.message : String(err)
       this.logger.error(`Correo coordinador viático ${reportId}: ${msg}`)
       await this.expenseReportModel.updateOne({ _id: (report as any)._id }, { $set: { viaticoCoordinatorNotification: { recipientUserId: coordId, status: 'failed', sentAt: new Date(), errorMessage: msg } } })
+    }
+  }
+
+  /**
+   * Notifica a Contabilidad (y al colaborador) que un viático espera aprobación
+   * de nivel 2 porque el solicitante es coordinador y no tiene un coordinador que
+   * apruebe el nivel 1. La notificación al coordinador se omite a propósito.
+   */
+  private async notifyViaticoAccountingPendingApproval(report: ExpenseReportDocument, collaboratorUserId: string, clientId: string): Promise<void> {
+    const reportId = String((report as any)._id)
+
+    // Traza: el correo al coordinador se omite adrede (el solicitante ES coordinador).
+    await this.expenseReportModel.updateOne(
+      { _id: (report as any)._id },
+      { $set: { viaticoCoordinatorNotification: { status: 'skipped', sentAt: new Date(), errorMessage: 'Solicitante es coordinador; enviado a Contabilidad para aprobación.' } } }
+    ).catch(() => {})
+
+    let collaborator: { name?: string; email?: string; clientId?: unknown } | null = null
+    try { collaborator = await this.userService.findEmailNameClient(collaboratorUserId) } catch { /* opcional */ }
+    const collaboratorName = collaborator?.name ?? 'Un coordinador'
+    const totalFormatted = this.viaticoFormatMoney(report.viaticoAmount ?? 0)
+
+    // Aviso al colaborador (coordinador) de que su solicitud pasó a Contabilidad.
+    this.notificationsService.create({
+      userId: collaboratorUserId,
+      title: 'Solicitud de viáticos enviada a Contabilidad',
+      message: `Tu solicitud por S/ ${totalFormatted} pasó directo a Contabilidad para su aprobación.`,
+      type: 'info',
+      actionUrl: '/mis-rendiciones',
+    }).catch(() => {})
+
+    let recipients: { _id: string; email: string; name: string }[] = []
+    try { recipients = await this.userService.findAccountingRecipientsWithIds(clientId) } catch { recipients = [] }
+    if (recipients.length === 0) {
+      this.logger.warn(`Viático ${reportId} de coordinador sin destinatarios de Contabilidad para notificar.`)
+      return
+    }
+
+    let projectLabel = ''
+    if (report.projectId) {
+      try {
+        const project = await this.projectService.findOne(report.projectId.toString(), clientId)
+        projectLabel = `[${project.code} - ${project.name}]`
+      } catch { /* proyecto opcional */ }
+    }
+    const startStr = report.viaticoStartDate instanceof Date ? report.viaticoStartDate.toISOString().slice(0, 10) : String(report.viaticoStartDate ?? '').slice(0, 10)
+    const endStr = report.viaticoEndDate instanceof Date ? report.viaticoEndDate.toISOString().slice(0, 10) : String(report.viaticoEndDate ?? '').slice(0, 10)
+    const detailBody =
+      `<p><strong>${this.viaticoEscapeHtml(collaboratorName)}</strong> (coordinador) solicitó viáticos por ` +
+      `<strong>S/ ${this.viaticoEscapeHtml(totalFormatted)}</strong>.</p>` +
+      `<p>Al ser coordinador, la solicitud no pasa por aprobación de coordinador y queda pendiente de <strong>tu aprobación en Contabilidad</strong>.</p>` +
+      `<p>Lugar: ${this.viaticoEscapeHtml(report.viaticoPlace ?? '')} (${this.viaticoEscapeHtml(startStr)} → ${this.viaticoEscapeHtml(endStr)})</p>`
+
+    for (const r of recipients) {
+      this.notificationsService.create({
+        userId: r._id,
+        title: 'Viático pendiente de aprobación',
+        message: `${collaboratorName} (coordinador) solicitó viáticos por S/ ${totalFormatted}. Requiere tu aprobación en Contabilidad.`,
+        type: 'info',
+        actionUrl: '/viaticos',
+        metadata: { reportId, event: 'viatico_coordinator_direct_l2' },
+      }).catch(() => {})
+
+      const emailEnabled = await this.userService.isEmailEnabled(r._id).catch(() => true)
+      if (!emailEnabled) continue
+      try {
+        await this.emailService.sendViaticoAprobacionContabilidad(r.email, {
+          clientId, recipientName: r.name, urgent: false, urgentBanner: '',
+          emailTitle: 'Solicitud de viáticos pendiente de aprobación',
+          detailBody, projectLabel, platformUrl: this.emailService.buildAppUrl('/viaticos'),
+        })
+      } catch (err: unknown) {
+        this.logger.error(`Correo Contabilidad viático coordinador ${reportId} a ${r.email}: ${err instanceof Error ? err.message : String(err)}`)
+      }
     }
   }
 
@@ -4152,9 +4259,16 @@ export class ExpenseReportService implements OnModuleInit {
     const report = await this.expenseReportModel.findById(id)
     if (!report) throw new NotFoundException(`Viático ${id} no encontrado`)
     if (report.type !== 'viatico') throw new BadRequestException('Esta rendición no es de tipo viático')
-    if (!['rejected', 'pending_l1'].includes(report.status)) throw new BadRequestException('Solo pueden reenviarse solicitudes rechazadas o pendientes de aprobación.')
     if (report.userId.toString() !== actingUserId) throw new ForbiddenException('Solo el colaborador solicitante puede corregir y reenviar esta solicitud.')
     if (report.clientId.toString() !== clientId) throw new ForbiddenException('La solicitud no pertenece a su organización.')
+    // El coordinador dueño no tiene aprobador L1: su solicitud pendiente vive en pending_l2
+    // (no pending_l1), así que también puede corregirla/reenviarla desde ese estado.
+    const resubmitOwnerIsCoordinador =
+      (await this.userService.getRoleName(actingUserId)) === ROLES.COORDINADOR
+    const resubmittableStatuses = resubmitOwnerIsCoordinador
+      ? ['rejected', 'pending_l1', 'pending_l2']
+      : ['rejected', 'pending_l1']
+    if (!resubmittableStatuses.includes(report.status)) throw new BadRequestException('Solo pueden reenviarse solicitudes rechazadas o pendientes de aprobación.')
 
     const profile = await this.userService.findTransactionalProfile(actingUserId)
     if (!profile?.signature?.trim()) throw new ForbiddenException('Debe registrar su firma digital en el perfil antes de reenviar viáticos.')
@@ -4172,7 +4286,9 @@ export class ExpenseReportService implements OnModuleInit {
       new Date(dto.startDate)
     )
 
-    const wasEditing = report.status === 'pending_l1'
+    // Editar antes de aprobación (pending_l1 del colaborador, o pending_l2 del coordinador)
+    // vs. corregir tras rechazo ('rejected').
+    const wasEditing = report.status !== 'rejected'
     report.viaticoPlace = dto.place.trim()
     if (dto.lat != null) report.viaticoLat = dto.lat
     if (dto.lng != null) report.viaticoLng = dto.lng
@@ -4224,17 +4340,26 @@ export class ExpenseReportService implements OnModuleInit {
       }
     }
     report.description = description
-    report.status = 'pending_l1'
-    report.viaticoApprovalLevel = 0
-    report.viaticoRequiredLevels = requiredLevels
+    // Un coordinador no tiene un coordinador que apruebe su nivel 1: al reenviar tras
+    // rechazo, su solicitud también salta directo a Contabilidad (igual que createViatico).
+    report.status = resubmitOwnerIsCoordinador ? 'pending_l2' : 'pending_l1'
+    report.viaticoApprovalLevel = resubmitOwnerIsCoordinador ? 1 : 0
+    report.viaticoRequiredLevels = resubmitOwnerIsCoordinador ? 2 : requiredLevels
     report.viaticoRejectedBy = undefined
     report.viaticoRejectionReason = undefined
     report.viaticoBudgetCommitmentRecorded = false
     report.viaticoSolicitudVersion = (report.viaticoSolicitudVersion ?? 1) + 1
     ;(report.viaticoApprovalHistory ?? []).push({ level: 0, approvedBy: actingUserId, action: 'resubmitted', notes: wasEditing ? 'Solicitud editada antes de aprobación' : 'Solicitud corregida y reenviada tras rechazo', date: new Date() })
+    if (resubmitOwnerIsCoordinador) {
+      ;(report.viaticoApprovalHistory ?? []).push({ level: 1, approvedBy: 'sistema', action: 'approved', notes: 'Aprobación de coordinador omitida: el solicitante es coordinador; la solicitud pasa directo a Contabilidad.', date: new Date() })
+    }
     await report.save()
 
-    void this.notifyViaticoCoordinator(report as ExpenseReportDocument, actingUserId, clientId)
+    if (resubmitOwnerIsCoordinador) {
+      void this.notifyViaticoAccountingPendingApproval(report as ExpenseReportDocument, actingUserId, clientId)
+    } else {
+      void this.notifyViaticoCoordinator(report as ExpenseReportDocument, actingUserId, clientId)
+    }
 
     return this.findOne(id) as Promise<ExpenseReportDocument>
   }
@@ -4376,7 +4501,14 @@ export class ExpenseReportService implements OnModuleInit {
     if (!report) throw new NotFoundException(`Viático ${id} no encontrado`)
     if (report.type !== 'viatico') throw new BadRequestException('Esta rendición no es de tipo viático')
     if (report.userId.toString() !== userId) throw new ForbiddenException('Solo el colaborador solicitante puede cancelar esta solicitud.')
-    if (report.status !== 'pending_l1') throw new BadRequestException('Solo se puede cancelar una solicitud en estado pendiente de aprobación.')
+    // El coordinador dueño no tiene aprobador L1: su solicitud pendiente vive en pending_l2
+    // (aún sin aprobación humana), así que también puede cancelarla desde ese estado.
+    const cancelOwnerIsCoordinador =
+      (await this.userService.getRoleName(userId)) === ROLES.COORDINADOR
+    const cancellableStatuses = cancelOwnerIsCoordinador
+      ? ['pending_l1', 'pending_l2']
+      : ['pending_l1']
+    if (!cancellableStatuses.includes(report.status)) throw new BadRequestException('Solo se puede cancelar una solicitud en estado pendiente de aprobación.')
     report.status = 'cancelled'
     await this.revertViaticoSaldoFinancing(report)
     await report.save()

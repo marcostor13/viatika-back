@@ -34,10 +34,12 @@ const mockUserService = {
   resetPassword: jest.fn().mockResolvedValue({ message: 'ok' }),
   bulkImportUsers: jest.fn().mockResolvedValue({
     created: 2,
+    updated: 0,
     skipped: [],
     errors: [],
     credentials: [],
   }),
+  getUsersForExport: jest.fn().mockResolvedValue([]),
   changeOwnPassword: jest.fn().mockResolvedValue(undefined),
 }
 

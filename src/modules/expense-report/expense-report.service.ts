@@ -146,6 +146,26 @@ export class ExpenseReportService implements OnModuleInit {
   private async computeReportBudgetDisplay(report: any): Promise<number> {
     if (!report?._id) return Number(report?.budget) || 0
     const reportId = String(report._id)
+
+    // Rendición directa: no usa anticipo ni presupuesto. El monto relevante para
+    // los correos (reembolso al colaborador) es el total gastado = suma de gastos
+    // no-rechazados. Sin esto, budget=0 y anticipos=0 hacían mostrar "S/ 0.00".
+    if (report.isDirecta === true) {
+      const directa = await this.expenseReportModel
+        .findById(reportId)
+        .populate('expenseIds', 'total status')
+        .exec()
+      const exps = (directa?.expenseIds ?? []) as any[]
+      const gastado = exps.reduce(
+        (s: number, e: any) =>
+          String(e?.status || '').toLowerCase() === 'rejected'
+            ? s
+            : s + (Number(e?.total) || 0),
+        0
+      )
+      return gastado > 0 ? gastado : Number(report.budget) || 0
+    }
+
     const rawAdvanceIds: string[] = (
       Array.isArray(report.advanceIds) ? report.advanceIds : []
     ).map((x: any) =>
@@ -155,7 +175,7 @@ export class ExpenseReportService implements OnModuleInit {
       reportId,
       rawAdvanceIds
     )
-    const total = linkedAdvances
+    const ampliaciones = linkedAdvances
       .filter((a: any) =>
         ['approved', 'partially_paid', 'paid', 'settled'].includes(a.status)
       )
@@ -165,7 +185,15 @@ export class ExpenseReportService implements OnModuleInit {
           (a.status === 'approved' ? 0 : Number(a.paidAmount ?? a.amount) || 0),
         0
       )
-    return total > 0 ? total : Number(report.budget) || 0
+    // Viático: el financiado base vive en `viaticoPaidAmount` (no en un Advance); las
+    // ampliaciones (advances vinculados) suman encima. Sin el base, el correo mostraría
+    // solo la ampliación y subvaluaría el presupuesto.
+    if (report.type === 'viatico') {
+      const totalViatico =
+        Math.round((Number(report.viaticoPaidAmount ?? 0) + ampliaciones) * 100) / 100
+      return totalViatico > 0 ? totalViatico : Number(report.budget) || 0
+    }
+    return ampliaciones > 0 ? ampliaciones : Number(report.budget) || 0
   }
 
   private async validateBeforeSubmit(reportId: string): Promise<void> {
@@ -1516,6 +1544,7 @@ export class ExpenseReportService implements OnModuleInit {
                 reportTitle: emailData.reportTitle,
                 budgetFormatted: emailData.budgetFormatted,
                 expenseCount: emailData.expenseCount,
+                isDirecta: emailData.isDirecta,
                 hasDirectaDeposit: emailData.hasDirectaDeposit,
                 depositFormatted: emailData.depositFormatted,
                 expenseTotalFormatted: emailData.expenseTotalFormatted,
@@ -2704,7 +2733,12 @@ export class ExpenseReportService implements OnModuleInit {
       )
       // Si no hay anticipos activos, el colaborador gastó de su propio bolsillo (saldo = 0 - gastos).
       // Excepción: en una rendición directa con depósito de Contabilidad, ese depósito funciona como anticipo.
-      const depositTotal = this.directaFundsGiven(report)
+      // Viático: el financiado base vive en viaticoPaidAmount (ya incluye saldo heredado/
+      // bolsa/depósito); usarlo en vez de directaFundsGiven evita ignorarlo y sobre-reembolsar.
+      const depositTotal =
+        (report as any).type === 'viatico'
+          ? Number((report as any).viaticoPaidAmount ?? 0)
+          : this.directaFundsGiven(report)
       const advanceTotal =
         activeAdvances.reduce(
           (s: number, a: any) => s + this.advanceSettlementAmountBase(a),
@@ -2923,7 +2957,12 @@ export class ExpenseReportService implements OnModuleInit {
         const activeAdvances = linkedAdvances.filter((a: any) =>
           ['approved', 'partially_paid', 'paid', 'settled'].includes(a.status)
         )
-        const depositTotal = this.directaFundsGiven(report)
+        // Viático: el financiado base vive en viaticoPaidAmount (ya incluye saldo heredado/
+        // bolsa/depósito); usarlo en vez de directaFundsGiven evita subvaluar el financiado.
+        const depositTotal =
+          (report as any).type === 'viatico'
+            ? Number((report as any).viaticoPaidAmount ?? 0)
+            : this.directaFundsGiven(report)
         const advanceTotal =
           activeAdvances.reduce(
             (s: number, a: any) => s + this.advanceSettlementAmountBase(a),
@@ -4475,7 +4514,23 @@ export class ExpenseReportService implements OnModuleInit {
       return sum + this.expenseSettlementAmountBase(e)
     }, 0)
 
-    const advanceTotal = this.reportSettlementAmountBase(report, report.viaticoPaidAmount ?? 0)
+    // Financiado del viático = depósito/saldo del propio reporte (viaticoPaidAmount) +
+    // ampliaciones pagadas (advances vinculados con expenseReportId). Sin sumar las
+    // ampliaciones, una ya desembolsada no cuenta y la liquidación calcularía mal el
+    // reembolso/devolución (mismo criterio que liquidateExpenseReport para no-viáticos).
+    // Cada monto se convierte a moneda base con su propio TC ya congelado
+    // (reportSettlementAmountBase / advanceSettlementAmountBase).
+    const linkedAdvances =
+      await this.advanceService.findByExpenseReportId(reportId)
+    const ampliacionesPagadas = linkedAdvances
+      .filter(a => ['paid', 'partially_paid', 'settled'].includes(String(a.status)))
+      .reduce((s, a) => s + this.advanceSettlementAmountBase(a), 0)
+    const advanceTotal =
+      Math.round(
+        (this.reportSettlementAmountBase(report, report.viaticoPaidAmount ?? 0) +
+          ampliacionesPagadas) *
+          100
+      ) / 100
     // Solo omitir si ambos son cero (nada que liquidar).
     if (advanceTotal <= 0 && expenseTotal <= 0) return
 
@@ -4483,7 +4538,36 @@ export class ExpenseReportService implements OnModuleInit {
     const type: 'reembolso' | 'devolucion' | 'equilibrado' =
       Math.abs(difference) < 0.01 ? 'equilibrado' : difference > 0 ? 'devolucion' : 'reembolso'
 
-    await this.updateSettlement(reportId, { advanceTotal, expenseTotal, difference, type, settledAt: new Date() })
+    await this.updateSettlement(reportId, {
+      advanceTotal,
+      expenseTotal,
+      difference,
+      type,
+      settledAt: new Date(),
+      // El sobrante de un viático va a la bolsa del colaborador (createFromRemnant, abajo),
+      // no se devuelve en efectivo → el cierre NO debe exigir comprobante de devolución.
+      // Mismo criterio que settleDirectaFinanciadaConBolsa.
+      toBolsa: type === 'devolucion' && difference > 0.01,
+    })
+
+    // Cierra las ampliaciones vinculadas junto con el viático: pasan a 'settled' para
+    // que no queden como "pagado / pendiente de liquidar" (fantasma) en las stats de
+    // tesorería. Su devolución/reembolso se maneja a nivel del reporte (bolsa), NO por
+    // advance → settlement 'equilibrado' para NO disparar initiateReturnTracking (que
+    // exige type='devolucion'). Idempotente: en re-liquidaciones ya están 'settled'.
+    for (const adv of linkedAdvances) {
+      if (['paid', 'partially_paid'].includes(String(adv.status))) {
+        ;(adv as any).status = 'settled'
+        ;(adv as any).settlement = {
+          advanceTotal: Number((adv as any).paidAmount ?? (adv as any).amount) || 0,
+          expenseTotal: 0,
+          difference: 0,
+          type: 'equilibrado',
+          settledAt: new Date(),
+        }
+        await adv.save()
+      }
+    }
 
     // Remanente positivo (devolución): el saldo no gastado queda disponible para
     // el colaborador en su bolsa de "Saldo" (tipo `rendicion`, con su centro de costo).

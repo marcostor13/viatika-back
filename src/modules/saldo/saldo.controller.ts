@@ -25,13 +25,26 @@ export class SaldoController {
     private readonly auditLogService: AuditLogService
   ) {}
 
-  /** Cliente activo del JWT (ObjectId string); vacío si sesión sin cliente. */
+  /**
+   * Cliente activo del JWT (ObjectId string). Lanza 400 si la sesión no tiene
+   * cliente resuelto (p. ej. un hub token de Administrador/Contabilidad antes
+   * de seleccionar empresa) — evita que un ObjectId vacío llegue al service y
+   * reviente como 500 (BSONError) en vez de un error claro.
+   */
   private resolveClientId(req: any): string {
     const raw = req?.user?.clientId
-    if (raw && typeof raw === 'object' && '_id' in raw) {
-      return String((raw as { _id: unknown })._id)
+    const clientId =
+      raw && typeof raw === 'object' && '_id' in raw
+        ? String((raw as { _id: unknown })._id)
+        : raw != null && raw !== ''
+          ? String(raw)
+          : ''
+    if (!Types.ObjectId.isValid(clientId)) {
+      throw new BadRequestException(
+        'No se pudo determinar la empresa activa de la sesión. Selecciona una empresa e inténtalo de nuevo.'
+      )
     }
-    return raw != null && raw !== '' ? String(raw) : ''
+    return clientId
   }
 
   /** Contabilidad registra un pago directo → crea un saldo tipo `pago`. */

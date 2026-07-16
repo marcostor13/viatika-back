@@ -9,6 +9,22 @@ export interface IgvRate {
   cuenta40: string
 }
 
+/** Moneda soportada por el cliente, con su umbral de aprobación L1 y TC. */
+export interface CurrencyConfig {
+  /** Código ISO 4217: 'PEN', 'USD', 'EUR'… */
+  code: string
+  /** Símbolo de presentación: 'S/', '$', '€'. */
+  symbol: string
+  /** Código de moneda Contanet (Tabla 3): '01' soles, '02' dólares… */
+  contanetCode: string
+  /** Decimales de presentación (normalmente 2). */
+  decimals: number
+  /** Umbral de aprobación de anticipos nivel 1, expresado en esta moneda. */
+  approvalThresholdL1: number
+  /** TC manual moneda→monedaBase. No aplica a la monedaBase ni a USD (que usa SUNAT/Decolecta). */
+  manualRate?: number
+}
+
 /** Cuenta bancaria de la empresa → resuelve la cuenta contable 104 (Caja-Bancos). */
 export interface BankAccount {
   /** Nombre del banco (BCP, BBVA, etc.). */
@@ -44,6 +60,9 @@ export interface AccountingConfigDocument extends Omit<Document, '_id'> {
   monedaOrigen: string
   monedaRegistro: string
   identificadorCtrMda: string
+  // Multimoneda
+  monedaBase: string
+  supportedCurrencies: CurrencyConfig[]
   conceptoFec: string
   area?: string
   centroCosto?: string
@@ -138,6 +157,35 @@ export class AccountingConfig {
 
   @Prop({ default: 'A' })
   identificadorCtrMda: string
+
+  // --- Multimoneda ---
+  /** Moneda de reporting/consolidación y de liquidación de rendiciones. Default soles. */
+  @Prop({ default: 'PEN' })
+  monedaBase: string
+
+  /**
+   * Monedas habilitadas para captura, cada una con su propio umbral de
+   * aprobación L1 de anticipos. USD resuelve su TC vía SUNAT/Decolecta
+   * (`exchange-rate`); cualquier otra moneda usa `manualRate`.
+   */
+  @Prop({
+    type: [
+      {
+        code: { type: String, required: true },
+        symbol: { type: String, required: true },
+        contanetCode: { type: String, required: true },
+        decimals: { type: Number, default: 2 },
+        approvalThresholdL1: { type: Number, required: true },
+        manualRate: { type: Number, required: false },
+        _id: false,
+      },
+    ],
+    default: [
+      { code: 'PEN', symbol: 'S/', contanetCode: '01', decimals: 2, approvalThresholdL1: 500 },
+      { code: 'USD', symbol: '$', contanetCode: '02', decimals: 2, approvalThresholdL1: 150 },
+    ],
+  })
+  supportedCurrencies: CurrencyConfig[]
 
   /** Concepto Flujo Efectivo Contable (Tabla 8). 1 = Operación. */
   @Prop({ default: '1' })

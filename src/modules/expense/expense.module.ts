@@ -15,6 +15,7 @@ import { ExpenseReportModule } from '../expense-report/expense-report.module'
 import { AuditLogModule } from '../audit-log/audit-log.module'
 import { NotificationsModule } from '../notifications/notifications.module'
 import { Client, ClientSchema } from '../client/entities/client.entity'
+import { ExchangeRateModule } from '../exchange-rate/exchange-rate.module'
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { Client, ClientSchema } from '../client/entities/client.entity'
     ExpenseReportModule,
     AuditLogModule,
     NotificationsModule,
+    ExchangeRateModule,
   ],
   controllers: [ExpenseController],
   providers: [ExpenseService],

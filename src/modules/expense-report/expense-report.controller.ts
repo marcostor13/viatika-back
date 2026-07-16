@@ -99,6 +99,9 @@ export class ExpenseReportController {
   findMyCajaChica(@Request() req: any) {
     const userId = String(req.user._id || req.user.sub)
     const clientId = this.resolveClientId(req)
+    if (!Types.ObjectId.isValid(clientId)) {
+      throw new BadRequestException('Cliente no identificado en la sesión.')
+    }
     return this.expenseReportService.findMyCajaChica(userId, clientId)
   }
 
@@ -108,6 +111,9 @@ export class ExpenseReportController {
   @Get('caja-chica/available')
   findAllCajaChicaAvailable(@Request() req: any) {
     const clientId = this.resolveClientId(req)
+    if (!Types.ObjectId.isValid(clientId)) {
+      throw new BadRequestException('Cliente no identificado en la sesión.')
+    }
     return this.expenseReportService.findAllCajaChicaAvailable(clientId)
   }
 
@@ -625,6 +631,9 @@ export class ExpenseReportController {
   ) {
     const role = req.user?.roles?.[0] ?? ''
     const clientId = this.resolveClientId(req)
+    if (!Types.ObjectId.isValid(clientId)) {
+      throw new BadRequestException('Cliente no identificado en la sesión.')
+    }
     return this.expenseReportService.findViaticos({
       requesterId: String(req.user._id || req.user.sub),
       requesterRole: role,
@@ -642,6 +651,9 @@ export class ExpenseReportController {
   findMyViaticos(@Request() req: any) {
     const userId = String(req.user._id || req.user.sub)
     const clientId = this.resolveClientId(req)
+    if (!Types.ObjectId.isValid(clientId)) {
+      throw new BadRequestException('Cliente no identificado en la sesión.')
+    }
     return this.expenseReportService.findMyViaticos(userId, clientId)
   }
 
@@ -651,6 +663,9 @@ export class ExpenseReportController {
   @Get('viaticos/pending-returns')
   findViaticosPendingReturns(@Request() req: any) {
     const clientId = this.resolveClientId(req)
+    if (!Types.ObjectId.isValid(clientId)) {
+      throw new BadRequestException('Cliente no identificado en la sesión.')
+    }
     return this.expenseReportService.findViaticosPendingReturns(clientId)
   }
 

@@ -34,6 +34,10 @@ export class UpdateExpenseDto {
   @IsOptional()
   fechaEmision?: string
 
+  @IsString()
+  @IsOptional()
+  moneda?: string
+
   @IsEnum([
     'pending',
     'approved',

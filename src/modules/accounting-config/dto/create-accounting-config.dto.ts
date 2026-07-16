@@ -10,6 +10,7 @@ import {
 import { Type } from 'class-transformer'
 import { BankAccountDto } from './bank-account.dto'
 import { IgvRateDto } from './igv-rate.dto'
+import { CurrencyConfigDto } from './currency-config.dto'
 
 export class CreateAccountingConfigDto {
   @IsString()
@@ -74,6 +75,16 @@ export class CreateAccountingConfigDto {
   @IsOptional()
   @IsString()
   identificadorCtrMda?: string
+
+  @IsOptional()
+  @IsString()
+  monedaBase?: string
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CurrencyConfigDto)
+  supportedCurrencies?: CurrencyConfigDto[]
 
   @IsOptional()
   @IsString()

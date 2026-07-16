@@ -83,12 +83,12 @@ export class CajaChicaReportService {
     if (expReportIds.length) {
       const expReports = await this.expenseReportModel
         .find({ _id: { $in: expReportIds } })
-        .populate('expenseIds', 'total')
+        .populate('expenseIds', 'total montoBase')
         .lean()
         .exec()
       for (const er of expReports as any[]) {
         const sum = (er.expenseIds ?? []).reduce(
-          (s: number, e: any) => s + (Number(e?.total) || 0),
+          (s: number, e: any) => s + (Number(e?.montoBase ?? e?.total) || 0),
           0
         )
         totalsByExpReport.set(String(er._id), sum)
@@ -162,7 +162,10 @@ export class CajaChicaReportService {
     // lista y las exportaciones también queden corregidas.
     const totalAmount = enriched.reduce((sum: number, sr: any) => {
       const expenses = (sr.expenseReport?.expenseIds ?? []) as any[]
-      return sum + expenses.reduce((s, e) => s + (Number(e?.total) || 0), 0)
+      return (
+        sum +
+        expenses.reduce((s, e) => s + (Number(e?.montoBase ?? e?.total) || 0), 0)
+      )
     }, 0)
 
     if (totalAmount !== report.totalAmount) {

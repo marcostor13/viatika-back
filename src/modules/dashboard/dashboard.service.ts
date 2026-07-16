@@ -46,6 +46,7 @@ export class DashboardService {
       pendingReturns,
       reportByStatus,
       topLocations,
+      expenseByCurrency,
     ] = await Promise.all([
       this.aggregateExpenseTotals(clientOid, query, range.from, range.to),
       this.aggregateExpenseTotals(
@@ -66,6 +67,7 @@ export class DashboardService {
       this.aggregatePendingReturns(clientOid, query, range),
       this.aggregateReportByStatus(clientOid, query, range),
       this.aggregateTopLocations(clientOid, query, range),
+      this.aggregateExpenseByCurrency(clientOid, query, range.from, range.to),
     ])
 
     const totalGasto = expenseAgg.amount
@@ -154,7 +156,9 @@ export class DashboardService {
         dateFrom: range.from.toISOString(),
         dateTo: range.to.toISOString(),
       },
+      // Los KPIs y totales están consolidados en moneda base (montoBase congelado por comprobante).
       currency: 'PEN',
+      expenseByCurrency,
       kpis: {
         totalGasto,
         gastoCount,
@@ -271,8 +275,31 @@ export class DashboardService {
     return match
   }
 
+  /**
+   * Monto en moneda base (PEN): usa el `montoBase` congelado del comprobante
+   * y solo cae a `total` para documentos previos a la migración multimoneda
+   * (donde `montoBase` no existe y el monto ya estaba asumido en soles).
+   */
   private readonly amountExpr = {
-    $convert: { input: '$total', to: 'double', onError: 0, onNull: 0 },
+    $convert: {
+      input: { $ifNull: ['$montoBase', '$total'] },
+      to: 'double',
+      onError: 0,
+      onNull: 0,
+    },
+  }
+
+  /** Monto de anticipo (paidAmount si existe, sino amount) convertido a moneda base. */
+  private readonly advancePaidAmountBaseExpr = {
+    $multiply: [
+      { $ifNull: ['$paidAmount', { $ifNull: ['$amount', 0] }] },
+      { $ifNull: ['$tipoCambio', 1] },
+    ],
+  }
+
+  /** Monto solicitado de anticipo (amount) convertido a moneda base. */
+  private readonly advanceAmountBaseExpr = {
+    $multiply: [{ $ifNull: ['$amount', 0] }, { $ifNull: ['$tipoCambio', 1] }],
   }
 
   // ─── Expense aggregations ─────────────────────────────────────────────────
@@ -294,6 +321,37 @@ export class DashboardService {
       },
     ])
     return { amount: res[0]?.amount ?? 0, count: res[0]?.count ?? 0 }
+  }
+
+  /**
+   * Desglose por moneda ORIGINAL del comprobante (no convertida), para
+   * mostrar en reportes "S/ 5,000 · USD 300" junto al consolidado en
+   * `amountExpr` (montoBase). No confundir: aquí se suma `total` agrupado
+   * por `moneda`, sin pasar por `montoBase`.
+   */
+  private async aggregateExpenseByCurrency(
+    clientId: Types.ObjectId,
+    query: DashboardQueryDto,
+    from: Date,
+    to: Date
+  ): Promise<{ moneda: string; amount: number; count: number }[]> {
+    const res = await this.expenseModel.aggregate([
+      { $match: this.expenseMatch(clientId, query, from, to) },
+      {
+        $group: {
+          _id: { $ifNull: ['$moneda', 'PEN'] },
+          amount: {
+            $sum: {
+              $convert: { input: '$total', to: 'double', onError: 0, onNull: 0 },
+            },
+          },
+          count: { $sum: 1 },
+        },
+      },
+      { $project: { _id: 0, moneda: '$_id', amount: 1, count: 1 } },
+      { $sort: { amount: -1 } },
+    ])
+    return res
   }
 
   private async aggregateExpenseByStatus(
@@ -501,7 +559,7 @@ export class DashboardService {
       {
         $group: {
           _id: null,
-          amount: { $sum: { $ifNull: ['$amount', 0] } },
+          amount: { $sum: this.advanceAmountBaseExpr },
           count: { $sum: 1 },
         },
       },
@@ -520,10 +578,8 @@ export class DashboardService {
         $group: {
           _id: { $ifNull: ['$status', 'pending_l1'] },
           // Monto desembolsado real: usa paidAmount cuando existe (pagos parciales),
-          // sino el monto solicitado.
-          amount: {
-            $sum: { $ifNull: ['$paidAmount', { $ifNull: ['$amount', 0] }] },
-          },
+          // sino el monto solicitado. Convertido a moneda base.
+          amount: { $sum: this.advancePaidAmountBaseExpr },
           count: { $sum: 1 },
         },
       },
@@ -543,7 +599,7 @@ export class DashboardService {
       {
         $group: {
           _id: { $dateToString: { format: '%Y-%m', date: '$createdAt' } },
-          amount: { $sum: { $ifNull: ['$amount', 0] } },
+          amount: { $sum: this.advanceAmountBaseExpr },
         },
       },
       { $project: { _id: 0, month: '$_id', amount: 1 } },
@@ -564,7 +620,14 @@ export class DashboardService {
       {
         $group: {
           _id: null,
-          amount: { $sum: { $ifNull: ['$returnRecord.amountDue', 0] } },
+          amount: {
+            $sum: {
+              $multiply: [
+                { $ifNull: ['$returnRecord.amountDue', 0] },
+                { $ifNull: ['$tipoCambio', 1] },
+              ],
+            },
+          },
           count: { $sum: 1 },
         },
       },
@@ -585,7 +648,14 @@ export class DashboardService {
         $group: {
           _id: { $ifNull: ['$status', 'open'] },
           count: { $sum: 1 },
-          budget: { $sum: { $ifNull: ['$budget', 0] } },
+          budget: {
+            $sum: {
+              $multiply: [
+                { $ifNull: ['$budget', 0] },
+                { $ifNull: ['$tipoCambio', 1] },
+              ],
+            },
+          },
         },
       },
       { $project: { _id: 0, status: '$_id', count: 1, budget: 1 } },
@@ -618,7 +688,7 @@ export class DashboardService {
           _id: { $toLower: { $trim: { input: '$place' } } },
           place: { $first: '$place' },
           count: { $sum: 1 },
-          amount: { $sum: { $ifNull: ['$amount', 0] } },
+          amount: { $sum: this.advanceAmountBaseExpr },
           lat: { $first: '$lat' },
           lng: { $first: '$lng' },
         },

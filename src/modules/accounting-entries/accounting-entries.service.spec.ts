@@ -1103,3 +1103,82 @@ describe('generateContanetExcel — formato según el modo de la empresa', () =>
     }
   )
 })
+
+describe('AccountingEntriesService — multimoneda (comprobante en USD)', () => {
+  const service = newService()
+  const config = {
+    ...makeConfig(),
+    monedaBase: 'PEN',
+    supportedCurrencies: [
+      { code: 'PEN', symbol: 'S/', contanetCode: '01', decimals: 2, approvalThresholdL1: 500 },
+      { code: 'USD', symbol: '$', contanetCode: '02', decimals: 2, approvalThresholdL1: 150 },
+    ],
+  }
+  const categoryMap = new Map<string, any>([
+    ['cat1', { _id: 'cat1', cuenta: '91.3.1.410', cuentaDestino6x: '63.1.4.100' }],
+  ])
+  const projectMap = new Map<string, any>()
+  // Factura de USD 100, congelada con TC 3.8 al registrar (fecha de emisión) →
+  // montoBase = 380 soles. El TC "del día" en rateMap es distinto (3.5) para
+  // comprobar que se usa el TC CONGELADO del comprobante, no el del día.
+  const FROZEN_TC = 3.8
+  const expense = {
+    _id: 'eUSD',
+    proyectId: 'p1',
+    categoryId: 'cat1',
+    total: 100,
+    moneda: 'USD',
+    montoBase: 380,
+    tipoCambio: FROZEN_TC,
+    igv: 0,
+    tasaIgv: 18,
+    comentario: 'Software',
+    data: JSON.stringify({ serie: 'F001', correlativo: '00000099' }),
+    comprobanteDetallado: {
+      emisor: { ruc: '20999999999', razonSocial: 'ACME INC' },
+      comprobante: { serie: 'F001', correlativo: '00000099' },
+      totales: { operacionGravada: 100, igv: 0, importeTotal: 100 },
+    },
+  }
+  const rateMap = new Map<string, number>([['2026-04-15', TC]]) // TC del día = 3.5 (≠ FROZEN_TC)
+
+  let lines: ContanetLine[]
+  beforeAll(async () => {
+    lines = await (service as any).buildCompraLines({
+      report: { createdAt: new Date('2026-04-15') },
+      config,
+      expenses: [expense],
+      projectMap,
+      categoryMap,
+      periodDate: new Date('2026-04-01'),
+      rateMap,
+      cargosMap: new Map(),
+      warnings: [],
+    })
+  })
+
+  it('mdaOrigen resuelve al código Contanet de USD (02), no al de la config (01)', () => {
+    expect(lines.every(l => l.mdaOrigen === '02')).toBe(true)
+  })
+
+  it('cambioMoneda usa el TC CONGELADO del comprobante, no el TC del día', () => {
+    expect(lines.every(l => l.cambioMoneda === FROZEN_TC)).toBe(true)
+  })
+
+  it('montoDebe/montoHaber (moneda registro = soles) usan montoBase, no el total original en USD', () => {
+    const l42 = lines.find(l => l.nroCuenta === '42.1.2.100')!
+    expect(l42.montoHaber).toBe(380) // 100 USD * 3.8, NO 100
+  })
+
+  it('montoDebeME/montoHaberME llevan el monto ORIGINAL en USD (sin re-dividir)', () => {
+    const l42 = lines.find(l => l.nroCuenta === '42.1.2.100')!
+    expect(l42.montoHaberME).toBe(100)
+    const l9x = lines.find(l => l.nroCuenta === '91.3.1.410')!
+    expect(l9x.montoDebeME).toBe(100)
+  })
+
+  it('cuadra: Σ Debe = Σ Haber en soles', () => {
+    expect(sum(lines, 'montoDebe')).toBe(sum(lines, 'montoHaber'))
+    expect(service.validateCuadre(lines)).toHaveLength(0)
+  })
+})

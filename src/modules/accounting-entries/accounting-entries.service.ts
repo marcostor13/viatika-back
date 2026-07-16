@@ -1469,6 +1469,7 @@ export class AccountingEntriesService {
         Number(expense.total) ||
         baseTotal + igv
       )
+      const cur = this.resolveComprobanteCurrency(config, expense, total, tc)
 
       // Absorción del residuo de redondeo. La analítica (Debe) se reconstruye
       // redondeando cada porción y el IGV por separado, mientras el Haber
@@ -1531,14 +1532,15 @@ export class AccountingEntriesService {
               date,
               config.fuenteCompra,
               glosa,
-              tc,
+              cur.cambioMoneda,
               periodDate,
               {
                 nroCuenta: cuenta9x,
                 ...docFields,
+                mdaOrigen: cur.mdaOrigen,
                 identTipAfecto: p.condicion === 'afecto' ? 'S' : 'N',
-                montoDebe: this.round2(p.monto),
-                montoDebeME: this.toME(p.monto, tc),
+                montoDebe: this.round2(p.monto * cur.fxFactor),
+                montoDebeME: this.toMEForComprobante(p.monto, cur.isForeign, tc),
               }
             )
           )
@@ -1556,12 +1558,13 @@ export class AccountingEntriesService {
             date,
             config.fuenteCompra,
             glosaBase,
-            tc,
+            cur.cambioMoneda,
             periodDate,
             {
               nroCuenta: cuenta40,
-              montoDebe: igv,
-              montoDebeME: this.toME(igv, tc),
+              mdaOrigen: cur.mdaOrigen,
+              montoDebe: this.round2(igv * cur.fxFactor),
+              montoDebeME: this.toMEForComprobante(igv, cur.isForeign, tc),
             }
           )
         )
@@ -1574,15 +1577,16 @@ export class AccountingEntriesService {
           date,
           config.fuenteCompra,
           glosaBase,
-          tc,
+          cur.cambioMoneda,
           periodDate,
           {
             nroCuenta: config.cuenta42,
             codTipDoc,
             nroSerie: serie,
             nroDoc,
-            montoHaber: total,
-            montoHaberME: this.toME(total, tc),
+            mdaOrigen: cur.mdaOrigen,
+            montoHaber: this.round2(total * cur.fxFactor),
+            montoHaberME: this.toMEForComprobante(total, cur.isForeign, tc),
             esProvision: 1,
             codTipDocIdentProv: ruc ? '06' : '',
             nroDocProv: ruc,
@@ -1600,12 +1604,13 @@ export class AccountingEntriesService {
             date,
             config.fuenteCompra,
             glosa,
-            tc,
+            cur.cambioMoneda,
             periodDate,
             {
               nroCuenta: cuenta6xCat,
-              montoDebe: this.round2(p.monto),
-              montoDebeME: this.toME(p.monto, tc),
+              mdaOrigen: cur.mdaOrigen,
+              montoDebe: this.round2(p.monto * cur.fxFactor),
+              montoDebeME: this.toMEForComprobante(p.monto, cur.isForeign, tc),
               esDestino: 1,
             }
           )
@@ -1616,12 +1621,13 @@ export class AccountingEntriesService {
             date,
             config.fuenteCompra,
             glosa,
-            tc,
+            cur.cambioMoneda,
             periodDate,
             {
               nroCuenta: config.cuenta79,
-              montoHaber: this.round2(p.monto),
-              montoHaberME: this.toME(p.monto, tc),
+              mdaOrigen: cur.mdaOrigen,
+              montoHaber: this.round2(p.monto * cur.fxFactor),
+              montoHaberME: this.toMEForComprobante(p.monto, cur.isForeign, tc),
               esDestino: 1,
             }
           )
@@ -1651,6 +1657,58 @@ export class AccountingEntriesService {
     const rate = Number(tc) || 0
     if (rate <= 0) return 0
     return this.round2(amount / rate)
+  }
+
+  /**
+   * Resuelve, para un comprobante con moneda propia (Expense/Advance), el
+   * código de moneda Contanet y el factor para convertir sus montos
+   * ORIGINALES (calculados en moneda del comprobante) a moneda de registro
+   * (PEN): `montoDebe/montoHaber = original * fxFactor`. Si el comprobante ya
+   * está en la moneda base, `fxFactor=1` (no-op) y se preserva el
+   * comportamiento previo a la migración multimoneda.
+   */
+  private resolveComprobanteCurrency(
+    config: AccountingConfigDocument,
+    doc: { moneda?: string; montoBase?: number; tipoCambio?: number },
+    originalTotal: number,
+    dayTc: number
+  ): {
+    isForeign: boolean
+    fxFactor: number
+    mdaOrigen: string
+    cambioMoneda: number
+  } {
+    const monedaBase = config.monedaBase || 'PEN'
+    const moneda = doc.moneda || monedaBase
+    const isForeign = moneda !== monedaBase
+    const fxFactor =
+      isForeign && originalTotal > 0 && doc.montoBase != null
+        ? doc.montoBase / originalTotal
+        : 1
+    const contanetCode = (config.supportedCurrencies || []).find(
+      c => c.code === moneda
+    )?.contanetCode
+    return {
+      isForeign,
+      fxFactor,
+      mdaOrigen: contanetCode || config.monedaOrigen,
+      cambioMoneda: isForeign ? Number(doc.tipoCambio) || dayTc : dayTc,
+    }
+  }
+
+  /**
+   * ME de una línea de comprobante con moneda propia: si es extranjera, el
+   * "monto en moneda extranjera" ES el monto original (sin re-dividir); si
+   * es la moneda base, se conserva el cálculo nocional actual (soles/TC del
+   * día) vía `toME`.
+   */
+  private toMEForComprobante(
+    originalAmount: number,
+    isForeign: boolean,
+    dayTc: number
+  ): number {
+    if (isForeign) return this.round2(originalAmount)
+    return this.toME(originalAmount, dayTc)
   }
 
   // ----------------------------------------------------------------------
@@ -1687,6 +1745,7 @@ export class AccountingEntriesService {
         adv.payment?.transferDate || adv.startDate || adv.createdAt
       const date = rawDate ? new Date(rawDate) : new Date()
       const tc = this.tcFor(date, rateMap, config)
+      const cur = this.resolveComprobanteCurrency(config, adv, amount, tc)
       const banco = this.resolveBankAccount(config, adv.payment?.accountNumber)
       const glosa = (adv.description || 'SOLICITUD VIATICO')
         .toString()
@@ -1709,10 +1768,11 @@ export class AccountingEntriesService {
 
       // 14 (Debe) — nace la obligación del colaborador
       push(
-        this.baseLine(config, date, config.fuenteCajaBancos, glosa, tc, periodDate, {
+        this.baseLine(config, date, config.fuenteCajaBancos, glosa, cur.cambioMoneda, periodDate, {
           nroCuenta: cuenta14,
-          montoDebe: amount,
-          montoDebeME: this.toME(amount, tc),
+          mdaOrigen: cur.mdaOrigen,
+          montoDebe: this.round2(amount * cur.fxFactor),
+          montoDebeME: this.toMEForComprobante(amount, cur.isForeign, tc),
           codTipDocIdentTrab: trabDni ? '01' : '',
           nroDocTrab: trabDni,
           razonSocialTrab: trabNombre,
@@ -1721,10 +1781,11 @@ export class AccountingEntriesService {
 
       // 104 (Haber) — sale el dinero del banco
       push(
-        this.baseLine(config, date, config.fuenteCajaBancos, glosa, tc, periodDate, {
+        this.baseLine(config, date, config.fuenteCajaBancos, glosa, cur.cambioMoneda, periodDate, {
           nroCuenta: banco,
-          montoHaber: amount,
-          montoHaberME: this.toME(amount, tc),
+          mdaOrigen: cur.mdaOrigen,
+          montoHaber: this.round2(amount * cur.fxFactor),
+          montoHaberME: this.toMEForComprobante(amount, cur.isForeign, tc),
         })
       )
 
@@ -1821,6 +1882,7 @@ export class AccountingEntriesService {
         }
         const date = this.asientoDate(expense, report)
         const tc = this.tcFor(date, rateMap, config)
+        const cur = this.resolveComprobanteCurrency(config, expense, total, tc)
         // Centro de costo: proyecto del comprobante, o el de la rendición si
         // el comprobante no tiene uno propio asignado.
         const expProject = this.resolveLineProject(
@@ -1835,23 +1897,25 @@ export class AccountingEntriesService {
           lines.push(line)
         }
         push(
-          this.baseLine(config, date, config.fuenteAplicacion, 'APLICACION', tc, periodDate, {
+          this.baseLine(config, date, config.fuenteAplicacion, 'APLICACION', cur.cambioMoneda, periodDate, {
             nroCuenta: config.cuenta42,
             codTipDoc,
             nroSerie: serie,
             nroDoc,
-            montoDebe: total,
-            montoDebeME: this.toME(total, tc),
+            mdaOrigen: cur.mdaOrigen,
+            montoDebe: this.round2(total * cur.fxFactor),
+            montoDebeME: this.toMEForComprobante(total, cur.isForeign, tc),
             codTipDocIdentProv: ruc ? '06' : '',
             nroDocProv: ruc,
             razonSocialProv: razonSocial,
           })
         )
         push(
-          this.baseLine(config, date, config.fuenteAplicacion, 'APLICACION', tc, periodDate, {
+          this.baseLine(config, date, config.fuenteAplicacion, 'APLICACION', cur.cambioMoneda, periodDate, {
             nroCuenta: cuenta14,
-            montoHaber: total,
-            montoHaberME: this.toME(total, tc),
+            mdaOrigen: cur.mdaOrigen,
+            montoHaber: this.round2(total * cur.fxFactor),
+            montoHaberME: this.toMEForComprobante(total, cur.isForeign, tc),
             codTipDocIdentTrab: trabDni ? '01' : '',
             nroDocTrab: trabDni,
             razonSocialTrab: trabNombre,
@@ -1912,6 +1976,7 @@ export class AccountingEntriesService {
         const total = this.round2(portions.reduce((s, p) => s + p.monto, 0))
         if (total <= 0) return
         const tc = this.tcFor(date, rateMap, config)
+        const cur = this.resolveComprobanteCurrency(config, expense, total, tc)
         const push = (line: ContanetLine) => {
           this.applyProjectCostCenter(line, expenseProject)
           line.relacionado = relacionado
@@ -1926,23 +1991,25 @@ export class AccountingEntriesService {
               ? { codTipDoc: '', nroSerie: '', nroDoc: p.serieNoDeducible }
               : docFields
             push(
-              this.baseLine(config, date, config.fuenteAplicacion, glosa, tc, periodDate, {
+              this.baseLine(config, date, config.fuenteAplicacion, glosa, cur.cambioMoneda, periodDate, {
                 nroCuenta: cuenta9x,
                 ...pFields,
+                mdaOrigen: cur.mdaOrigen,
                 identTipAfecto: p.condicion === 'afecto' ? 'S' : 'N',
-                montoDebe: this.round2(p.monto),
-                montoDebeME: this.toME(p.monto, tc),
+                montoDebe: this.round2(p.monto * cur.fxFactor),
+                montoDebeME: this.toMEForComprobante(p.monto, cur.isForeign, tc),
               })
             )
           }
         }
 
         push(
-          this.baseLine(config, date, config.fuenteAplicacion, glosaBase, tc, periodDate, {
+          this.baseLine(config, date, config.fuenteAplicacion, glosaBase, cur.cambioMoneda, periodDate, {
             nroCuenta: config.cuenta42,
             ...docFields,
-            montoHaber: total,
-            montoHaberME: this.toME(total, tc),
+            mdaOrigen: cur.mdaOrigen,
+            montoHaber: this.round2(total * cur.fxFactor),
+            montoHaberME: this.toMEForComprobante(total, cur.isForeign, tc),
             esProvision: 1,
             codTipDocIdentProv: ruc ? '06' : '',
             nroDocProv: ruc,
@@ -1953,18 +2020,20 @@ export class AccountingEntriesService {
         for (const p of portions) {
           const glosa = p.etiqueta ? `${glosaBase} (${p.etiqueta})` : glosaBase
           push(
-            this.baseLine(config, date, config.fuenteAplicacion, glosa, tc, periodDate, {
+            this.baseLine(config, date, config.fuenteAplicacion, glosa, cur.cambioMoneda, periodDate, {
               nroCuenta: cuenta6xCat,
-              montoDebe: this.round2(p.monto),
-              montoDebeME: this.toME(p.monto, tc),
+              mdaOrigen: cur.mdaOrigen,
+              montoDebe: this.round2(p.monto * cur.fxFactor),
+              montoDebeME: this.toMEForComprobante(p.monto, cur.isForeign, tc),
               esDestino: 1,
             })
           )
           push(
-            this.baseLine(config, date, config.fuenteAplicacion, glosa, tc, periodDate, {
+            this.baseLine(config, date, config.fuenteAplicacion, glosa, cur.cambioMoneda, periodDate, {
               nroCuenta: config.cuenta79,
-              montoHaber: this.round2(p.monto),
-              montoHaberME: this.toME(p.monto, tc),
+              mdaOrigen: cur.mdaOrigen,
+              montoHaber: this.round2(p.monto * cur.fxFactor),
+              montoHaberME: this.toMEForComprobante(p.monto, cur.isForeign, tc),
               esDestino: 1,
             })
           )

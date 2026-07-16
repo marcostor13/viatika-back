@@ -11,6 +11,7 @@ import { UserModule } from '../user/user.module'
 import { EmailModule } from '../email/email.module'
 import { NotificationsModule } from '../notifications/notifications.module'
 import { SaldoModule } from '../saldo/saldo.module'
+import { ExchangeRateModule } from '../exchange-rate/exchange-rate.module'
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { SaldoModule } from '../saldo/saldo.module'
     EmailModule,
     NotificationsModule,
     SaldoModule,
+    ExchangeRateModule,
   ],
   controllers: [AdvanceController],
   providers: [AdvanceService],

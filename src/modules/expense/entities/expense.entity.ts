@@ -119,6 +119,14 @@ export interface ExpenseDocument extends Document {
   rejectionReason?: string
   clientId: string
   fechaEmision?: string
+  /** Moneda original del comprobante (ISO 4217), extraída por OCR. Default 'PEN'. */
+  moneda?: string
+  /** Equivalente de `total` en la moneda base del cliente, congelado al registrar. */
+  montoBase?: number
+  /** TC moneda→base usado para `montoBase` (1 si moneda === base). */
+  tipoCambio?: number
+  /** Fecha (YYYY-MM-DD) del TC aplicado — la de emisión del comprobante. */
+  tcFecha?: string
   observado?: boolean
   observacionPlazo?: string
   diasRetraso?: number
@@ -222,6 +230,18 @@ export class Expense {
 
   @Prop({ type: String, required: false })
   fechaEmision?: string
+
+  @Prop({ type: String, default: 'PEN' })
+  moneda?: string
+
+  @Prop({ type: Number, required: false })
+  montoBase?: number
+
+  @Prop({ type: Number, required: false })
+  tipoCambio?: number
+
+  @Prop({ type: String, required: false })
+  tcFecha?: string
 
   @Prop({ type: Boolean, default: false })
   observado?: boolean

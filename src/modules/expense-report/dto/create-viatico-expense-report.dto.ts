@@ -20,6 +20,10 @@ export class CreateViaticoExpenseReportDto {
   amount: number
 
   @IsString()
+  @IsOptional()
+  moneda?: string
+
+  @IsString()
   @IsNotEmpty()
   place: string
 

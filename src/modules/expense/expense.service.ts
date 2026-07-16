@@ -508,25 +508,12 @@ export class ExpenseService {
     expenseType: 'planilla_movilidad' | 'comprobante_caja',
     expenseReportId?: string
   ): Promise<string> {
-    // La rendición completa es UNA sola planilla de movilidad física (el PDF
-    // ya consolida todas sus filas en una sola hoja). Si el colaborador
-    // agrega varias planillas a la misma rendición, deben compartir el mismo
-    // número en vez de incrementar uno nuevo por cada expense — de lo
-    // contrario el asiento contable de Aplicación referenciaría varios
-    // "Numero Documento" para lo que Contabilidad ve como un solo documento.
-    if (expenseType === 'planilla_movilidad' && expenseReportId) {
-      const existing = await this.expenseRepository
-        .findOne({
-          expenseReportId: new Types.ObjectId(expenseReportId),
-          expenseType: 'planilla_movilidad',
-          internalCode: { $exists: true, $ne: null },
-        })
-        .sort({ createdAt: 1 })
-        .lean()
-        .exec()
-      if (existing?.internalCode) return existing.internalCode
-    }
-
+    // Cada planilla de movilidad es un documento independiente con su propio
+    // correlativo (AML012, AML013, ...), aunque el colaborador cargue varias
+    // en la misma rendición. Así el reporte las diferencia y el asiento
+    // contable de Aplicación emite cada bloque de S/40 con el "Numero
+    // Documento" de la planilla a la que pertenece (ver buildMovilidadBlocks
+    // en accounting-entries.service.ts).
     const ownerUserId = await this.resolveOwnerUserId(userId, expenseReportId)
     if (!ownerUserId) return `USR001`
     const user = await this.userService.findOne(ownerUserId)

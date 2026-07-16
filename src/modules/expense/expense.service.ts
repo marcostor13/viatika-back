@@ -27,6 +27,7 @@ import { ROLES } from '../auth/enums/roles.enum'
 import { NotificationsService } from '../notifications/notifications.service'
 import { CategoryService } from '../category/category.service'
 import { Client } from '../client/entities/client.entity'
+import { CurrencyService } from '../exchange-rate/currency.service'
 import {
   applyFechaEmisionDisplayToExpense,
   applyFechaEmisionDisplayToExpenses,
@@ -106,7 +107,8 @@ export class ExpenseService {
     private readonly uploadService: UploadService,
     private readonly expenseReportService: ExpenseReportService,
     private readonly notificationsService: NotificationsService,
-    private readonly categoryService: CategoryService
+    private readonly categoryService: CategoryService,
+    private readonly currencyService: CurrencyService
   ) {
     const apiKey = this.configService.get<string>('OPENAI_API_KEY')
     if (!apiKey) {
@@ -408,6 +410,8 @@ export class ExpenseService {
       body.categoryId,
       body.clientId
     )
+    // El límite se configura en la moneda base del cliente (sin selector de
+    // moneda propio), así que la comparación debe hacerse en moneda base.
     const limit = Number(category?.limit ?? 0)
     if (!limit || Number.isNaN(limit) || limit <= 0) return {}
 
@@ -422,7 +426,9 @@ export class ExpenseService {
       {
         $group: {
           _id: null,
-          total: { $sum: { $ifNull: ['$total', 0] } },
+          total: {
+            $sum: { $ifNull: ['$montoBase', { $ifNull: ['$total', 0] }] },
+          },
         },
       },
     ])
@@ -502,6 +508,25 @@ export class ExpenseService {
     expenseType: 'planilla_movilidad' | 'comprobante_caja',
     expenseReportId?: string
   ): Promise<string> {
+    // La rendición completa es UNA sola planilla de movilidad física (el PDF
+    // ya consolida todas sus filas en una sola hoja). Si el colaborador
+    // agrega varias planillas a la misma rendición, deben compartir el mismo
+    // número en vez de incrementar uno nuevo por cada expense — de lo
+    // contrario el asiento contable de Aplicación referenciaría varios
+    // "Numero Documento" para lo que Contabilidad ve como un solo documento.
+    if (expenseType === 'planilla_movilidad' && expenseReportId) {
+      const existing = await this.expenseRepository
+        .findOne({
+          expenseReportId: new Types.ObjectId(expenseReportId),
+          expenseType: 'planilla_movilidad',
+          internalCode: { $exists: true, $ne: null },
+        })
+        .sort({ createdAt: 1 })
+        .lean()
+        .exec()
+      if (existing?.internalCode) return existing.internalCode
+    }
+
     const ownerUserId = await this.resolveOwnerUserId(userId, expenseReportId)
     if (!ownerUserId) return `USR001`
     const user = await this.userService.findOne(ownerUserId)
@@ -1501,7 +1526,14 @@ export class ExpenseService {
     }
 
     const subTipo = body.subTipo || 'OT'
-    const isDJ = subTipo === 'DJ'
+    // La Declaración Jurada (DJ) tiene su propio flujo estructurado por filas
+    // (Alimentación/Movilidad) — ver `createDeclaracionJurada`.
+    if (subTipo === 'DJ') {
+      throw new HttpException(
+        'Usa el endpoint de Declaración Jurada (declaracion-jurada) para este sub-tipo',
+        HttpStatus.BAD_REQUEST
+      )
+    }
 
     // RUC Emisor obligatorio para los sub-tipos con documento físico (TK, BV, RC)
     if (['TK', 'BV', 'RC'].includes(subTipo) && !body.rucEmisor?.trim()) {
@@ -1509,27 +1541,6 @@ export class ExpenseService {
         'Se requiere el RUC del emisor',
         HttpStatus.BAD_REQUEST
       )
-    }
-
-    // Solo la DJ requiere firma y aceptación del checkbox
-    if (isDJ) {
-      if (!body.declaracionJurada) {
-        throw new HttpException(
-          'Se requiere firmar la declaración jurada',
-          HttpStatus.BAD_REQUEST
-        )
-      }
-      if (body.userId) {
-        const profile = await this.userService.findTransactionalProfile(
-          body.userId
-        )
-        if (!profile?.signature) {
-          throw new HttpException(
-            'Debes registrar tu firma digital antes de enviar una Declaración Jurada. Ve a tu perfil para añadirla.',
-            HttpStatus.UNPROCESSABLE_ENTITY
-          )
-        }
-      }
     }
 
     const normalizedFecha = this.normalizeFechaEmisionValue(body.fechaEmision)
@@ -1548,10 +1559,6 @@ export class ExpenseService {
       description: body.data,
       expenseType: 'otros_gastos',
       subTipo,
-      declaracionJurada: isDJ ? true : false,
-      declaracionJuradaFirmante: isDJ
-        ? body.declaracionJuradaFirmante
-        : undefined,
       file: body.imageUrl || undefined,
       status: 'pending',
       createdBy: body.userId || 'system',
@@ -1564,8 +1571,6 @@ export class ExpenseService {
       data: JSON.stringify({
         type: 'otros_gastos',
         subTipo,
-        declaracionJurada: isDJ,
-        firmante: isDJ ? body.declaracionJuradaFirmante : undefined,
         description: body.data,
         serie: body.serie || undefined,
         correlativo: body.correlativo || undefined,
@@ -1750,8 +1755,23 @@ export class ExpenseService {
   }
 
   /**
-   * Rellena el desglose contable (base/IGV/tasa/inafecto) desde el JSON `data`
-   * del OCR cuando el DTO no lo trae explícito. No sobreescribe valores ya provistos.
+   * Normaliza cualquier forma en que el OCR/usuario exprese la moneda
+   * ('S/', 'PEN', '$', 'USD'…) a un código ISO 4217. Default 'PEN' — el
+   * prompt del OCR (prompt1.ts) a veces devuelve el símbolo en la raíz y el
+   * código ISO dentro de `comprobanteDetallado.comprobante.moneda`.
+   */
+  private normalizeMonedaCode(raw: unknown): string {
+    const value = String(raw ?? '').trim().toUpperCase()
+    if (!value) return 'PEN'
+    if (value.includes('USD') || value === '$') return 'USD'
+    if (value.includes('PEN') || value === 'S/' || value === 'S/.') return 'PEN'
+    return value
+  }
+
+  /**
+   * Rellena el desglose contable (base/IGV/tasa/inafecto/moneda) desde el
+   * JSON `data` del OCR cuando el DTO no lo trae explícito. No sobreescribe
+   * valores ya provistos.
    */
   private syncDesgloseFromData(
     dto: Partial<CreateExpenseDto | UpdateExpenseDto>
@@ -1765,6 +1785,11 @@ export class ExpenseService {
       if (dto.igv === undefined) dto.igv = num(parsed.igv)
       if (dto.tasaIgv === undefined) dto.tasaIgv = num(parsed.tasaIgv)
       if (dto.inafecto === undefined) dto.inafecto = num(parsed.inafecto)
+      if (dto.moneda === undefined) {
+        const comprobante = (parsed.comprobanteDetallado as any)?.comprobante
+        const rawMoneda = comprobante?.moneda ?? parsed.moneda
+        if (rawMoneda) dto.moneda = this.normalizeMonedaCode(rawMoneda)
+      }
       if (
         dto.comprobanteDetallado === undefined &&
         parsed.comprobanteDetallado &&
@@ -1778,6 +1803,31 @@ export class ExpenseService {
     } catch {
       /* mantener dto original */
     }
+  }
+
+  /**
+   * Calcula el congelado a moneda base (`montoBase`/`tipoCambio`/`tcFecha`)
+   * para un monto+moneda+fecha. La fecha debe ser la de emisión del
+   * comprobante (regla SUNAT: TC venta a esa fecha). Se llama una sola vez
+   * al crear/editar el monto — el resultado se persiste y no se recalcula.
+   */
+  private async computeCurrencyFreeze(
+    clientId: string,
+    moneda: string | undefined,
+    total: number | undefined,
+    fechaEmision: string | undefined
+  ): Promise<{ montoBase?: number; tipoCambio?: number; tcFecha?: string }> {
+    if (total === undefined || total === null) return {}
+    const config = await this.currencyService.getConfig(clientId)
+    const date = fechaEmision ? new Date(fechaEmision) : new Date()
+    const resolvedDate = Number.isNaN(date.getTime()) ? new Date() : date
+    const conversion = await this.currencyService.toBase(
+      total,
+      moneda || config.monedaBase || 'PEN',
+      resolvedDate,
+      config
+    )
+    return conversion
   }
 
   async create(createExpenseDto: CreateExpenseDto): Promise<Expense> {
@@ -1801,8 +1851,17 @@ export class ExpenseService {
       }
     }
 
+    dto.moneda = this.normalizeMonedaCode(dto.moneda)
+    const freeze = await this.computeCurrencyFreeze(
+      createExpenseDto.clientId,
+      dto.moneda,
+      dto.total,
+      dto.fechaEmision
+    )
+
     const createdExpense = new this.expenseRepository({
       ...dto,
+      ...freeze,
       // Forzar ObjectId: en este flujo el modelo no castea estos ids por sí solo
       // (a diferencia de los create tipados), y guardarlos como string rompe los
       // $lookup/match estrictos del backend.
@@ -2261,6 +2320,18 @@ export class ExpenseService {
         type: 'planilla_movilidad',
         rows: dto.mobilityRows,
       })
+    }
+
+    if (dto.total !== undefined || dto.moneda !== undefined) {
+      if (dto.moneda !== undefined) dto.moneda = this.normalizeMonedaCode(dto.moneda)
+      const existingAsExpense = existing as unknown as Expense
+      const freeze = await this.computeCurrencyFreeze(
+        this.normalizeClientId(existingAsExpense.clientId),
+        dto.moneda ?? existingAsExpense.moneda,
+        dto.total ?? existingAsExpense.total,
+        dto.fechaEmision ?? existingAsExpense.fechaEmision
+      )
+      Object.assign(dto, freeze)
     }
 
     // Mismo criterio que create(): si la edición trae proyectId/categoryId como

@@ -36,7 +36,7 @@ import { applyFechaEmisionDisplayToExpenses } from '../expense/utils/fecha-emisi
 import { UploadService } from '../upload/upload.service'
 import { ProjectService } from '../project/project.service'
 import { CategoryService } from '../category/category.service'
-import { ADVANCE_THRESHOLDS } from '../advance/entities/advance.entity'
+import { CurrencyService } from '../exchange-rate/currency.service'
 import { CreateViaticoExpenseReportDto } from './dto/create-viatico-expense-report.dto'
 import { PayViaticoDto } from './dto/pay-viatico.dto'
 import { ResubmitViaticoDto } from './dto/resubmit-viatico.dto'
@@ -74,7 +74,8 @@ export class ExpenseReportService implements OnModuleInit {
     private readonly saldoService: SaldoService,
     private readonly clientService: ClientService,
     @InjectModel(AccountingEntriesFile.name)
-    private readonly accountingEntriesFileModel: Model<any>
+    private readonly accountingEntriesFileModel: Model<any>,
+    private readonly currencyService: CurrencyService
   ) { }
 
   async onModuleInit() {
@@ -486,7 +487,7 @@ export class ExpenseReportService implements OnModuleInit {
         directaDeposit: { $exists: true, $ne: null },
       })
       .populate('userId', 'name email')
-      .populate('expenseIds', 'total')
+      .populate('expenseIds', 'total montoBase')
       .sort({ createdAt: -1 })
       .lean()
       .exec()
@@ -494,10 +495,13 @@ export class ExpenseReportService implements OnModuleInit {
     return reports.map(r => {
       const expenses = (r.expenseIds as any[]) || []
       const totalGastado = expenses.reduce(
-        (sum, e) => sum + (Number(e?.total) || 0),
+        (sum, e) => sum + this.expenseSettlementAmountBase(e),
         0
       )
-      const deposited = Number(r.directaDeposit?.amount ?? r.budget ?? 0)
+      const deposited = this.reportSettlementAmountBase(
+        r,
+        r.directaDeposit?.amount ?? r.budget ?? 0
+      )
       return {
         ...r,
         totalGastado,
@@ -1391,7 +1395,7 @@ export class ExpenseReportService implements OnModuleInit {
           ? fullyUpdatedReport.expenseIds
           : []
         const expenseTotal = expenseDocs.reduce(
-          (s: number, e: any) => s + (Number(e?.total) || 0),
+          (s: number, e: any) => s + this.expenseSettlementAmountBase(e),
           0
         )
         const expenseTotalFormatted = expenseTotal.toFixed(2)
@@ -2109,7 +2113,7 @@ export class ExpenseReportService implements OnModuleInit {
     const reports = await this.expenseReportModel
       .find(query)
       .select(
-        '_id codigo userId title motivo gestion budget status createdAt createdBy directaDeposit expenseIds pendingBalanceFromReportId pendingBalanceAmount saldoIds pendingBalanceUsedInRendicionId pendingBalanceUsedInAdvanceId returnVoucher'
+        '_id codigo userId title motivo gestion budget moneda tipoCambio status createdAt createdBy directaDeposit expenseIds pendingBalanceFromReportId pendingBalanceAmount saldoIds pendingBalanceUsedInRendicionId pendingBalanceUsedInAdvanceId returnVoucher'
       )
       .populate('userId', 'name email')
       .populate({
@@ -2117,7 +2121,7 @@ export class ExpenseReportService implements OnModuleInit {
         select: 'name email roleId',
         populate: { path: 'roleId', select: 'name' },
       })
-      .populate('expenseIds', 'total')
+      .populate('expenseIds', 'total montoBase')
       .sort({ createdAt: -1 })
       .lean()
       .exec()
@@ -2135,7 +2139,7 @@ export class ExpenseReportService implements OnModuleInit {
       }
       const expenses = (r.expenseIds as any[]) || []
       const totalGastado = expenses.reduce(
-        (s, e) => s + (Number(e?.total) || 0),
+        (s, e) => s + this.expenseSettlementAmountBase(e),
         0
       )
       // Rendición directa creada desde el saldo de otra (saldo heredado): no tiene
@@ -2147,7 +2151,8 @@ export class ExpenseReportService implements OnModuleInit {
       // es el `budget` (suma de los saldos consumidos).
       const hasSaldoFinancing =
         Array.isArray(r.saldoIds) && r.saldoIds.length > 0
-      const deposited = Number(
+      const deposited = this.reportSettlementAmountBase(
+        r,
         r.directaDeposit?.amount ?? r.pendingBalanceAmount ?? r.budget ?? 0
       )
       const hasFunds =
@@ -2277,6 +2282,36 @@ export class ExpenseReportService implements OnModuleInit {
       .exec()
   }
 
+  /**
+   * Equivalente en moneda base de un gasto. `montoBase` se congela en
+   * expense.service al crear/editar (regla SUNAT: TC venta a la fecha de
+   * emisión); si el documento es previo a la migración multimoneda,
+   * `montoBase` coincide con `total` (moneda ya asumida PEN).
+   */
+  private expenseSettlementAmountBase(e: any): number {
+    return Number(e?.montoBase ?? e?.total) || 0
+  }
+
+  /**
+   * Equivalente en moneda base de lo efectivamente comprometido/pagado de un
+   * anticipo. Reaplica el TC ya congelado en el anticipo (`tipoCambio`) sobre
+   * `paidAmount ?? amount` en vez de usar directamente `montoBase` (que se
+   * congeló sobre `amount`), porque el pago real puede diferir del monto
+   * solicitado.
+   */
+  private advanceSettlementAmountBase(a: any): number {
+    if (a?.status === 'approved') return 0
+    const raw = Number(a?.paidAmount ?? a?.amount) || 0
+    const rate = Number(a?.tipoCambio) || 1
+    return Math.round(raw * rate * 100) / 100
+  }
+
+  /** Equivalente en moneda base de un monto propio del report (budget, viaticoPaidAmount…). */
+  private reportSettlementAmountBase(report: any, amount: number): number {
+    const rate = Number(report?.tipoCambio) || 1
+    return Math.round((Number(amount) || 0) * rate * 100) / 100
+  }
+
   async updateSettlement(reportId: string, settlement: any) {
     return await this.expenseReportModel
       .findByIdAndUpdate(reportId, { $set: { settlement } }, { new: true })
@@ -2290,11 +2325,13 @@ export class ExpenseReportService implements OnModuleInit {
    */
   private directaFundsGiven(report: any): number {
     const deposit = Number(report?.directaDeposit?.amount ?? 0)
-    if (deposit > 0) return deposit
+    if (deposit > 0) return this.reportSettlementAmountBase(report, deposit)
     const inherited = Number(report?.pendingBalanceAmount ?? 0)
-    if (report?.pendingBalanceFromReportId && inherited > 0) return inherited
+    if (report?.pendingBalanceFromReportId && inherited > 0) {
+      return this.reportSettlementAmountBase(report, inherited)
+    }
     if (Array.isArray(report?.saldoIds) && report.saldoIds.length > 0) {
-      return Number(report?.budget ?? 0)
+      return this.reportSettlementAmountBase(report, report?.budget ?? 0)
     }
     return 0
   }
@@ -2334,14 +2371,14 @@ export class ExpenseReportService implements OnModuleInit {
     ) {
       return
     }
-    const budget = Number(report?.budget ?? 0)
+    const budget = this.reportSettlementAmountBase(report, report?.budget ?? 0)
     const populated = await this.expenseReportModel
       .findById(reportId)
-      .populate('expenseIds', 'total')
+      .populate('expenseIds', 'total montoBase')
       .lean()
       .exec()
     const gastado = (((populated as any)?.expenseIds as any[]) ?? []).reduce(
-      (s, e) => s + (Number(e?.total) || 0),
+      (s, e) => s + this.expenseSettlementAmountBase(e),
       0
     )
     const difference = budget - gastado
@@ -2395,9 +2432,9 @@ export class ExpenseReportService implements OnModuleInit {
     ) {
       return
     }
-    const budget = Number(report?.budget ?? 0)
+    const budget = this.reportSettlementAmountBase(report, report?.budget ?? 0)
     const gastado = ((report?.expenseIds as any[]) ?? []).reduce(
-      (s, e) => s + (Number(e?.total) || 0),
+      (s, e) => s + this.expenseSettlementAmountBase(e),
       0
     )
     if (budget - gastado <= 0.01) return
@@ -2677,11 +2714,11 @@ export class ExpenseReportService implements OnModuleInit {
     if (!settlementType || settlementType !== 'reembolso') {
       const populated = await this.expenseReportModel
         .findById(reportId)
-        .populate('expenseIds', 'total')
+        .populate('expenseIds', 'total montoBase')
         .exec()
       const expenses = (populated?.expenseIds ?? []) as any[]
       const expenseTotal = expenses.reduce(
-        (s: number, e: any) => s + (Number(e.total) || 0),
+        (s: number, e: any) => s + this.expenseSettlementAmountBase(e),
         0
       )
       const rawAdvanceIds = ((report as any).advanceIds ?? []).map((x: any) =>
@@ -2704,11 +2741,7 @@ export class ExpenseReportService implements OnModuleInit {
           : this.directaFundsGiven(report)
       const advanceTotal =
         activeAdvances.reduce(
-          (s: number, a: any) =>
-            s +
-            (a.status === 'approved'
-              ? 0
-              : Number(a.paidAmount ?? a.amount) || 0),
+          (s: number, a: any) => s + this.advanceSettlementAmountBase(a),
           0
         ) + depositTotal
       const difference = advanceTotal - expenseTotal
@@ -2910,7 +2943,7 @@ export class ExpenseReportService implements OnModuleInit {
       if (!effectiveSettlementType) {
         const expenses = (report.expenseIds as any[]) || []
         const expenseTotal = expenses.reduce(
-          (s: number, e: any) => s + (Number(e.total) || 0),
+          (s: number, e: any) => s + this.expenseSettlementAmountBase(e),
           0
         )
         const rawAdvanceIds = ((report as any).advanceIds ?? []).map(
@@ -2932,11 +2965,7 @@ export class ExpenseReportService implements OnModuleInit {
             : this.directaFundsGiven(report)
         const advanceTotal =
           activeAdvances.reduce(
-            (s: number, a: any) =>
-              s +
-              (a.status === 'approved'
-                ? 0
-                : Number(a.paidAmount ?? a.amount) || 0),
+            (s: number, a: any) => s + this.advanceSettlementAmountBase(a),
             0
           ) + depositTotal
         const difference = advanceTotal - expenseTotal
@@ -3134,20 +3163,16 @@ export class ExpenseReportService implements OnModuleInit {
     )
     const expenses = (report.expenseIds as any[]) || []
     const expenseTotal = expenses.reduce(
-      (s, e) => s + (Number(e.total) || 0),
+      (s, e) => s + this.expenseSettlementAmountBase(e),
       0
     )
     const advanceTotal =
       activeAdvances.length > 0
         ? activeAdvances.reduce(
-          (s, a) =>
-            s +
-            (a.status === 'approved'
-              ? 0
-              : Number(a.paidAmount ?? a.amount) || 0),
+          (s, a) => s + this.advanceSettlementAmountBase(a),
           0
         )
-        : Number((report as any).budget ?? 0)
+        : this.reportSettlementAmountBase(report, (report as any).budget ?? 0)
     const difference = advanceTotal - expenseTotal
     const notifySettlement = {
       advanceTotal,
@@ -3610,8 +3635,25 @@ export class ExpenseReportService implements OnModuleInit {
     return result
   }
 
+  /**
+   * Congelado a moneda base para el monto del viático (mismo patrón que
+   * `AdvanceService.computeAdvanceCurrencyFreeze`). Un viático no tiene "fecha de
+   * emisión" propia; se usa la fecha de inicio del viaje para resolver el TC del día.
+   */
+  private async computeViaticoCurrencyFreeze(
+    clientId: string,
+    moneda: string | undefined,
+    amount: number,
+    date: Date
+  ): Promise<{ moneda: string; montoBase: number; tipoCambio: number; tcFecha: string }> {
+    const config = await this.currencyService.getConfig(clientId)
+    const resolvedMoneda = moneda || config.monedaBase || 'PEN'
+    const conversion = await this.currencyService.toBase(amount, resolvedMoneda, date, config)
+    return { moneda: resolvedMoneda, ...conversion }
+  }
+
   private async validateViaticoLines(
-    dto: { place: string; startDate: string; endDate: string; projectId: string; lines: CreateAdvanceLineDto[]; observations?: string; amount: number },
+    dto: { place: string; startDate: string; endDate: string; projectId: string; lines: CreateAdvanceLineDto[]; observations?: string; amount: number; moneda?: string },
     clientId: string,
     allowBackdate = false
   ) {
@@ -3651,7 +3693,13 @@ export class ExpenseReportService implements OnModuleInit {
       ? `Viático: ${dto.place.trim()} (${startFmt} → ${endFmt}) | ${dto.observations.trim()}`
       : `Viático: ${dto.place.trim()} (${startFmt} → ${endFmt})`
 
-    return { lineDocs, roundedSum, description, requiredLevels: roundedSum > ADVANCE_THRESHOLDS.L1_MAX ? 2 : 1 }
+    const config = await this.currencyService.getConfig(clientId)
+    const resolvedMoneda = dto.moneda || config.monedaBase || 'PEN'
+    const thresholdL1 = await this.currencyService.resolveApprovalThresholdL1(
+      clientId,
+      resolvedMoneda
+    )
+    return { lineDocs, roundedSum, description, requiredLevels: roundedSum > thresholdL1 ? 2 : 1 }
   }
 
   async createViatico(dto: CreateViaticoExpenseReportDto, userId: string, clientId: string, allowBackdate = false): Promise<ExpenseReportDocument> {
@@ -3665,9 +3713,16 @@ export class ExpenseReportService implements OnModuleInit {
     // `dto.amount` es el costo del viático (suma de líneas). El saldo heredado NO se
     // suma al anticipo: prefinancia ese costo igual que un saldo de la bolsa.
     const { lineDocs, roundedSum, description, requiredLevels } = await this.validateViaticoLines(
-      { place: dto.place, startDate: dto.startDate, endDate: dto.endDate, projectId: dto.projectId, lines: dto.lines, observations: dto.observations, amount: dto.amount },
+      { place: dto.place, startDate: dto.startDate, endDate: dto.endDate, projectId: dto.projectId, lines: dto.lines, observations: dto.observations, amount: dto.amount, moneda: dto.moneda },
       clientId,
       allowBackdate
+    )
+
+    const freeze = await this.computeViaticoCurrencyFreeze(
+      clientId,
+      dto.moneda,
+      roundedSum,
+      new Date(dto.startDate)
     )
 
     const report = await this.expenseReportModel.create({
@@ -3680,7 +3735,12 @@ export class ExpenseReportService implements OnModuleInit {
       status: 'pending_l1',
       expenseIds: [],
       budget: roundedSum,
+      budgetBase: freeze.montoBase,
+      moneda: freeze.moneda,
+      tipoCambio: freeze.tipoCambio,
+      tcFecha: freeze.tcFecha,
       viaticoAmount: roundedSum,
+      viaticoAmountBase: freeze.montoBase,
       viaticoRequiredLevels: requiredLevels,
       viaticoApprovalLevel: 0,
       viaticoApprovalHistory: [],
@@ -4091,9 +4151,16 @@ export class ExpenseReportService implements OnModuleInit {
     if (!profile?.signature?.trim()) throw new ForbiddenException('Debe registrar su firma digital en el perfil antes de reenviar viáticos.')
 
     const { lineDocs, roundedSum, description, requiredLevels } = await this.validateViaticoLines(
-      { place: dto.place, startDate: dto.startDate, endDate: dto.endDate, projectId: dto.projectId, lines: dto.lines, observations: dto.observations, amount: dto.amount },
+      { place: dto.place, startDate: dto.startDate, endDate: dto.endDate, projectId: dto.projectId, lines: dto.lines, observations: dto.observations, amount: dto.amount, moneda: dto.moneda },
       clientId,
       allowBackdate
+    )
+
+    const freeze = await this.computeViaticoCurrencyFreeze(
+      clientId,
+      dto.moneda,
+      roundedSum,
+      new Date(dto.startDate)
     )
 
     const wasEditing = report.status === 'pending_l1'
@@ -4109,7 +4176,12 @@ export class ExpenseReportService implements OnModuleInit {
     report.viaticoAccountNumber = dto.accountNumber?.trim() || undefined
     report.viaticoCci = dto.cci?.trim() || undefined
     report.viaticoAmount = roundedSum
+    report.viaticoAmountBase = freeze.montoBase
     report.budget = roundedSum
+    report.budgetBase = freeze.montoBase
+    report.moneda = freeze.moneda
+    report.tipoCambio = freeze.tipoCambio
+    report.tcFecha = freeze.tcFecha
     // Re-aplicar saldo de la bolsa si la corrección lo selecciona y el viático no
     // tiene ya uno aplicado (caso típico: fue rechazado y su saldo se devolvió a la
     // bolsa). Si ya tenía saldo (edición antes de aprobación), se conserva intacto.
@@ -4447,24 +4519,25 @@ export class ExpenseReportService implements OnModuleInit {
     const expenses = (report.expenseIds as any[]) || []
     const expenseTotal = expenses.reduce((sum, e) => {
       if (String(e?.status ?? '').toLowerCase() !== 'approved') return sum
-      return sum + (Number(e.total) || 0)
+      return sum + this.expenseSettlementAmountBase(e)
     }, 0)
 
     // Financiado del viático = depósito/saldo del propio reporte (viaticoPaidAmount) +
     // ampliaciones pagadas (advances vinculados con expenseReportId). Sin sumar las
     // ampliaciones, una ya desembolsada no cuenta y la liquidación calcularía mal el
     // reembolso/devolución (mismo criterio que liquidateExpenseReport para no-viáticos).
+    // Cada monto se convierte a moneda base con su propio TC ya congelado
+    // (reportSettlementAmountBase / advanceSettlementAmountBase).
     const linkedAdvances =
       await this.advanceService.findByExpenseReportId(reportId)
     const ampliacionesPagadas = linkedAdvances
       .filter(a => ['paid', 'partially_paid', 'settled'].includes(String(a.status)))
-      .reduce(
-        (s, a) => s + (Number((a as any).paidAmount ?? (a as any).amount) || 0),
-        0
-      )
+      .reduce((s, a) => s + this.advanceSettlementAmountBase(a), 0)
     const advanceTotal =
       Math.round(
-        (Number(report.viaticoPaidAmount ?? 0) + ampliacionesPagadas) * 100
+        (this.reportSettlementAmountBase(report, report.viaticoPaidAmount ?? 0) +
+          ampliacionesPagadas) *
+          100
       ) / 100
     // Solo omitir si ambos son cero (nada que liquidar).
     if (advanceTotal <= 0 && expenseTotal <= 0) return

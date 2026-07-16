@@ -25,6 +25,8 @@ export interface PettyCashDocument extends Document {
   clientId: Types.ObjectId
   period: string
   fundAmount: number
+  /** Moneda del fondo (ISO 4217). Default 'PEN'. */
+  moneda?: string
   spentAmount: number
   maxPerExpense?: number
   maxPerDay?: number
@@ -53,6 +55,9 @@ export class PettyCash {
 
   @Prop({ required: true })
   fundAmount: number
+
+  @Prop({ type: String, default: 'PEN' })
+  moneda?: string
 
   @Prop({ default: 0 })
   spentAmount: number

@@ -14,6 +14,7 @@ import { Advance, AdvanceSchema } from '../advance/entities/advance.entity'
 import { Project, ProjectSchema } from '../project/entities/project.entity'
 import { User, UserSchema } from '../user/schemas/user.schema'
 import { Category, CategorySchema } from '../category/entities/category.entity'
+import { Client, ClientSchema } from '../client/entities/client.entity'
 import { ExchangeRateModule } from '../exchange-rate/exchange-rate.module'
 import { UploadModule } from '../upload/upload.module'
 import {
@@ -30,6 +31,7 @@ import {
       { name: Project.name, schema: ProjectSchema },
       { name: User.name, schema: UserSchema },
       { name: Category.name, schema: CategorySchema },
+      { name: Client.name, schema: ClientSchema },
       { name: AccountingEntriesFile.name, schema: AccountingEntriesFileSchema },
     ]),
     ConfigModule,

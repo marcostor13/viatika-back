@@ -9,11 +9,7 @@ import {
 } from '@nestjs/common'
 import { InjectModel } from '@nestjs/mongoose'
 import { Model, Types } from 'mongoose'
-import {
-  Advance,
-  AdvanceDocument,
-  ADVANCE_THRESHOLDS,
-} from './entities/advance.entity'
+import { Advance, AdvanceDocument } from './entities/advance.entity'
 import {
   CreateAdvanceDto,
   CreateAdvanceLineDto,
@@ -33,6 +29,7 @@ import { UserPermissions } from '../user/schemas/user.schema'
 import { EmailService } from '../email/email.service'
 import { NotificationsService } from '../notifications/notifications.service'
 import { SaldoService } from '../saldo/saldo.service'
+import { CurrencyService } from '../exchange-rate/currency.service'
 
 @Injectable()
 export class AdvanceService {
@@ -48,8 +45,31 @@ export class AdvanceService {
     private readonly userService: UserService,
     private readonly emailService: EmailService,
     private readonly notificationsService: NotificationsService,
-    private readonly saldoService: SaldoService
+    private readonly saldoService: SaldoService,
+    private readonly currencyService: CurrencyService
   ) {}
+
+  /**
+   * Congelado a moneda base para el `amount` del anticipo. Un anticipo no
+   * tiene "fecha de emisión" (no es un comprobante); se usa la fecha de
+   * inicio del viático o la fecha actual para resolver el TC del día.
+   */
+  private async computeAdvanceCurrencyFreeze(
+    clientId: string,
+    moneda: string | undefined,
+    amount: number,
+    date: Date
+  ): Promise<{ moneda: string; montoBase: number; tipoCambio: number; tcFecha: string }> {
+    const config = await this.currencyService.getConfig(clientId)
+    const resolvedMoneda = moneda || config.monedaBase || 'PEN'
+    const conversion = await this.currencyService.toBase(
+      amount,
+      resolvedMoneda,
+      date,
+      config
+    )
+    return { moneda: resolvedMoneda, ...conversion }
+  }
 
   async create(dto: CreateAdvanceDto, allowBackdate = false): Promise<Advance> {
     if (!dto.clientId) throw new BadRequestException('clientId es requerido')
@@ -219,7 +239,17 @@ export class AdvanceService {
       ? Number(dto.pendingBalanceAmount) + Number(dto.additionalAmount)
       : dto.amount
 
-    const requiredLevels = amount > ADVANCE_THRESHOLDS.L1_MAX ? 2 : 1
+    const freeze = await this.computeAdvanceCurrencyFreeze(
+      dto.clientId!,
+      dto.moneda,
+      amount,
+      new Date()
+    )
+    const thresholdL1 = await this.currencyService.resolveApprovalThresholdL1(
+      dto.clientId!,
+      freeze.moneda
+    )
+    const requiredLevels = amount > thresholdL1 ? 2 : 1
 
     const advance = await this.advanceModel.create({
       userId: new Types.ObjectId(dto.userId),
@@ -228,6 +258,7 @@ export class AdvanceService {
         ? new Types.ObjectId(dto.expenseReportId)
         : undefined,
       amount,
+      ...freeze,
       description: dto.description,
       status: 'pending_l1',
       approvalLevel: 0,
@@ -269,6 +300,7 @@ export class AdvanceService {
       lines: CreateAdvanceLineDto[]
       observations?: string
       amount: number
+      moneda?: string
     },
     clientId: string,
     allowBackdate = false
@@ -353,7 +385,13 @@ export class AdvanceService {
       ? `${metaDesc} | ${dto.observations.trim()}`
       : metaDesc
 
-    const requiredLevels = roundedSum > ADVANCE_THRESHOLDS.L1_MAX ? 2 : 1
+    const config = await this.currencyService.getConfig(clientId)
+    const resolvedMoneda = dto.moneda || config.monedaBase || 'PEN'
+    const thresholdL1 = await this.currencyService.resolveApprovalThresholdL1(
+      clientId,
+      resolvedMoneda
+    )
+    const requiredLevels = roundedSum > thresholdL1 ? 2 : 1
 
     return { lineDocs, roundedSum, description, requiredLevels }
   }
@@ -382,13 +420,24 @@ export class AdvanceService {
           lines: dto.lines!,
           observations: dto.observations,
           amount: linesOnlyAmount,
+          moneda: dto.moneda,
         },
         dto.clientId!,
         allowBackdate
       )
 
     const totalAmount = Math.round((roundedSum + pendingAmt) * 100) / 100
-    const totalRequiredLevels = totalAmount > ADVANCE_THRESHOLDS.L1_MAX ? 2 : 1
+    const freeze = await this.computeAdvanceCurrencyFreeze(
+      dto.clientId!,
+      dto.moneda,
+      totalAmount,
+      new Date(dto.startDate!)
+    )
+    const totalThresholdL1 = await this.currencyService.resolveApprovalThresholdL1(
+      dto.clientId!,
+      freeze.moneda
+    )
+    const totalRequiredLevels = totalAmount > totalThresholdL1 ? 2 : 1
 
     const advance = await this.advanceModel.create({
       userId: new Types.ObjectId(dto.userId),
@@ -406,6 +455,7 @@ export class AdvanceService {
       lines: lineDocs,
       observations: dto.observations?.trim(),
       amount: totalAmount,
+      ...freeze,
       description,
       status: 'pending_l1',
       approvalLevel: 0,
@@ -2290,6 +2340,7 @@ export class AdvanceService {
           lines: dto.lines,
           observations: dto.observations,
           amount: dto.amount,
+          moneda: advance.moneda,
         },
         clientId,
         allowBackdate
@@ -2563,11 +2614,19 @@ export class AdvanceService {
           status: { $in: ['approved', 'partially_paid', 'paid', 'settled'] },
         },
       },
-      // Desembolsado real: usa el acumulado pagado (paidAmount) cuando existe.
+      // Desembolsado real: usa el acumulado pagado (paidAmount) cuando existe,
+      // convertido a moneda base con el TC congelado del anticipo.
       {
         $group: {
           _id: null,
-          total: { $sum: { $ifNull: ['$paidAmount', '$amount'] } },
+          total: {
+            $sum: {
+              $multiply: [
+                { $ifNull: ['$paidAmount', '$amount'] },
+                { $ifNull: ['$tipoCambio', 1] },
+              ],
+            },
+          },
         },
       },
     ])

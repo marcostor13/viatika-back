@@ -25,6 +25,7 @@ import {
   AccountingEntriesFile,
   AccountingEntriesFileSchema,
 } from '../accounting-entries/entities/accounting-entries-file.entity'
+import { ExchangeRateModule } from '../exchange-rate/exchange-rate.module'
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import {
     SaldoModule,
     ClientModule,
     forwardRef(() => AdvanceModule),
+    ExchangeRateModule,
   ],
   controllers: [ExpenseReportController],
   providers: [ExpenseReportService],

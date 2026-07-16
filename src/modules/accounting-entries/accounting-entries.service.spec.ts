@@ -1,5 +1,5 @@
 import { AccountingEntriesService } from './accounting-entries.service'
-import { ContanetLine } from './entities/contanet-columns'
+import { ContanetLine, toExcelSerial } from './entities/contanet-columns'
 import {
   buildContanetAoa,
   generateContanetExcel,
@@ -52,8 +52,9 @@ function newService(): AccountingEntriesService {
   const exchangeStub: any = { getRate: async () => TC }
   const configStub: any = { get: () => 'test-api-key' }
   const uploadStub: any = {}
-  // (reportModel, expenseModel, advanceModel, projectModel, userModel, categoryModel, fileModel, accountingConfigService, exchangeService, configService, uploadService)
+  // (reportModel, expenseModel, advanceModel, projectModel, userModel, categoryModel, clientModel, fileModel, accountingConfigService, exchangeService, configService, uploadService)
   return new AccountingEntriesService(
+    stub,
     stub,
     stub,
     stub,
@@ -336,7 +337,7 @@ describe('AccountingEntriesService — tipo de documento y no deducibles', () =>
     expect(icbper.identTipAfecto).toBe('N')
   })
 
-  it('boleta: código 03, sin línea 40 y todo el importe al gasto', async () => {
+  it('boleta: código 03, no genera asiento de compra (solo factura entra al registro de compra)', async () => {
     const expense = {
       _id: 'e5',
       expenseType: 'factura',
@@ -350,18 +351,10 @@ describe('AccountingEntriesService — tipo de documento y no deducibles', () =>
       },
     }
     const lines = await build([expense])
-    expect(service.validateCuadre(lines)).toHaveLength(0)
-    expect(lines.some(l => l.nroCuenta === '40.1.1.100')).toBe(false)
-    const nine = lines.find(l => l.nroCuenta === '91.3.1.410')!
-    expect(nine.montoDebe).toBe(59)
-    expect(nine.codTipDoc).toBe('03')
-    expect(nine.identTipAfecto).toBe('N')
-    const l42 = lines.find(l => l.nroCuenta === '42.1.2.100')!
-    expect(l42.codTipDoc).toBe('03')
-    expect(l42.montoHaber).toBe(59)
+    expect(lines).toHaveLength(0)
   })
 
-  it('planilla de movilidad: código 94, sin IGV, total al gasto', async () => {
+  it('planilla de movilidad: código 94, no genera asiento de compra', async () => {
     const expense = {
       _id: 'e6',
       expenseType: 'planilla_movilidad',
@@ -371,12 +364,7 @@ describe('AccountingEntriesService — tipo de documento y no deducibles', () =>
       data: '{}',
     }
     const lines = await build([expense])
-    expect(service.validateCuadre(lines)).toHaveLength(0)
-    const nine = lines.find(l => l.nroCuenta === '91.3.1.410')!
-    expect(nine.codTipDoc).toBe('94')
-    expect(nine.montoDebe).toBe(45)
-    expect(nine.nroDoc).toBe('PM-001')
-    expect(lines.some(l => l.nroCuenta === '40.1.1.100')).toBe(false)
+    expect(lines).toHaveLength(0)
   })
 })
 
@@ -652,6 +640,367 @@ describe('AccountingEntriesService — absorción de residuo de redondeo', () =>
   })
 })
 
+describe('AccountingEntriesService — centro de costo en solicitud/aplicación/devolución-reembolso', () => {
+  const service = newService()
+  const config = makeConfig()
+  const periodDate = new Date('2026-04-01')
+  const rateMap = new Map<string, number>([['2026-04-15', TC]])
+  const projectMap = new Map<string, any>([
+    [
+      'p-adv',
+      { _id: 'p-adv', code: 'CC-ADV', centroCosto: 'SC-ADV', subCentroCosto: '111' },
+    ],
+    [
+      'p-exp',
+      { _id: 'p-exp', code: 'CC-EXP', centroCosto: 'SC-EXP', subCentroCosto: '222' },
+    ],
+    [
+      'p-report',
+      { _id: 'p-report', code: 'CC-REP', centroCosto: 'SC-REP', subCentroCosto: '333' },
+    ],
+  ])
+
+  it('solicitud: toma el centro de costo del proyecto del anticipo', async () => {
+    const report = { createdAt: new Date('2026-04-15') }
+    const advance = {
+      _id: 'a1',
+      amount: 500,
+      projectId: 'p-adv',
+      startDate: new Date('2026-04-15'),
+    }
+    const lines = (await (service as any).buildSolicitudLines({
+      report,
+      config,
+      advances: [advance],
+      colaborador: { dni: '12345678', name: 'Colaborador' },
+      projectMap,
+      periodDate,
+      rateMap,
+      warnings: [],
+    })) as ContanetLine[]
+
+    expect(lines.length).toBe(2)
+    expect(lines.every(l => l.centroCosto === 'SC-ADV')).toBe(true)
+    expect(lines.every(l => l.subCentroCosto === '111')).toBe(true)
+  })
+
+  it('solicitud: si el anticipo no tiene proyecto, cae al proyecto de la rendición', async () => {
+    const report = { createdAt: new Date('2026-04-15'), projectId: 'p-report' }
+    const advance = { _id: 'a2', amount: 500, startDate: new Date('2026-04-15') }
+    const lines = (await (service as any).buildSolicitudLines({
+      report,
+      config,
+      advances: [advance],
+      colaborador: {},
+      projectMap,
+      periodDate,
+      rateMap,
+      warnings: [],
+    })) as ContanetLine[]
+
+    expect(lines.every(l => l.centroCosto === 'SC-REP')).toBe(true)
+  })
+
+  it('solicitud: sin proyecto propio ni de la rendición, cae al centro de costo global de la config', async () => {
+    const report = { createdAt: new Date('2026-04-15') }
+    const advance = { _id: 'a3', amount: 500, startDate: new Date('2026-04-15') }
+    const lines = (await (service as any).buildSolicitudLines({
+      report,
+      config,
+      advances: [advance],
+      colaborador: {},
+      projectMap,
+      periodDate,
+      rateMap,
+      warnings: [],
+    })) as ContanetLine[]
+
+    expect(lines.every(l => l.centroCosto === config.centroCosto)).toBe(true)
+  })
+
+  it('aplicación: toma el centro de costo del proyecto del comprobante', async () => {
+    const report = { createdAt: new Date('2026-04-15') }
+    const expense = {
+      _id: 'e1',
+      proyectId: 'p-exp',
+      total: 100,
+      data: '{}',
+      comprobanteDetallado: { totales: { importeTotal: 100 } },
+    }
+    const lines = (await (service as any).buildAplicacionLines({
+      report,
+      config,
+      expenses: [expense],
+      colaborador: { dni: '12345678', name: 'Colaborador' },
+      movilidadDiario: 40,
+      projectMap,
+      categoryMap: new Map(),
+      periodDate,
+      rateMap,
+      warnings: [],
+    })) as ContanetLine[]
+
+    expect(lines.length).toBe(2)
+    expect(lines.every(l => l.centroCosto === 'SC-EXP')).toBe(true)
+    expect(lines.every(l => l.subCentroCosto === '222')).toBe(true)
+  })
+
+  it('devolución: toma el centro de costo del proyecto de la rendición', async () => {
+    const report = {
+      updatedAt: new Date('2026-04-15'),
+      projectId: 'p-report',
+      settlement: { type: 'devolucion', difference: -50 },
+    }
+    const lines = (await (service as any).buildDevolucionReembolsoLines(
+      {
+        report,
+        config,
+        advances: [],
+        colaborador: {},
+        projectMap,
+        periodDate,
+        rateMap,
+      },
+      'devolucion'
+    )) as ContanetLine[]
+
+    expect(lines.length).toBe(2)
+    expect(lines.every(l => l.centroCosto === 'SC-REP')).toBe(true)
+  })
+
+  it('reembolso: si la rendición no tiene proyecto, cae al proyecto del primer anticipo', async () => {
+    const report = {
+      updatedAt: new Date('2026-04-15'),
+      settlement: { type: 'reembolso', difference: 50 },
+    }
+    const advance = { _id: 'a4', projectId: 'p-adv' }
+    const lines = (await (service as any).buildDevolucionReembolsoLines(
+      {
+        report,
+        config,
+        advances: [advance],
+        colaborador: {},
+        projectMap,
+        periodDate,
+        rateMap,
+      },
+      'reembolso'
+    )) as ContanetLine[]
+
+    expect(lines.length).toBe(2)
+    expect(lines.every(l => l.centroCosto === 'SC-ADV')).toBe(true)
+  })
+})
+
+describe('AccountingEntriesService — asiento de aplicación', () => {
+  const service = newService()
+  const config = makeConfig()
+  const rateMap = new Map<string, number>([
+    ['2026-04-15', TC],
+    ['2026-05-02', TC],
+    ['2026-05-03', TC],
+    ['2026-05-05', TC],
+  ])
+  const report = { createdAt: new Date('2026-04-15') }
+  const periodDate = new Date('2026-04-01')
+  const colaborador = { dni: '12345678', name: 'JUAN PEREZ' }
+  // Categoría ALIMENTACION → 9X 91.3.1.410, destino 6X 63.1.4.100 (misma que
+  // usan los tests de Compra) — los no-factura en Aplicación ya generan su
+  // propio bloque 9X/42/6X/79, así que necesitan una categoría resuelta.
+  const categoryMap = new Map<string, any>([
+    ['cat1', { _id: 'cat1', cuenta: '91.3.1.410', cuentaDestino6x: '63.1.4.100' }],
+  ])
+
+  async function build(expenses: any[], warnings: string[] = []) {
+    return (service as any).buildAplicacionLines({
+      report,
+      config,
+      expenses,
+      colaborador,
+      movilidadDiario: 40,
+      projectMap: new Map(),
+      categoryMap,
+      periodDate,
+      rateMap,
+      warnings,
+    }) as Promise<ContanetLine[]>
+  }
+
+  it('boleta (código 03) genera su asiento 9X/42/6X/79 en Aplicación aunque no entre a Compra', async () => {
+    const expense = {
+      _id: 'e10',
+      expenseType: 'factura',
+      categoryId: 'cat1',
+      total: 59,
+      data: '{}',
+      comprobanteDetallado: {
+        comprobante: { tipo: 'Boleta', serie: 'B001', correlativo: '55' },
+        totales: { importeTotal: 59 },
+      },
+    }
+    const lines = await build([expense])
+    // No cancela la cuenta 14 (decisión 2026-07-10): solo 9X(Debe)/42(Haber)/6X(Debe)/79(Haber).
+    expect(lines).toHaveLength(4)
+    const l42 = lines.find(l => l.nroCuenta === '42.1.2.100')!
+    expect(l42.codTipDoc).toBe('03')
+    expect(l42.montoHaber).toBe(59)
+    const l9x = lines.find(l => l.nroCuenta === '91.3.1.410')!
+    expect(l9x.montoDebe).toBe(59)
+    expect(service.validateCuadre(lines)).toHaveLength(0)
+  })
+
+  it('planilla de movilidad sin startDate/endDate en la rendición: cae a un único bloque con el total consolidado', async () => {
+    const expense = {
+      _id: 'e11',
+      expenseType: 'planilla_movilidad',
+      internalCode: 'PM-002',
+      categoryId: 'cat1',
+      total: 120,
+      data: '{}',
+      mobilityRows: [
+        { fecha: '2026-05-02', total: 40 },
+        { fecha: '2026-05-03', total: 40 },
+        { fecha: '2026-05-05', total: 40 },
+      ],
+    }
+    const lines = await build([expense])
+    // Sin report.startDate/endDate, buildMovilidadBlocks cae a UN bloque con
+    // el total consolidado (120) en vez de repartir por fecha — ver el test
+    // "varias planillas... se consolidan" para el caso con fechas de viaje.
+    expect(lines).toHaveLength(4)
+    const l42s = lines.filter(l => l.nroCuenta === '42.1.2.100')
+    expect(l42s).toHaveLength(1)
+    expect(l42s[0].montoHaber).toBe(120)
+    expect(l42s.every(l => l.codTipDoc === '94')).toBe(true)
+    const l9xs = lines.filter(l => l.nroCuenta === '91.3.1.410')
+    expect(l9xs).toHaveLength(1)
+    expect(l9xs[0].montoDebe).toBe(120)
+    expect(service.validateCuadre(lines)).toHaveLength(0)
+  })
+
+  it('planilla sin filas con monto: no genera líneas y avisa', async () => {
+    const expense = {
+      _id: 'e12',
+      expenseType: 'planilla_movilidad',
+      total: 0,
+      data: '{}',
+      mobilityRows: [{ fecha: '2026-05-02', total: 0 }],
+    }
+    const warnings: string[] = []
+    const lines = await build([expense], warnings)
+    expect(lines).toHaveLength(0)
+    expect(warnings.some(w => w.includes('no genera asiento de aplicación'))).toBe(true)
+  })
+
+  it('varias planillas de movilidad de la misma rendición se consolidan: un único Numero Documento y fechas sintéticas desde startDate+1 (igual que el PDF completo)', async () => {
+    // Ambos expense se combinan en UN total (80) repartido en bloques de
+    // movilidadDiario (40): la primera fecha es startDate+1 (2026-05-02), la
+    // segunda 2026-05-03 — mismo algoritmo que buildConsolidatedMobilityPageData
+    // en el frontend, no las fechas reales de mobilityRows.
+    const movilidadReport = {
+      ...report,
+      startDate: new Date('2026-05-01'),
+      endDate: new Date('2026-05-10'),
+    }
+    const expenses = [
+      {
+        _id: 'e20',
+        expenseType: 'planilla_movilidad',
+        internalCode: 'MT002',
+        createdAt: new Date('2026-05-05'),
+        total: 40,
+        data: '{}',
+        mobilityRows: [{ fecha: '2026-05-05', total: 40 }],
+      },
+      {
+        _id: 'e21',
+        expenseType: 'planilla_movilidad',
+        internalCode: 'MT001',
+        createdAt: new Date('2026-05-01'),
+        total: 40,
+        data: '{}',
+        mobilityRows: [{ fecha: '2026-05-02', total: 40 }],
+      },
+    ]
+    const lines = await (service as any).buildAplicacionLines({
+      report: movilidadReport,
+      config,
+      expenses,
+      colaborador,
+      movilidadDiario: 40,
+      projectMap: new Map(),
+      categoryMap: new Map(),
+      periodDate,
+      rateMap,
+      warnings: [],
+    })
+    const l42s = lines.filter((l: ContanetLine) => l.nroCuenta === '42.1.2.100')
+    expect(l42s).toHaveLength(2)
+    // Aunque cada expense trae su propio internalCode, el asiento usa el de
+    // la planilla más antigua (MT001) para AMBOS bloques.
+    expect(l42s.every((l: ContanetLine) => l.nroDoc === 'MT001')).toBe(true)
+    const fechas = l42s.map((l: ContanetLine) => l.fechaEmision).sort()
+    expect(fechas).toEqual([toExcelSerial(new Date('2026-05-02')), toExcelSerial(new Date('2026-05-03'))].sort())
+  })
+
+  it('sortExpensesForAsiento ordena planillas de movilidad por su fecha real (mobilityRows), no por report.createdAt', () => {
+    // Ninguna trae `fechaEmision` propio (nunca se persiste para
+    // planilla_movilidad) — antes caían todas al mismo fallback
+    // report.createdAt y el orden por fecha no hacía nada.
+    const late = {
+      _id: 'late',
+      expenseType: 'planilla_movilidad',
+      mobilityRows: [{ fecha: '2026-05-20', total: 40 }],
+    }
+    const early = {
+      _id: 'early',
+      expenseType: 'planilla_movilidad',
+      mobilityRows: [{ fecha: '2026-05-02', total: 40 }],
+    }
+    const mid = {
+      _id: 'mid',
+      expenseType: 'planilla_movilidad',
+      mobilityRows: [{ fecha: '2026-05-10', total: 40 }],
+    }
+    const sorted = (service as any).sortExpensesForAsiento([late, early, mid], report)
+    expect(sorted.map((e: any) => e._id)).toEqual(['early', 'mid', 'late'])
+  })
+})
+
+describe('AccountingEntriesService — prefetchRates cubre las fechas sintéticas de movilidad', () => {
+  it('agrega los días de los bloques de Aplicación (startDate+1, +2, ...), no solo la fecha del expense', async () => {
+    // Sin esto, tcFor() no encuentra el tipo de cambio de esos días y cae
+    // al fallback config.tipoCambio (columna "Cambio Moneda" saliendo en 1).
+    const service = newService()
+    const config = makeConfig()
+    const report = {
+      createdAt: new Date('2026-05-01'),
+      startDate: new Date('2026-05-01'),
+      endDate: new Date('2026-05-10'),
+    }
+    const expenses = [
+      {
+        _id: 'e1',
+        expenseType: 'planilla_movilidad',
+        total: 80,
+        mobilityRows: [{ fecha: '2026-05-01', total: 80 }],
+      },
+    ]
+    const requestedIsoLists: string[][] = []
+    ;(service as any).exchangeRateService = {
+      getRatesBatch: async (isoList: string[]) => {
+        requestedIsoLists.push(isoList)
+        return new Map<string, number>()
+      },
+    }
+    await (service as any).prefetchRates(report, expenses, [], config, 40)
+    const requested = requestedIsoLists[0]
+    // Bloques sintéticos: día siguiente a startDate (05-02) y el que sigue (05-03).
+    expect(requested).toContain('2026-05-02')
+    expect(requested).toContain('2026-05-03')
+  })
+})
+
 describe('resolveCodTipDoc — catálogo codigos.md', () => {
   const { resolveCodTipDoc } = require('./constants/tipo-documento')
 
@@ -753,4 +1102,83 @@ describe('generateContanetExcel — formato según el modo de la empresa', () =>
       expect(ws['Q9'].v).toBe('PEAJE & <CIA>')
     }
   )
+})
+
+describe('AccountingEntriesService — multimoneda (comprobante en USD)', () => {
+  const service = newService()
+  const config = {
+    ...makeConfig(),
+    monedaBase: 'PEN',
+    supportedCurrencies: [
+      { code: 'PEN', symbol: 'S/', contanetCode: '01', decimals: 2, approvalThresholdL1: 500 },
+      { code: 'USD', symbol: '$', contanetCode: '02', decimals: 2, approvalThresholdL1: 150 },
+    ],
+  }
+  const categoryMap = new Map<string, any>([
+    ['cat1', { _id: 'cat1', cuenta: '91.3.1.410', cuentaDestino6x: '63.1.4.100' }],
+  ])
+  const projectMap = new Map<string, any>()
+  // Factura de USD 100, congelada con TC 3.8 al registrar (fecha de emisión) →
+  // montoBase = 380 soles. El TC "del día" en rateMap es distinto (3.5) para
+  // comprobar que se usa el TC CONGELADO del comprobante, no el del día.
+  const FROZEN_TC = 3.8
+  const expense = {
+    _id: 'eUSD',
+    proyectId: 'p1',
+    categoryId: 'cat1',
+    total: 100,
+    moneda: 'USD',
+    montoBase: 380,
+    tipoCambio: FROZEN_TC,
+    igv: 0,
+    tasaIgv: 18,
+    comentario: 'Software',
+    data: JSON.stringify({ serie: 'F001', correlativo: '00000099' }),
+    comprobanteDetallado: {
+      emisor: { ruc: '20999999999', razonSocial: 'ACME INC' },
+      comprobante: { serie: 'F001', correlativo: '00000099' },
+      totales: { operacionGravada: 100, igv: 0, importeTotal: 100 },
+    },
+  }
+  const rateMap = new Map<string, number>([['2026-04-15', TC]]) // TC del día = 3.5 (≠ FROZEN_TC)
+
+  let lines: ContanetLine[]
+  beforeAll(async () => {
+    lines = await (service as any).buildCompraLines({
+      report: { createdAt: new Date('2026-04-15') },
+      config,
+      expenses: [expense],
+      projectMap,
+      categoryMap,
+      periodDate: new Date('2026-04-01'),
+      rateMap,
+      cargosMap: new Map(),
+      warnings: [],
+    })
+  })
+
+  it('mdaOrigen resuelve al código Contanet de USD (02), no al de la config (01)', () => {
+    expect(lines.every(l => l.mdaOrigen === '02')).toBe(true)
+  })
+
+  it('cambioMoneda usa el TC CONGELADO del comprobante, no el TC del día', () => {
+    expect(lines.every(l => l.cambioMoneda === FROZEN_TC)).toBe(true)
+  })
+
+  it('montoDebe/montoHaber (moneda registro = soles) usan montoBase, no el total original en USD', () => {
+    const l42 = lines.find(l => l.nroCuenta === '42.1.2.100')!
+    expect(l42.montoHaber).toBe(380) // 100 USD * 3.8, NO 100
+  })
+
+  it('montoDebeME/montoHaberME llevan el monto ORIGINAL en USD (sin re-dividir)', () => {
+    const l42 = lines.find(l => l.nroCuenta === '42.1.2.100')!
+    expect(l42.montoHaberME).toBe(100)
+    const l9x = lines.find(l => l.nroCuenta === '91.3.1.410')!
+    expect(l9x.montoDebeME).toBe(100)
+  })
+
+  it('cuadra: Σ Debe = Σ Haber en soles', () => {
+    expect(sum(lines, 'montoDebe')).toBe(sum(lines, 'montoHaber'))
+    expect(service.validateCuadre(lines)).toHaveLength(0)
+  })
 })

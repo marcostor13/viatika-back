@@ -20,7 +20,7 @@ import { Roles } from '../auth/decorators/roles.decorador'
 import { AuditLogService } from '../audit-log/audit-log.service'
 
 @Controller('accounting-config')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard)
 export class AccountingConfigController {
   private readonly logger = new Logger(AccountingConfigController.name)
 
@@ -29,7 +29,22 @@ export class AccountingConfigController {
     private readonly auditLogService: AuditLogService
   ) {}
 
+  /**
+   * Monedas soportadas por la empresa (para poblar selectores de moneda en
+   * formularios de gasto/anticipo). Accesible a cualquier usuario autenticado
+   * — a diferencia de `findOne`, no expone cuentas contables ni bancos.
+   */
+  @Get(':clientId/currencies')
+  async getCurrencies(@Param('clientId') clientId: string) {
+    const config = await this.accountingConfigService.getEffective(clientId)
+    return {
+      monedaBase: config.monedaBase,
+      supportedCurrencies: config.supportedCurrencies,
+    }
+  }
+
   @Get(':clientId')
+  @UseGuards(RolesGuard)
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   async findOne(@Param('clientId') clientId: string) {
     try {
@@ -48,6 +63,7 @@ export class AccountingConfigController {
 
   /** Upsert de la configuración contable de la empresa. */
   @Put(':clientId')
+  @UseGuards(RolesGuard)
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD)
   async upsert(
     @Param('clientId') clientId: string,

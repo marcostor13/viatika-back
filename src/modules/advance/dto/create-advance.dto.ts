@@ -48,6 +48,10 @@ export class CreateAdvanceDto {
   amount: number
 
   @IsString()
+  @IsOptional()
+  moneda?: string
+
+  @IsString()
   @IsNotEmpty()
   description: string
 

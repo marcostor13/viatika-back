@@ -1,29 +1,15 @@
 import * as fs from 'fs'
 import * as path from 'path'
-import * as ExcelJS from 'exceljs'
 import JSZip = require('jszip')
-import {
-  CONTANET_COLUMNS,
-  ContanetLine,
-  FIRST_DATA_COL_INDEX,
-  COL_GRUPO,
-  COL_OBLIGATORIO,
-  COL_TIPO_DATO,
-  COL_CARACTERES,
-} from './contanet-columns'
+import { CONTANET_COLUMNS, ContanetLine, FIRST_DATA_COL_INDEX } from './contanet-columns'
 import { AsientoTipo } from './accounting-entries.types'
-
-/** Formato de salida del archivo de asientos, configurable por empresa. */
-export type ExcelOutputMode = 'template' | 'styled'
 
 export interface ContanetFile {
   buffer: Buffer
-  ext: 'xlsx' | 'xlsm'
+  ext: 'xlsm'
   contentType: string
 }
 
-const XLSX_CONTENT_TYPE =
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 const XLSM_CONTENT_TYPE =
   'application/vnd.ms-excel.sheet.macroEnabled.12'
 
@@ -65,165 +51,31 @@ function readTemplateBuffer(templatePath: string): Buffer {
   return buffer
 }
 
-/**
- * Construye la matriz (array de arrays) que replica la hoja `sheet1` del template
- * de Contanet: encabezados en filas 2-8 y datos a partir de la fila 9.
- * El índice 0 del arreglo exterior es la fila 1 (vacía).
- * Usado como fallback cuando no hay template disponible.
- */
-export function buildContanetAoa(lines: ContanetLine[]): (string | number)[][] {
-  const totalCols = FIRST_DATA_COL_INDEX + CONTANET_COLUMNS.length
-  const emptyRow = (): (string | number)[] => new Array(totalCols).fill('')
-
-  const aoa: (string | number)[][] = []
-
-  // Fila 1: vacía
-  aoa.push(emptyRow())
-
-  // Fila 2: zona a importar
-  const row2 = emptyRow()
-  row2[1] = 'Zona Límite a  Importar' // B
-  row2[2] = 'CONTABILIDAD' // C
-  aoa.push(row2)
-
-  // Fila 3: información obligatoria (marca «(*)» por columna)
-  const row3 = emptyRow()
-  row3[2] = 'Información Obligatoria'
-  CONTANET_COLUMNS.forEach((c, i) => {
-    if (COL_OBLIGATORIO.has(c.key)) row3[FIRST_DATA_COL_INDEX + i] = '(*)'
-  })
-  aoa.push(row3)
-
-  // Fila 4: tipo de dato por columna
-  const row4 = emptyRow()
-  row4[2] = 'Tipo de Dato'
-  CONTANET_COLUMNS.forEach((c, i) => {
-    row4[FIRST_DATA_COL_INDEX + i] = COL_TIPO_DATO[c.key] ?? 'Texto'
-  })
-  aoa.push(row4)
-
-  // Fila 5: cantidad de caracteres por columna
-  const row5 = emptyRow()
-  row5[2] = 'Cantidad Caracteres'
-  CONTANET_COLUMNS.forEach((c, i) => {
-    const v = COL_CARACTERES[c.key]
-    if (v !== undefined) row5[FIRST_DATA_COL_INDEX + i] = v
-  })
-  aoa.push(row5)
-
-  // Fila 6: descripción / grupos (etiqueta al inicio de cada grupo)
-  const row6 = emptyRow()
-  row6[2] = 'Descripción'
-  CONTANET_COLUMNS.forEach((c, i) => {
-    if (COL_GRUPO[c.key]) row6[FIRST_DATA_COL_INDEX + i] = COL_GRUPO[c.key]
-  })
-  aoa.push(row6)
-
-  // Fila 7: encabezados amigables
-  const row7 = emptyRow()
-  CONTANET_COLUMNS.forEach((c, i) => {
-    row7[FIRST_DATA_COL_INDEX + i] = c.h7
-  })
-  aoa.push(row7)
-
-  // Fila 8: encabezados técnicos
-  const row8 = emptyRow()
-  CONTANET_COLUMNS.forEach((c, i) => {
-    row8[FIRST_DATA_COL_INDEX + i] = c.h8
-  })
-  aoa.push(row8)
-
-  // Filas 9+: datos
-  for (const line of lines) {
-    const row = emptyRow()
-    CONTANET_COLUMNS.forEach((c, i) => {
-      const v = line[c.key]
-      row[FIRST_DATA_COL_INDEX + i] = v === undefined || v === null ? '' : v
-    })
-    aoa.push(row)
-  }
-
-  return aoa
-}
-
 // ---------------------------------------------------------------------------
-// Punto de entrada: elige la solución según la configuración de la empresa.
+// Punto de entrada: siempre el .xlsm IDÉNTICO al template de Contanet (macros,
+// estilos y todas las hojas intactas). Se logra por "cirugía de ZIP": se abre
+// el .xlsm, se reemplazan SOLO las filas de datos de la hoja CONTABILIDAD y se
+// re-empaqueta dejando el resto byte-a-byte. No existe una ruta alterna en
+// .xlsx: si el template no está disponible en el servidor, se lanza un error
+// explícito en vez de degradar silenciosamente a un archivo con otra
+// estructura (sin macros ni hojas TABLAS/ImportCONTABILIDAD).
 // ---------------------------------------------------------------------------
-
-/**
- * Genera el archivo de asientos en el formato configurado por la empresa:
- *
- *  - `template`: **.xlsm IDÉNTICO al template** de Contanet (macros, estilos y
- *    todas las hojas intactas). Se logra por "cirugía de ZIP": se abre el .xlsm,
- *    se reemplazan SOLO las filas de datos de la hoja CONTABILIDAD y se re-empaqueta
- *    dejando el resto byte-a-byte. Rápido (~90 ms) porque NO re-serializa la hoja
- *    basura de 16k columnas ni el binario de macros.
- *
- *  - `styled` (por defecto): **.xlsx liviano con cabeceras estilizadas** (negrita,
- *    fondo, bordes) generado desde cero con ExcelJS. Sin macros ni hoja basura.
- *    Muy rápido (~30 ms). Mismos datos y estructura que sheet1.
- *
- * Ambos son ~100x más rápidos que la vieja ruta de cargar el template con ExcelJS
- * (que costaba 8-15 s por tipo por re-serializar la hoja de 16k columnas).
- */
 export async function generateContanetExcel(
   lines: ContanetLine[],
-  tipo: AsientoTipo | undefined,
-  mode: ExcelOutputMode
+  tipo: AsientoTipo | undefined
 ): Promise<ContanetFile> {
-  if (mode === 'template') {
-    const xlsm = await buildContanetXlsm(lines, tipo)
-    if (xlsm) return { buffer: xlsm, ext: 'xlsm', contentType: XLSM_CONTENT_TYPE }
-    // Sin template disponible → cae a la ruta estilizada (no rompe la generación).
+  const xlsm = await buildContanetXlsm(lines, tipo)
+  if (!xlsm) {
+    throw new Error(
+      `No se encontró la plantilla Contanet (.xlsm) en el servidor para el tipo "${tipo}". ` +
+      'Verifica que exista en src/docs/asientos/ (o dist/docs/asientos/ tras el build).'
+    )
   }
-  const buffer = await buildContanetStyledXlsx(lines)
-  return { buffer, ext: 'xlsx', contentType: XLSX_CONTENT_TYPE }
+  return { buffer: xlsm, ext: 'xlsm', contentType: XLSM_CONTENT_TYPE }
 }
 
 // ---------------------------------------------------------------------------
-// Solución "styled": .xlsx liviano con cabeceras estilizadas (ExcelJS desde cero)
-// ---------------------------------------------------------------------------
-
-const HEADER_FILL: ExcelJS.Fill = {
-  type: 'pattern',
-  pattern: 'solid',
-  fgColor: { argb: 'FFE8EDF3' },
-}
-const HEADER_BORDER: Partial<ExcelJS.Borders> = {
-  top: { style: 'thin', color: { argb: 'FFB8C4D0' } },
-  bottom: { style: 'thin', color: { argb: 'FFB8C4D0' } },
-  left: { style: 'thin', color: { argb: 'FFB8C4D0' } },
-  right: { style: 'thin', color: { argb: 'FFB8C4D0' } },
-}
-
-export async function buildContanetStyledXlsx(
-  lines: ContanetLine[],
-  sheetName = 'CONTABILIDAD'
-): Promise<Buffer> {
-  const wb = new ExcelJS.Workbook()
-  const ws = wb.addWorksheet(sheetName)
-  const aoa = buildContanetAoa(lines)
-  // addRow por fila: aoa[0] = fila 1, cada arreglo arranca en la columna A.
-  for (const rowArr of aoa) ws.addRow(rowArr)
-
-  // Estilo de cabeceras (filas 2-8): negrita, fondo, bordes, centrado.
-  for (let r = 2; r <= 8; r++) {
-    const row = ws.getRow(r)
-    row.eachCell({ includeEmpty: false }, cell => {
-      cell.font = { bold: true, size: 9 }
-      cell.fill = HEADER_FILL
-      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
-      cell.border = HEADER_BORDER
-    })
-  }
-  ws.views = [{ state: 'frozen', ySplit: 8 }]
-
-  const raw = await wb.xlsx.writeBuffer()
-  return Buffer.from(raw as ArrayBuffer)
-}
-
-// ---------------------------------------------------------------------------
-// Solución "template": .xlsm idéntico vía cirugía de ZIP
+// .xlsm idéntico al template vía cirugía de ZIP
 // ---------------------------------------------------------------------------
 
 function colLetter(n: number): string {
@@ -271,8 +123,9 @@ async function resolveContabilidadSheet(zip: JSZip): Promise<string | null> {
 
 /**
  * Genera el .xlsm idéntico al template reemplazando solo las filas de datos de
- * la hoja CONTABILIDAD. Devuelve null si no hay template para el tipo (el
- * dispatcher cae entonces a la ruta estilizada).
+ * la hoja CONTABILIDAD. Devuelve null si no hay template para el tipo o el
+ * archivo no tiene la estructura esperada; `generateContanetExcel` lo
+ * convierte en un error explícito (no hay ruta alterna en .xlsx).
  */
 export async function buildContanetXlsm(
   lines: ContanetLine[],

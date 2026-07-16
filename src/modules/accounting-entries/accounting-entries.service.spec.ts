@@ -1,10 +1,6 @@
 import { AccountingEntriesService } from './accounting-entries.service'
 import { ContanetLine, toExcelSerial } from './entities/contanet-columns'
-import {
-  buildContanetAoa,
-  generateContanetExcel,
-  resolveTemplatePath,
-} from './entities/contanet-export'
+import { generateContanetExcel, resolveTemplatePath } from './entities/contanet-export'
 import * as XLSX from 'xlsx'
 
 /**
@@ -1023,78 +1019,22 @@ describe('resolveCodTipDoc — catálogo codigos.md', () => {
   })
 })
 
-describe('Export Contanet — cabeceras (replica sheet1)', () => {
-  // Datos en fila 9 (índice 8): fila1..fila8 son cabeceras.
-  const aoa = buildContanetAoa([{ correlativo: 1, relacionado: 1 }])
-  const D = 3 // índice columna D
-
-  it('fila 2: zona a importar', () => {
-    expect(aoa[1][1]).toBe('Zona Límite a  Importar')
-    expect(aoa[1][2]).toBe('CONTABILIDAD')
-  })
-
-  it('fila 3: obligatorio (*) en columnas clave', () => {
-    expect(aoa[2][D]).toBe('(*)') // Correlativo
-    expect(aoa[2][D + 1]).toBe('(*)') // Relacionado
-  })
-
-  it('fila 4: tipo de dato (Correlativo=Entero, Monto Debe=Decimal)', () => {
-    expect(aoa[3][D]).toBe('Entero')
-    expect(aoa[3][D + 42]).toBe('Decimal') // montoDebe (col AT)
-  })
-
-  it('fila 5: cantidad de caracteres (Nro Cuenta=50)', () => {
-    expect(aoa[4][D + 8]).toBe('50') // nroCuenta (col L)
-  })
-
-  it('fila 6: grupos', () => {
-    expect(aoa[5][D]).toBe('Codigo Correlativo cabecera')
-    expect(aoa[5][D + 1]).toBe('INFORMACIÓN GENERAL')
-  })
-
-  it('fila 7 y 8: encabezados', () => {
-    expect(aoa[6][D]).toBe('Correlativo')
-    expect(aoa[6][D + 1]).toBe('Relacionado')
-    expect(aoa[7][D + 5]).toBe('Cod_MR') // h8 de codModulo (col I)
-  })
-
-  it('los datos empiezan en la fila 9 (índice 8)', () => {
-    expect(aoa[8][D]).toBe(1)
-    expect(aoa[8][D + 1]).toBe(1)
-  })
-})
-
-describe('generateContanetExcel — formato según el modo de la empresa', () => {
+describe('generateContanetExcel — siempre .xlsm desde el template (sin ruta .xlsx)', () => {
   const lines: ContanetLine[] = [
     { correlativo: 1, relacionado: 1, nroCuenta: '91.3.1.513', glosa: 'PEAJE & <CIA>', montoDebe: 5.34 },
     { correlativo: 2, relacionado: 1, nroCuenta: '42.1.2.100', glosa: 'PEAJE', montoHaber: 5.34 },
   ]
 
-  it('modo "styled": .xlsx con content-type xlsx y datos legibles en fila 9', async () => {
-    const res = await generateContanetExcel(lines, 'compra', 'styled')
-    expect(res.ext).toBe('xlsx')
-    expect(res.contentType).toContain('spreadsheetml.sheet')
-    const wb = XLSX.read(res.buffer)
-    const ws = wb.Sheets['CONTABILIDAD']
-    expect(ws['D9'].v).toBe(1)
-    expect(ws['L9'].v).toBe('91.3.1.513')
-  })
-
-  it('modo "template" sin plantilla para el tipo: cae a .xlsx (no rompe)', async () => {
-    // `undefined` tipo → no hay template → fallback a la ruta estilizada.
-    const res = await generateContanetExcel(lines, undefined, 'template')
-    expect(res.ext).toBe('xlsx')
-  })
-
   // El .xlsm idéntico depende de que la plantilla esté en dist/ (nest build).
   const hasTemplate = !!resolveTemplatePath('compra')
   ;(hasTemplate ? it : it.skip)(
-    'modo "template" con plantilla: .xlsm con macros y datos correctos + escapado XML',
+    '.xlsm con macros, hojas intactas, datos correctos y escapado XML',
     async () => {
-      const res = await generateContanetExcel(lines, 'compra', 'template')
+      const res = await generateContanetExcel(lines, 'compra')
       expect(res.ext).toBe('xlsm')
       expect(res.contentType).toContain('macroEnabled')
       const wb = XLSX.read(res.buffer, { bookVBA: true })
+      expect(wb.SheetNames).toEqual(['CONTABILIDAD', 'ImportCONTABILIDAD', 'TABLAS'])
       expect(wb.vbaraw).toBeTruthy() // macros preservadas
       const ws = wb.Sheets['CONTABILIDAD']
       expect(ws['D9'].v).toBe(1)
@@ -1102,6 +1042,13 @@ describe('generateContanetExcel — formato según el modo de la empresa', () =>
       expect(ws['Q9'].v).toBe('PEAJE & <CIA>')
     }
   )
+
+  it('sin plantilla para el tipo: lanza en vez de degradar a .xlsx', async () => {
+    // `undefined` tipo → no hay template → ya no existe ruta estilizada de fallback.
+    await expect(generateContanetExcel(lines, undefined)).rejects.toThrow(
+      'No se encontró la plantilla Contanet'
+    )
+  })
 })
 
 describe('AccountingEntriesService — multimoneda (comprobante en USD)', () => {

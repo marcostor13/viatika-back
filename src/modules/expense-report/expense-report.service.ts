@@ -853,7 +853,11 @@ export class ExpenseReportService implements OnModuleInit {
   async findOne(id: string) {
     const report = await this.expenseReportModel
       .findById(id)
-      .populate('userId', 'name email signature bankAccount dni')
+      .populate({
+        path: 'userId',
+        select: 'name email signature bankAccount dni',
+        populate: { path: 'roleId', select: 'name' },
+      })
       .populate({
         path: 'expenseIds',
         populate: [

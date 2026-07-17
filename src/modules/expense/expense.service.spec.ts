@@ -119,6 +119,143 @@ describe('ExpenseService — email gating (isEmailEnabled)', () => {
   })
 })
 
+describe('ExpenseService — createDeclaracionJurada', () => {
+  let service: ExpenseService
+
+  const mockExpenseModel = {
+    create: jest.fn(),
+  }
+  const mockExpenseReportService = {
+    assertReportNotLockedByCajaChica: jest.fn().mockResolvedValue(undefined),
+    addExpenseToReport: jest.fn().mockResolvedValue(undefined),
+  }
+  const mockUserService = {
+    findEmailNameClient: jest.fn(),
+  }
+  const mockCategoryService = {
+    findOne: jest.fn().mockResolvedValue(null),
+  }
+
+  beforeEach(async () => {
+    jest.clearAllMocks()
+    mockUserService.findEmailNameClient.mockResolvedValue({
+      email: 'user@test.com',
+      name: 'Juan Perez',
+      clientId: new Types.ObjectId(),
+    })
+    mockExpenseModel.create.mockImplementation((doc: any) =>
+      Promise.resolve({ ...doc, _id: new Types.ObjectId() })
+    )
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ExpenseService,
+        {
+          provide: ConfigService,
+          useValue: { get: jest.fn().mockReturnValue('sk-test') },
+        },
+        { provide: getModelToken(Expense.name), useValue: mockExpenseModel },
+        { provide: getModelToken(Client.name), useValue: {} },
+        { provide: EmailService, useValue: {} },
+        { provide: ProjectService, useValue: {} },
+        { provide: UserService, useValue: mockUserService },
+        { provide: SunatConfigService, useValue: {} },
+        { provide: HttpService, useValue: {} },
+        { provide: UploadService, useValue: {} },
+        { provide: ExpenseReportService, useValue: mockExpenseReportService },
+        {
+          provide: NotificationsService,
+          useValue: { create: jest.fn().mockResolvedValue(undefined) },
+        },
+        { provide: CategoryService, useValue: mockCategoryService },
+        {
+          provide: CurrencyService,
+          useValue: {
+            getConfig: jest.fn().mockResolvedValue({ monedaBase: 'PEN', supportedCurrencies: [] }),
+            toBase: jest.fn().mockResolvedValue({ montoBase: 0, tipoCambio: 1, tcFecha: '2026-01-01' }),
+          },
+        },
+      ],
+    }).compile()
+
+    service = module.get<ExpenseService>(ExpenseService)
+  })
+
+  const clientId = new Types.ObjectId().toHexString()
+  const proyectId = new Types.ObjectId().toHexString()
+  const alimentacionCategoryId = new Types.ObjectId().toHexString()
+  const movilidadCategoryId = new Types.ObjectId().toHexString()
+
+  const basePayload = {
+    proyectId,
+    clientId,
+    userId: new Types.ObjectId().toHexString(),
+    moneda: 'USD',
+    destino: 'Quito',
+    pais: 'Ecuador',
+    lugarFirma: 'Pucallpa',
+    alimentacion: {
+      categoryId: alimentacionCategoryId,
+      rows: [
+        { fecha: '23/02/2026', monto: 55 },
+        { fecha: '24/02/2026', monto: 55 },
+      ],
+    },
+    movilidad: {
+      categoryId: movilidadCategoryId,
+      rows: [{ fecha: '23/02/2026', monto: 35 }],
+    },
+  } as any
+
+  it('crea un gasto por cada rubro presente, vinculados por el mismo groupId', async () => {
+    const result = await service.createDeclaracionJurada(basePayload)
+
+    expect(result.expenses).toHaveLength(2)
+    expect(mockExpenseModel.create).toHaveBeenCalledTimes(2)
+    expect(mockExpenseReportService.addExpenseToReport).not.toHaveBeenCalled()
+
+    const [alimentacionExpense, movilidadExpense] = result.expenses as any[]
+    expect(alimentacionExpense.declaracionJuradaGroupId).toBe(result.groupId)
+    expect(movilidadExpense.declaracionJuradaGroupId).toBe(result.groupId)
+    expect(alimentacionExpense.total).toBeCloseTo(110)
+    expect(movilidadExpense.total).toBeCloseTo(35)
+    expect(alimentacionExpense.subTipo).toBe('DJ')
+    expect(alimentacionExpense.declaracionJurada).toBe(true)
+    expect(alimentacionExpense.declaracionJuradaFirmante).toBe('Juan Perez')
+    expect(alimentacionExpense.file).toBeUndefined()
+  })
+
+  it('permite un solo rubro (movilidad) sin exigir alimentación', async () => {
+    const { alimentacion, ...payload } = basePayload
+    void alimentacion
+    const result = await service.createDeclaracionJurada(payload)
+
+    expect(result.expenses).toHaveLength(1)
+    expect((result.expenses[0] as any).declaracionJuradaMoneda).toBe('USD')
+  })
+
+  it('rechaza cuando no se envía ninguna fila en ningún rubro', async () => {
+    const payload = { proyectId, clientId, moneda: 'USD' } as any
+    await expect(service.createDeclaracionJurada(payload)).rejects.toThrow(
+      'Debes ingresar al menos un gasto de Alimentación o Movilidad'
+    )
+  })
+
+  it('el adjunto es opcional: sin imageUrl, file queda undefined', async () => {
+    const result = await service.createDeclaracionJurada(basePayload)
+    for (const expense of result.expenses as any[]) {
+      expect(expense.file).toBeUndefined()
+    }
+  })
+
+  it('vincula los gastos a la rendición cuando se envía expenseReportId', async () => {
+    const expenseReportId = new Types.ObjectId().toHexString()
+    await service.createDeclaracionJurada({ ...basePayload, expenseReportId })
+
+    expect(mockExpenseReportService.addExpenseToReport).toHaveBeenCalledTimes(2)
+  })
+})
+
 describe('ExpenseService — Fase 5 (plazos y límites de categoría)', () => {
   let service: ExpenseService
 

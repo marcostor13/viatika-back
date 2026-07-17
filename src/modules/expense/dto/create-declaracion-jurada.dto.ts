@@ -64,7 +64,15 @@ export class CreateDeclaracionJuradaDto {
 
   @IsString()
   @IsOptional()
+  pais?: string
+
+  @IsString()
+  @IsOptional()
   lugarFirma?: string
+
+  @IsString()
+  @IsOptional()
+  imageUrl?: string
 
   @ValidateNested()
   @Type(() => DeclaracionJuradaSeccionDto)

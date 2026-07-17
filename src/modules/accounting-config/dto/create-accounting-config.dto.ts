@@ -111,10 +111,6 @@ export class CreateAccountingConfigDto {
   cuentaReembolso?: '14' | '46'
 
   @IsOptional()
-  @IsIn(['styled', 'template'])
-  excelOutputMode?: 'styled' | 'template'
-
-  @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => BankAccountDto)

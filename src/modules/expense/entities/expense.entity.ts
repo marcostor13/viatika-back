@@ -147,8 +147,10 @@ export interface ExpenseDocument extends Document {
    * en pantalla y al regenerar el PDF.
    */
   declaracionJuradaGroupId?: string
-  /** Ciudad/país del viaje (viajes al exterior) o lugar del viático. */
+  /** Ciudad de destino del viaje (viajes al exterior) o lugar del viático. */
   declaracionJuradaDestino?: string
+  /** País de destino del viaje (viajes al exterior). */
+  declaracionJuradaPais?: string
   /** Ciudad donde se firma la declaración. */
   declaracionJuradaLugarFirma?: string
   reviewHistory?: ExpenseReviewHistory[]
@@ -357,6 +359,9 @@ export class Expense {
 
   @Prop({ type: String, required: false })
   declaracionJuradaDestino?: string
+
+  @Prop({ type: String, required: false })
+  declaracionJuradaPais?: string
 
   @Prop({ type: String, required: false })
   declaracionJuradaLugarFirma?: string

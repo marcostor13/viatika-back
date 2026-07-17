@@ -9,6 +9,10 @@ import {
 } from '@nestjs/common'
 import { CreateExpenseDto } from './dto/create-expense.dto'
 import { UpdateExpenseDto } from './dto/update-expense.dto'
+import {
+  CreateDeclaracionJuradaDto,
+  DeclaracionJuradaSeccionDto,
+} from './dto/create-declaracion-jurada.dto'
 import { ConfigService } from '@nestjs/config'
 import { Model, Types } from 'mongoose'
 import { Expense } from './entities/expense.entity'
@@ -508,25 +512,12 @@ export class ExpenseService {
     expenseType: 'planilla_movilidad' | 'comprobante_caja',
     expenseReportId?: string
   ): Promise<string> {
-    // La rendición completa es UNA sola planilla de movilidad física (el PDF
-    // ya consolida todas sus filas en una sola hoja). Si el colaborador
-    // agrega varias planillas a la misma rendición, deben compartir el mismo
-    // número en vez de incrementar uno nuevo por cada expense — de lo
-    // contrario el asiento contable de Aplicación referenciaría varios
-    // "Numero Documento" para lo que Contabilidad ve como un solo documento.
-    if (expenseType === 'planilla_movilidad' && expenseReportId) {
-      const existing = await this.expenseRepository
-        .findOne({
-          expenseReportId: new Types.ObjectId(expenseReportId),
-          expenseType: 'planilla_movilidad',
-          internalCode: { $exists: true, $ne: null },
-        })
-        .sort({ createdAt: 1 })
-        .lean()
-        .exec()
-      if (existing?.internalCode) return existing.internalCode
-    }
-
+    // Cada planilla de movilidad es un documento independiente con su propio
+    // correlativo (AML012, AML013, ...), aunque el colaborador cargue varias
+    // en la misma rendición. Así el reporte las diferencia y el asiento
+    // contable de Aplicación emite cada bloque de S/40 con el "Numero
+    // Documento" de la planilla a la que pertenece (ver buildMovilidadBlocks
+    // en accounting-entries.service.ts).
     const ownerUserId = await this.resolveOwnerUserId(userId, expenseReportId)
     if (!ownerUserId) return `USR001`
     const user = await this.userService.findOne(ownerUserId)
@@ -1586,6 +1577,115 @@ export class ExpenseService {
     }
 
     return expense
+  }
+
+  /**
+   * Declaración Jurada para sustentar viáticos por Alimentación y/o Movilidad
+   * sin comprobante del proveedor (inciso r) art. 37° TUO LIR). Crea un gasto
+   * `otros_gastos`/`DJ` por cada rubro presente (Alimentación / Movilidad),
+   * vinculados por `declaracionJuradaGroupId` para tratarse como un solo
+   * documento firmado en pantalla y al generar el PDF.
+   */
+  async createDeclaracionJurada(
+    body: CreateDeclaracionJuradaDto
+  ): Promise<{ groupId: string; expenses: Expense[] }> {
+    if (!body.clientId) {
+      throw new HttpException('clientId es requerido', HttpStatus.BAD_REQUEST)
+    }
+    await this.expenseReportService.assertReportNotLockedByCajaChica(
+      body.expenseReportId
+    )
+
+    const secciones: Array<{
+      seccion: DeclaracionJuradaSeccionDto
+      rubro: 'alimentacion' | 'movilidad'
+    }> = []
+    if (body.alimentacion?.rows?.length) {
+      secciones.push({ seccion: body.alimentacion, rubro: 'alimentacion' })
+    }
+    if (body.movilidad?.rows?.length) {
+      secciones.push({ seccion: body.movilidad, rubro: 'movilidad' })
+    }
+    if (secciones.length === 0) {
+      throw new HttpException(
+        'Debes ingresar al menos un gasto de Alimentación o Movilidad',
+        HttpStatus.BAD_REQUEST
+      )
+    }
+
+    const firmante = body.userId
+      ? (await this.userService.findEmailNameClient(body.userId))?.name
+      : undefined
+
+    const groupId = new Types.ObjectId().toString()
+    const expenses: Expense[] = []
+
+    for (const { seccion, rubro } of secciones) {
+      const total = seccion.rows.reduce((sum, row) => sum + (row.monto || 0), 0)
+      const earliestDate = seccion.rows
+        .map(r => this.parseExpenseDate(r.fecha))
+        .filter((d): d is Date => d !== null)
+        .sort((a, b) => a.getTime() - b.getTime())[0]
+      const deadlineMeta = this.evaluateDeadline(
+        earliestDate ? earliestDate.toISOString().slice(0, 10) : undefined
+      )
+      const categoryMeta = await this.evaluateCategoryLimit(
+        {
+          categoryId: seccion.categoryId,
+          clientId: body.clientId,
+          expenseReportId: body.expenseReportId,
+        } as CreateExpenseDto,
+        total
+      )
+
+      const expense = await this.expenseRepository.create({
+        categoryId: new Types.ObjectId(seccion.categoryId),
+        proyectId: new Types.ObjectId(body.proyectId),
+        clientId: body.clientId,
+        expenseReportId: body.expenseReportId
+          ? new Types.ObjectId(body.expenseReportId)
+          : undefined,
+        total,
+        expenseType: 'otros_gastos',
+        subTipo: 'DJ',
+        file: body.imageUrl || undefined,
+        status: 'pending',
+        createdBy: body.userId || 'system',
+        fechaEmision: earliestDate
+          ? this.normalizeFechaEmisionValue(earliestDate)
+          : undefined,
+        observado: deadlineMeta.observado,
+        observacionPlazo: deadlineMeta.observacionPlazo,
+        diasRetraso: deadlineMeta.diasRetraso,
+        categoryLimitPercent: categoryMeta.percent,
+        categoryLimitWarning: categoryMeta.warning,
+        declaracionJurada: true,
+        declaracionJuradaFirmante: firmante,
+        declaracionJuradaRows: seccion.rows,
+        declaracionJuradaMoneda: body.moneda,
+        declaracionJuradaGroupId: groupId,
+        declaracionJuradaDestino: body.destino,
+        declaracionJuradaPais: body.pais,
+        declaracionJuradaLugarFirma: body.lugarFirma,
+        data: JSON.stringify({
+          type: 'otros_gastos',
+          subTipo: 'DJ',
+          rubro,
+          rows: seccion.rows,
+        }),
+      })
+
+      if (body.expenseReportId) {
+        await this.expenseReportService.addExpenseToReport(
+          body.expenseReportId,
+          (expense as any)._id.toString()
+        )
+      }
+
+      expenses.push(expense)
+    }
+
+    return { groupId, expenses }
   }
 
   async createCashReceiptExpense(body: CreateExpenseDto): Promise<Expense> {

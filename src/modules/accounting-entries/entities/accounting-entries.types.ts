@@ -46,7 +46,11 @@ export interface AccountingEntryStatusDto {
   /** El archivo listo ya no refleja el estado actual de la rendición. */
   stale?: boolean
   completedAt?: Date
-  /** No se puede (re)generar ahora por el estado de la rendición (no cerrada). */
+  /**
+   * Reservado para un futuro bloqueo de generación. Actualmente siempre `false`:
+   * todos los tipos de asiento se pueden generar sin importar el estado de la
+   * rendición (ya no existe la restricción "solo si está cerrada").
+   */
   blocked?: boolean
   /** Motivo del bloqueo, para mostrar al usuario. */
   blockedReason?: string

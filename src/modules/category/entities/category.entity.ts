@@ -13,6 +13,12 @@ export interface CategoryDocument extends Document {
   observaciones?: string
   isActive: boolean
   limit: number | null
+  /**
+   * Marca esta categoría como la categoría por defecto de un rubro de Declaración
+   * Jurada (viaje al exterior). Solo una de las dos por perfil de proyecto.
+   * Al crear un gasto DJ se autoselecciona la categoría del proyecto con este flag.
+   */
+  djType?: 'alimentacion' | 'movilidad' | null
   clientId: Types.ObjectId
   createdAt: Date
   updatedAt: Date
@@ -48,6 +54,10 @@ export class Category {
 
   @Prop({ type: Number, default: null })
   limit: number | null
+
+  /** 'alimentacion' | 'movilidad' | null — categoría por defecto del rubro DJ. */
+  @Prop({ type: String, default: null })
+  djType?: 'alimentacion' | 'movilidad' | null
 
   @Prop({ required: true, type: Types.ObjectId, ref: 'Client' })
   clientId: Types.ObjectId

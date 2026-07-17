@@ -29,6 +29,7 @@ export interface ICategoryItem {
   observaciones?: string
   isActive: boolean
   limit: number | null
+  djType?: 'alimentacion' | 'movilidad' | null
   clientId: Types.ObjectId
   createdAt: Date
   updatedAt: Date
@@ -107,6 +108,7 @@ export class CategoryService {
           observaciones: d.observaciones,
           isActive: d.isActive,
           limit: d.limit ?? null,
+          djType: d.djType ?? null,
           clientId: d.clientId,
           createdAt: d.createdAt,
           updatedAt: d.updatedAt,

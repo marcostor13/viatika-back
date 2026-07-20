@@ -2946,18 +2946,11 @@ export class ExpenseService {
 
     try {
       // Paso 1: obtener razón social fresca para el RUC emisor
-      let updatedData: string | undefined
+      let razonSocialFresca: string | undefined
       if (data.rucEmisor) {
         const { razonSocial } = await this.getRucInfo(data.rucEmisor, clientId)
         if (razonSocial) {
-          let parsed: any = {}
-          try {
-            parsed =
-              typeof expense.data === 'string'
-                ? JSON.parse(expense.data)
-                : (expense.data ?? {})
-          } catch {}
-          updatedData = JSON.stringify({ ...parsed, razonSocial })
+          razonSocialFresca = razonSocial
           this.logger.log(
             `[validateWithSunatData] razonSocial actualizada para RUC ${data.rucEmisor}: ${razonSocial}`
           )
@@ -2969,7 +2962,27 @@ export class ExpenseService {
       const { validation, expenseStatus } =
         await this.validateWithSunatIfPossible(data, clientId, configSunat?.ruc)
 
-      // Paso 3: guardar razón social + resultado de validación en un solo update
+      // Paso 3: guardar razón social + resultado de validación en un solo update.
+      // El bloque `sunatValidation` se refresca también dentro del JSON `data`,
+      // que es de donde lo lee el detalle del comprobante: si solo se escribe
+      // en la raíz, la pantalla sigue mostrando el resultado del registro
+      // inicial y contradice al estado.
+      let parsed: any = {}
+      try {
+        parsed =
+          typeof expense.data === 'string'
+            ? JSON.parse(expense.data)
+            : (expense.data ?? {})
+      } catch {}
+      const updatedData =
+        parsed && typeof parsed === 'object'
+          ? JSON.stringify({
+              ...parsed,
+              ...(razonSocialFresca ? { razonSocial: razonSocialFresca } : {}),
+              sunatValidation: validation,
+            })
+          : undefined
+
       const updateDoc: any = {
         sunatValidation: validation,
         status: expenseStatus,

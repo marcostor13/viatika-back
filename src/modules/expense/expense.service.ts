@@ -1563,6 +1563,7 @@ export class ExpenseService {
         type: 'otros_gastos',
         subTipo,
         description: body.data,
+        fechaEmision: normalizedFecha ?? body.fechaEmision ?? undefined,
         serie: body.serie || undefined,
         correlativo: body.correlativo || undefined,
         rucEmisor: body.rucEmisor || undefined,

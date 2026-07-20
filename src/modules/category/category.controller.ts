@@ -26,6 +26,7 @@ import { Roles } from '../auth/decorators/roles.decorador'
 import { AuthGuard } from '@nestjs/passport'
 import { AuditLogService } from '../audit-log/audit-log.service'
 import { CategoryGroupService } from '../category-group/category-group.service'
+import { UserService } from '../user/user.service'
 
 @UseGuards(AuthGuard('jwt'), RolesGuard)
 @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN)
@@ -34,20 +35,50 @@ export class CategoryController {
   constructor(
     private readonly categoryService: CategoryService,
     private readonly auditLogService: AuditLogService,
-    private readonly categoryGroupService: CategoryGroupService
+    private readonly categoryGroupService: CategoryGroupService,
+    private readonly userService: UserService
   ) {}
 
   /**
    * Categorías permitidas: las categorías asignadas directamente al usuario.
    * El perfil de categoría es solo una referencia (agrupa/deriva proyectos), no se asigna.
    * Sin categorías asignadas => no se filtra (compatibilidad).
+   *
+   * `forUserId` permite a Admin/Contabilidad pedir la lista *del colaborador dueño
+   * del gasto* — al editar un gasto ajeno deben ver lo mismo que vería él, no su
+   * propia asignación. Solo se acepta si el usuario objetivo pertenece al cliente
+   * de quien pregunta (se compara contra el token, no contra el clientId de la
+   * URL, que lo controla el llamante).
    */
   private async resolveAllowedCategoryIds(
     req: any,
-    _clientId: string
+    _clientId: string,
+    forUserId?: string
   ): Promise<string[] | undefined> {
+    const target = forUserId?.trim()
+    if (target && /^[0-9a-fA-F]{24}$/.test(target) && this.canImpersonate(req)) {
+      const owner = await this.userService.findOne(target).catch(() => null)
+      const ownerClientId = (owner as any)?.client?._id ?? (owner as any)?.client
+      const requesterClientId = req?.user?.clientId
+      if (
+        owner?._id &&
+        requesterClientId &&
+        String(ownerClientId) === String(requesterClientId)
+      ) {
+        const ownerIds: string[] = (owner as any)?.permissions?.categoryIds ?? []
+        return ownerIds.length > 0 ? ownerIds.map(String) : undefined
+      }
+    }
     const ids: string[] = req.user?.permissions?.categoryIds ?? []
     return ids.length > 0 ? ids.map(String) : undefined
+  }
+
+  /** Solo los roles que administran gastos ajenos pueden consultar por `forUserId`. */
+  private canImpersonate(req: any): boolean {
+    const roles: string[] = req?.user?.roles ?? []
+    return [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.CONTABILIDAD].some(r =>
+      roles.includes(r)
+    )
   }
 
   @Post()
@@ -160,8 +191,12 @@ export class CategoryController {
 
   @Get(':clientId/flat')
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD)
-  async findAllFlat(@Param('clientId') clientId: string, @Request() req: any) {
-    const filter = await this.resolveAllowedCategoryIds(req, clientId)
+  async findAllFlat(
+    @Param('clientId') clientId: string,
+    @Request() req: any,
+    @Query('forUserId') forUserId?: string
+  ) {
+    const filter = await this.resolveAllowedCategoryIds(req, clientId, forUserId)
     return this.categoryService.findAllFlat(clientId, filter)
   }
 
@@ -169,9 +204,10 @@ export class CategoryController {
   @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR, ROLES.CONTABILIDAD)
   async findAllFlatLegacy(
     @Param('clientId') clientId: string,
-    @Request() req: any
+    @Request() req: any,
+    @Query('forUserId') forUserId?: string
   ) {
-    const filter = await this.resolveAllowedCategoryIds(req, clientId)
+    const filter = await this.resolveAllowedCategoryIds(req, clientId, forUserId)
     return this.categoryService.findAllFlat(clientId, filter)
   }
 

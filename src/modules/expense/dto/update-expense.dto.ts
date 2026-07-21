@@ -34,6 +34,11 @@ export class UpdateExpenseDto {
   @IsOptional()
   fechaEmision?: string
 
+  /** Sub-tipo de `otros_gastos`: TK | BV | RC | DJ | OT. Editable desde el form. */
+  @IsString()
+  @IsOptional()
+  subTipo?: string
+
   @IsString()
   @IsOptional()
   moneda?: string

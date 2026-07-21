@@ -3,13 +3,25 @@ import { Types } from 'mongoose'
 import { CategoryController } from './category.controller'
 import { CategoryService } from './category.service'
 import { AuditLogService } from '../audit-log/audit-log.service'
+import { CategoryGroupService } from '../category-group/category-group.service'
+import { UserService } from '../user/user.service'
+import { ROLES } from '../auth/enums/roles.enum'
 
 const clientId = new Types.ObjectId().toHexString()
 const catId = new Types.ObjectId().toHexString()
 const userId = new Types.ObjectId().toHexString()
+const ownerId = new Types.ObjectId().toHexString()
+const ownerCatId = new Types.ObjectId().toHexString()
 
-const makeReq = () => ({
-  user: { _id: userId, sub: userId, name: 'Admin', email: 'a@a.com', clientId },
+const makeReq = (overrides: Record<string, unknown> = {}) => ({
+  user: {
+    _id: userId,
+    sub: userId,
+    name: 'Admin',
+    email: 'a@a.com',
+    clientId,
+    ...overrides,
+  },
 })
 
 const mockCategoryService = {
@@ -24,6 +36,20 @@ const mockCategoryService = {
 
 const mockAuditLogService = { log: jest.fn().mockResolvedValue(undefined) }
 
+const mockCategoryGroupService = {
+  setCategoryMembership: jest.fn().mockResolvedValue(undefined),
+  findIdsContainingAnyCategory: jest.fn().mockResolvedValue([]),
+}
+
+/** Colaborador dueño del gasto: tiene una categoría asignada y es del mismo cliente. */
+const mockUserService = {
+  findOne: jest.fn().mockResolvedValue({
+    _id: ownerId,
+    client: { _id: clientId },
+    permissions: { categoryIds: [ownerCatId] },
+  }),
+}
+
 describe('CategoryController', () => {
   let controller: CategoryController
 
@@ -34,6 +60,8 @@ describe('CategoryController', () => {
       providers: [
         { provide: CategoryService, useValue: mockCategoryService },
         { provide: AuditLogService, useValue: mockAuditLogService },
+        { provide: CategoryGroupService, useValue: mockCategoryGroupService },
+        { provide: UserService, useValue: mockUserService },
       ],
     }).compile()
     controller = module.get<CategoryController>(CategoryController)
@@ -63,6 +91,46 @@ describe('CategoryController', () => {
         clientId,
         undefined
       )
+    })
+
+    it('con forUserId usa las categorias del dueño del gasto, no las propias', async () => {
+      const req = makeReq({
+        roles: [ROLES.CONTABILIDAD],
+        permissions: { categoryIds: [catId] },
+      })
+      await controller.findAllFlat(clientId, req as never, ownerId)
+      expect(mockUserService.findOne).toHaveBeenCalledWith(ownerId)
+      expect(mockCategoryService.findAllFlat).toHaveBeenCalledWith(clientId, [
+        ownerCatId,
+      ])
+    })
+
+    it('ignora forUserId si el rol no administra gastos ajenos', async () => {
+      const req = makeReq({
+        roles: [ROLES.COLABORADOR],
+        permissions: { categoryIds: [catId] },
+      })
+      await controller.findAllFlat(clientId, req as never, ownerId)
+      expect(mockUserService.findOne).not.toHaveBeenCalled()
+      expect(mockCategoryService.findAllFlat).toHaveBeenCalledWith(clientId, [
+        catId,
+      ])
+    })
+
+    it('ignora forUserId si el usuario objetivo es de otro cliente', async () => {
+      mockUserService.findOne.mockResolvedValueOnce({
+        _id: ownerId,
+        client: { _id: new Types.ObjectId().toHexString() },
+        permissions: { categoryIds: [ownerCatId] },
+      })
+      const req = makeReq({
+        roles: [ROLES.CONTABILIDAD],
+        permissions: { categoryIds: [catId] },
+      })
+      await controller.findAllFlat(clientId, req as never, ownerId)
+      expect(mockCategoryService.findAllFlat).toHaveBeenCalledWith(clientId, [
+        catId,
+      ])
     })
   })
 

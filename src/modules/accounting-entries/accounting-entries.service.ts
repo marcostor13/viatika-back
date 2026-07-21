@@ -1900,54 +1900,107 @@ export class AccountingEntriesService {
     const trabDni = colaborador?.dni || ''
     const trabNombre = colaborador?.name || ''
     const cuenta14 = this.cuenta14(config, colaborador)
-    // Consolidación de la cuenta 14 de las FACTURAS: en vez de una línea 14 por
-    // comprobante (par 42/14), todas las facturas de la rendición comparten UN
-    // solo asiento con una única línea 14 (Haber) por el total rendido. La 42
-    // (Debe) sigue siendo una línea por comprobante con su detalle de proveedor
-    // (el detalle vive en la 42; la 14 solo refleja el total contra el anticipo
-    // del colaborador, igual que la Solicitud lo entrega en un único monto).
-    // Cuadre: Σ(42 Debe) = 14 Haber. Las facturas quedan contiguas en el orden
-    // ordenado (comparten "Codigo Tipo Document" = '01'), así que se acumulan y
-    // la línea 14 se vuelca al terminar su corrida (`flushFacturas`). Fecha /
-    // tipo de cambio / centro de costo de la línea 14 = los de la factura MÁS
-    // RECIENTE por fecha de emisión (decisión del usuario).
-    let facturaRelacionado: number | null = null
-    let facturaTotalPEN = 0
-    let facturaTotalME = 0
-    let facturaLatestDate: Date | null = null
-    let facturaLatestCur: { mdaOrigen: string; cambioMoneda: number } | null =
+    // Consolidación de la cuenta 14 de TODOS los comprobantes de la rendición:
+    // en vez de una línea 14 por comprobante (o por corrida de facturas), la
+    // rendición completa comparte UN solo asiento de CRUCE con una única línea
+    // 14 (Haber) por el TOTAL RENDIDO. Cada comprobante — factura, boleta /
+    // ticket / recibo / otros y cada bloque de movilidad — aporta una línea 42
+    // (Debe) con su detalle de proveedor/documento a ese mismo asiento. La 14
+    // solo refleja la cancelación total de la entrega a rendir (1413) del
+    // colaborador, igual que la Solicitud la entrega en un único monto.
+    // Para los no-factura y la movilidad, esta 42 (Debe) cancela la 42 (Haber)
+    // de provisión que crea su propio bloque de gasto 9X/42/6X/79 (asientos
+    // independientes que cuadran por sí solos). Cuadre del cruce:
+    // Σ(42 Debe) = 14 Haber. Fecha / tipo de cambio / centro de costo de la
+    // línea 14 = los del comprobante MÁS RECIENTE por fecha.
+    let crossingRelacionado: number | null = null
+    let crossingTotalPEN = 0
+    let crossingTotalME = 0
+    let crossingLatestDate: Date | null = null
+    let crossingLatestCur: { mdaOrigen: string; cambioMoneda: number } | null =
       null
-    let facturaLatestProject: any = undefined
-    const flushFacturas = () => {
-      if (facturaRelacionado == null || !facturaLatestCur) return
+    let crossingLatestProject: any = undefined
+    // Reserva (una sola vez) el número de asiento del cruce, consumiéndolo con
+    // `++` para que los bloques de gasto de los no-factura/movilidad usen
+    // números posteriores y no colisionen con el asiento de cruce.
+    const reserveCrossing = (): number => {
+      if (crossingRelacionado == null) crossingRelacionado = relacionado++
+      return crossingRelacionado
+    }
+    // Emite la línea 42 (Debe) de un comprobante contra la 14: acumula su total
+    // y recuerda la fecha/moneda/proyecto más recientes (para la línea 14).
+    const addCrossing42 = (args: {
+      date: Date
+      montoDebePEN: number
+      montoDebeME: number
+      cur: { mdaOrigen: string; cambioMoneda: number }
+      project: any
+      docFields: { codTipDoc?: string; nroSerie?: string; nroDoc?: string }
+      prov?: { ruc?: string; razonSocial?: string }
+    }) => {
+      const rel = reserveCrossing()
       const line = this.baseLine(
         config,
-        facturaLatestDate as Date,
+        args.date,
         config.fuenteAplicacion,
         'APLICACION',
-        facturaLatestCur.cambioMoneda,
+        args.cur.cambioMoneda,
+        periodDate,
+        {
+          nroCuenta: config.cuenta42,
+          codTipDoc: args.docFields.codTipDoc,
+          nroSerie: args.docFields.nroSerie,
+          nroDoc: args.docFields.nroDoc,
+          mdaOrigen: args.cur.mdaOrigen,
+          montoDebe: args.montoDebePEN,
+          montoDebeME: args.montoDebeME,
+          codTipDocIdentProv: args.prov?.ruc ? '06' : '',
+          nroDocProv: args.prov?.ruc || '',
+          razonSocialProv: args.prov?.razonSocial || '',
+        }
+      )
+      this.applyProjectCostCenter(line, args.project)
+      line.relacionado = rel
+      line.correlativo = correlativo++
+      lines.push(line)
+      crossingTotalPEN = this.round2(crossingTotalPEN + args.montoDebePEN)
+      crossingTotalME = this.round2(crossingTotalME + args.montoDebeME)
+      if (
+        !crossingLatestDate ||
+        args.date.getTime() >= crossingLatestDate.getTime()
+      ) {
+        crossingLatestDate = args.date
+        crossingLatestCur = {
+          mdaOrigen: args.cur.mdaOrigen,
+          cambioMoneda: args.cur.cambioMoneda,
+        }
+        crossingLatestProject = args.project
+      }
+    }
+    // Vuelca la única línea 14 (Haber) del cruce por el total rendido.
+    const flushCrossing = () => {
+      if (crossingRelacionado == null || !crossingLatestCur) return
+      const line = this.baseLine(
+        config,
+        crossingLatestDate as Date,
+        config.fuenteAplicacion,
+        'APLICACION',
+        crossingLatestCur.cambioMoneda,
         periodDate,
         {
           nroCuenta: cuenta14,
-          mdaOrigen: facturaLatestCur.mdaOrigen,
-          montoHaber: this.round2(facturaTotalPEN),
-          montoHaberME: this.round2(facturaTotalME),
+          mdaOrigen: crossingLatestCur.mdaOrigen,
+          montoHaber: this.round2(crossingTotalPEN),
+          montoHaberME: this.round2(crossingTotalME),
           codTipDocIdentTrab: trabDni ? '01' : '',
           nroDocTrab: trabDni,
           razonSocialTrab: trabNombre,
         }
       )
-      this.applyProjectCostCenter(line, facturaLatestProject)
-      line.relacionado = facturaRelacionado
+      this.applyProjectCostCenter(line, crossingLatestProject)
+      line.relacionado = crossingRelacionado
       line.correlativo = correlativo++
       lines.push(line)
-      relacionado++
-      facturaRelacionado = null
-      facturaTotalPEN = 0
-      facturaTotalME = 0
-      facturaLatestDate = null
-      facturaLatestCur = null
-      facturaLatestProject = undefined
     }
     // Cada `expense` de tipo planilla_movilidad es un documento independiente
     // con su propio internalCode (correlativo AML012, AML013, ...). El asiento
@@ -2014,66 +2067,29 @@ export class AccountingEntriesService {
           expense.proyectId,
           report?.projectId
         )
-        // Todas las facturas comparten UN asiento: se emite la 42 (Debe) por
-        // comprobante y se acumula el total; la única línea 14 (Haber) se
-        // vuelca en `flushFacturas`. Reserva el `relacionado` en la primera.
-        if (facturaRelacionado == null) facturaRelacionado = relacionado
-        const montoDebePEN = this.round2(total * cur.fxFactor)
-        const montoDebeME = this.toMEForComprobante(total, cur.isForeign, tc)
-        const line42 = this.baseLine(
-          config,
+        // Cruce contra la entrega a rendir: la 42 (Debe) de la factura entra al
+        // asiento consolidado; la única línea 14 (Haber) se vuelca al final.
+        addCrossing42({
           date,
-          config.fuenteAplicacion,
-          'APLICACION',
-          cur.cambioMoneda,
-          periodDate,
-          {
-            nroCuenta: config.cuenta42,
-            codTipDoc,
-            nroSerie: serie,
-            nroDoc,
-            mdaOrigen: cur.mdaOrigen,
-            montoDebe: montoDebePEN,
-            montoDebeME,
-            codTipDocIdentProv: ruc ? '06' : '',
-            nroDocProv: ruc,
-            razonSocialProv: razonSocial,
-          }
-        )
-        this.applyProjectCostCenter(line42, expProject)
-        line42.relacionado = facturaRelacionado
-        line42.correlativo = correlativo++
-        lines.push(line42)
-        facturaTotalPEN = this.round2(facturaTotalPEN + montoDebePEN)
-        facturaTotalME = this.round2(facturaTotalME + montoDebeME)
-        // Fecha / TC / centro de costo de la línea 14 = los de la factura más
-        // reciente por fecha de emisión.
-        if (
-          !facturaLatestDate ||
-          date.getTime() >= facturaLatestDate.getTime()
-        ) {
-          facturaLatestDate = date
-          facturaLatestCur = {
-            mdaOrigen: cur.mdaOrigen,
-            cambioMoneda: cur.cambioMoneda,
-          }
-          facturaLatestProject = expProject
-        }
+          montoDebePEN: this.round2(total * cur.fxFactor),
+          montoDebeME: this.toMEForComprobante(total, cur.isForeign, tc),
+          cur,
+          project: expProject,
+          docFields: { codTipDoc, nroSerie: serie, nroDoc },
+          prov: { ruc, razonSocial },
+        })
         continue
       }
-
-      // Corrida de facturas terminada (este comprobante es no-factura): vuelca
-      // la única línea 14 antes de procesarlo, para mantener las líneas del
-      // asiento de facturas contiguas y liberar su `relacionado`.
-      flushFacturas()
 
       // NO-FACTURA (boleta/ticket/planilla/recibo/otros, código ≠ 01): no dan
       // crédito fiscal y ya no pasan por `buildCompraLines`. Su gasto se
       // reconoce aquí con la misma estructura que antes tenía Compra, sin la
       // línea 40: 9X(Debe)/42(Haber) — bloque (a) — y 6X(Debe)/79(Haber) —
-      // bloque (b). A diferencia de la factura, este bloque NO cancela la
-      // cuenta 14 (decisión explícita del usuario, 2026-07-10): el 42(Haber)
-      // que genera no tiene par 42(Debe) en este builder.
+      // bloque (b). Además, el total del comprobante se cruza contra la entrega
+      // a rendir (14) sumando una 42(Debe) al asiento de cruce (`addCrossing42`,
+      // tras `pushBloque`): esa 42(Debe) cancela la 42(Haber) de provisión de
+      // este bloque, de modo que la 14 liquida el TOTAL rendido, no solo las
+      // facturas.
       const category = expense.categoryId
         ? categoryMap.get(expense.categoryId.toString())
         : undefined
@@ -2251,11 +2267,30 @@ export class AccountingEntriesService {
         nroSerie: serie,
         nroDoc,
       })
-    }
 
-    // Facturas al final del lote (sin ningún no-factura después): vuelca su
-    // única línea 14 antes del bloque de movilidad.
-    flushFacturas()
+      // Cruce del no-factura contra la 14: una 42(Debe) por el total del
+      // comprobante que cancela la 42(Haber) de provisión del bloque anterior.
+      const nfTotal = this.round2(portions.reduce((s, p) => s + p.monto, 0))
+      if (nfTotal > 0) {
+        const nfDate = this.asientoDate(expense, report)
+        const nfTc = this.tcFor(nfDate, rateMap, config)
+        const nfCur = this.resolveComprobanteCurrency(
+          config,
+          expense,
+          nfTotal,
+          nfTc
+        )
+        addCrossing42({
+          date: nfDate,
+          montoDebePEN: this.round2(nfTotal * nfCur.fxFactor),
+          montoDebeME: this.toMEForComprobante(nfTotal, nfCur.isForeign, nfTc),
+          cur: nfCur,
+          project: expenseProject,
+          docFields: { codTipDoc, nroSerie: serie, nroDoc },
+          prov: { ruc, razonSocial },
+        })
+      }
+    }
 
     // Planilla de movilidad: TODAS las de la rendición son un solo
     // documento físico (ver resolveSharedMovilidadNroDoc), así que se
@@ -2436,9 +2471,37 @@ export class AccountingEntriesService {
             )
           )
           relacionado++
+          // Cruce del bloque de movilidad contra la 14: una 42(Debe) que
+          // cancela la 42(Haber) de provisión de este mismo bloque.
+          const movCur = this.resolveComprobanteCurrency(
+            config,
+            block.expense,
+            block.monto,
+            tc
+          )
+          addCrossing42({
+            date: block.date,
+            montoDebePEN: this.round2(block.monto * movCur.fxFactor),
+            montoDebeME: this.toMEForComprobante(
+              block.monto,
+              movCur.isForeign,
+              tc
+            ),
+            cur: movCur,
+            project: meta.project,
+            docFields: {
+              codTipDoc: TIPO_DOCUMENTO.PM,
+              nroSerie: '0001',
+              nroDoc: meta.nroDoc,
+            },
+          })
         }
       }
     }
+
+    // Única línea 14 (Haber) del cruce: liquida la entrega a rendir por el
+    // TOTAL rendido (facturas + no-factura + movilidad).
+    flushCrossing()
 
     return lines
   }

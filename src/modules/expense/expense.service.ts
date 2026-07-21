@@ -328,12 +328,27 @@ export class ExpenseService {
   }
 
   /**
-   * Código de comprobante que espera SUNAT. Tolerante a mayúsculas y a
-   * variantes ("Boleta de Venta Electrónica", "TICKET"), con el mismo criterio
-   * de substring que `resolveCodTipDoc` usa para el asiento contable: si ambos
-   * no coinciden, la validación SUNAT y la contabilidad se contradicen.
+   * Código de comprobante que espera SUNAT.
+   *
+   * La SERIE manda sobre la etiqueta: es un código estructurado que el OCR lee
+   * bien, mientras que el tipo la IA lo infiere de un encabezado que varía en
+   * tipografía y posición. Medido sobre la base local (974 facturas con serie
+   * legible), la etiqueta coincide con la serie en 948 y discrepa en 15; en
+   * todas las discrepancias la serie decía Factura y la IA había puesto
+   * Boleta, que es justo el caso que rompe la consulta a SUNAT.
+   *
+   * Sin este criterio, una factura mal etiquetada como "Boleta de Venta
+   * Electrónica" se consultaría con codComp 03 y SUNAT la rechazaría.
    */
-  private determineCodComp(tipo?: string): string {
+  private determineCodComp(tipo?: string, serie?: string): string {
+    const s = String(serie || '')
+      .trim()
+      .toUpperCase()
+    if (s.startsWith('EB') || s.startsWith('B')) return '03'
+    if (s.startsWith('F') || s.startsWith('E')) return '01'
+
+    // Serie ausente o con un prefijo que no identifica al tipo (tickets de
+    // máquina registradora, series no estándar): se cae a la etiqueta.
     const t = String(tipo || '')
       .trim()
       .toLowerCase()
@@ -644,7 +659,7 @@ export class ExpenseService {
 
           const params = {
             numRuc: data.rucEmisor,
-            codComp: this.determineCodComp(data.tipoComprobante),
+            codComp: this.determineCodComp(data.tipoComprobante, data.serie),
             numeroSerie: data.serie,
             numero: data.correlativo,
             fechaEmision: fechaEmision,

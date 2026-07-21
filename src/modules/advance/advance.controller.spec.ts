@@ -80,8 +80,11 @@ describe('AdvanceController', () => {
       const req = makeReq()
       const dto: any = {}
       const result = await controller.create(dto, req as never)
+      // El segundo argumento es `allowBackdate`, que sale del permiso
+      // canBackdateViaticos del JWT; este `req` de prueba no lo trae.
       expect(mockAdvanceService.create).toHaveBeenCalledWith(
-        expect.objectContaining({ userId, clientId })
+        expect.objectContaining({ userId, clientId }),
+        false
       )
       expect(result).toBeDefined()
     })
@@ -218,7 +221,8 @@ describe('AdvanceController', () => {
         advanceId,
         dto,
         userId,
-        clientId
+        clientId,
+        false
       )
       expect(mockAuditLogService.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'resubmit_advance' })

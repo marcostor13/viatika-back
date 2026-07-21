@@ -168,8 +168,15 @@ describe('ProjectService', () => {
       mockProjectModel.find.mockReturnValue(makeQuery([]))
       mockProjectModel.countDocuments.mockReturnValue(makeCountQuery(0))
       await service.findAll(clientId, { search: 'alpha' })
+      // El filtro de búsqueda ya no cuelga de la raíz: se acumula en `$and`
+      // junto con el resto de condiciones (p. ej. el perfil del centro de
+      // costo), para que no se pisen entre sí.
       expect(mockProjectModel.find).toHaveBeenCalledWith(
-        expect.objectContaining({ $or: expect.any(Array) })
+        expect.objectContaining({
+          $and: expect.arrayContaining([
+            { $or: [{ name: /alpha/i }, { code: /alpha/i }] },
+          ]),
+        })
       )
     })
   })

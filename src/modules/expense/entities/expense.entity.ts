@@ -212,6 +212,15 @@ export class Expense {
   @Prop({ default: 'pending' })
   status: ExpenseStatus
 
+  /**
+   * Último resultado de la consulta a SUNAT ({ status, details, message }).
+   * Faltaba en el esquema, así que Mongoose descartaba en silencio el write de
+   * `validateWithSunatData` y el detalle del comprobante quedaba congelado en
+   * el resultado del registro inicial.
+   */
+  @Prop({ type: Object })
+  sunatValidation?: Record<string, any>
+
   @Prop()
   statusDate: Date
 

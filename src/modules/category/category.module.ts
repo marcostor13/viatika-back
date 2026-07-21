@@ -5,6 +5,7 @@ import { CategoryService } from './category.service'
 import { CategoryController } from './category.controller'
 import { AuditLogModule } from '../audit-log/audit-log.module'
 import { CategoryGroupModule } from '../category-group/category-group.module'
+import { UserModule } from '../user/user.module'
 
 @Module({
   imports: [
@@ -13,6 +14,7 @@ import { CategoryGroupModule } from '../category-group/category-group.module'
     ]),
     AuditLogModule,
     CategoryGroupModule,
+    UserModule,
   ],
   controllers: [CategoryController],
   providers: [CategoryService],

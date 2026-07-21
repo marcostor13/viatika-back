@@ -751,21 +751,20 @@ export class ExpenseReportService implements OnModuleInit {
       }
     }
     if (opts.search?.trim()) {
-      // El "concepto" se guarda en distintos campos según el tipo de
-      // comprobante (description plano, JSON dentro de description/data, o
-      // mobilityRows[].gestion/origen/destino), por lo que el search debe
-      // cubrir todos esos lugares.
+      // La búsqueda es por RUC del emisor. El RUC vive dentro del JSON
+      // serializado en `data` (claves `ruc` / `rucEmisor` según el flujo de
+      // carga), por lo que se ancla el regex a esas claves para no matchear
+      // por casualidad otros números del comprobante (correlativo, montos).
       const term = opts.search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      const rx = { $regex: term, $options: 'i' }
+      const rx = {
+        $regex: `"ruc(Emisor)?"\\s*:\\s*"?[^",}]*${term}`,
+        $options: 'i',
+      }
       and.push({
         $or: [
-          { description: rx },
           { data: rx },
-          { 'mobilityRows.gestion': rx },
-          { 'mobilityRows.concepto': rx },
-          { 'mobilityRows.origen': rx },
-          { 'mobilityRows.destino': rx },
-          { 'mobilityRows.clienteProveedor': rx },
+          { 'comprobanteDetallado.ruc': { $regex: term, $options: 'i' } },
+          { 'comprobanteDetallado.rucEmisor': { $regex: term, $options: 'i' } },
         ],
       })
     }

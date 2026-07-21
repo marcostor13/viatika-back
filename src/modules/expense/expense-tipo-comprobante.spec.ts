@@ -46,6 +46,17 @@ describe('ExpenseService — tipo de comprobante', () => {
       expect(determineCodComp('Boleta', ' fa02 ')).toBe('01')
     })
 
+    /**
+     * Caso real de producción: peaje de LIMA EXPRESA S.A.C. subido como
+     * escaneo de un ticket térmico. El encabezado dice "FACTURA ELECTRONICA
+     * F008 - 01099335", pero al no tener capa de texto la IA lo leyó por
+     * imagen y lo clasificó como boleta. La serie F008 lo corrige.
+     */
+    it('peaje LIMA EXPRESA (F008) mal leído como boleta se resuelve como Factura', () => {
+      expect(determineCodComp('Boleta', 'F008')).toBe('01')
+      expect(normalize('Boleta', 'F008')).toBe('Factura')
+    })
+
     it('sin serie legible cae a la etiqueta', () => {
       expect(determineCodComp('Boleta', '')).toBe('03')
       expect(determineCodComp('Ticket', '')).toBe('12')

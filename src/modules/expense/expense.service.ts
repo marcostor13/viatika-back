@@ -2482,10 +2482,29 @@ export class ExpenseService {
     return applyFechaEmisionDisplayToExpense(expense)
   }
 
+  /**
+   * Una factura ya guardada no se edita, por ningún rol. Sus datos salen del
+   * comprobante y quedan fijados al validarse contra SUNAT; permitir editarlos
+   * después dejaría el gasto diciendo algo distinto de lo que SUNAT valida. Si
+   * los datos están mal, el camino es rechazarla y volver a cargarla.
+   *
+   * No alcanza al desglose contable de Contabilidad (ver `updateDesglose`, que
+   * pasa `allowFacturaEdit`), ni a la revalidación SUNAT, que no pasa por
+   * `update()`, ni al borrado, que tiene su propio endpoint.
+   */
+  private assertFacturaNotEditable(existing: Expense): void {
+    if (existing.expenseType === 'factura') {
+      throw new ForbiddenException(
+        'Una factura no se puede editar una vez guardada. Si los datos son incorrectos, elimínala o recházala y vuelve a cargarla.'
+      )
+    }
+  }
+
   async update(
     id: string,
     updateExpenseDto: UpdateExpenseDto,
-    actor: ExpenseActorContext
+    actor: ExpenseActorContext,
+    options: { allowFacturaEdit?: boolean } = {}
   ): Promise<Expense | null> {
     if (!/^[0-9a-fA-F]{24}$/.test(id)) {
       throw new Error(`ID de expense inválido: ${id}`)
@@ -2494,6 +2513,7 @@ export class ExpenseService {
     const expenseIdObject = Types.ObjectId.createFromHexString(id)
     const existing = await this.loadExpenseOrThrow(id)
     await this.assertCanMutateExpense(existing, actor)
+    if (!options.allowFacturaEdit) this.assertFacturaNotEditable(existing)
 
     const dto = { ...updateExpenseDto }
     this.sanitizeFechaEmisionOnWrite(dto)

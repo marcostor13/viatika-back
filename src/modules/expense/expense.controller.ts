@@ -420,10 +420,13 @@ export class ExpenseController {
     @Body() updateExpenseDto: UpdateExpenseDto,
     @Request() req
   ) {
+    // El desglose contable es competencia de Contabilidad y sigue permitido
+    // sobre facturas, a diferencia de la edición del comprobante en sí.
     const result = await this.expenseService.update(
       id,
       { ...updateExpenseDto, desgloseRevisado: true },
-      this.toActorContext(req.user)
+      this.toActorContext(req.user),
+      { allowFacturaEdit: true }
     )
     this.auditLogService.log({
       userId: req.user?._id || req.user?.sub,

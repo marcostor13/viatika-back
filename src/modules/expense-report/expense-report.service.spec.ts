@@ -14,6 +14,9 @@ import { UploadService } from '../upload/upload.service'
 import { ProjectService } from '../project/project.service'
 import { CategoryService } from '../category/category.service'
 import { SaldoService } from '../saldo/saldo.service'
+import { ClientService } from '../client/client.service'
+import { CurrencyService } from '../exchange-rate/currency.service'
+import { AccountingEntriesFile } from '../accounting-entries/entities/accounting-entries-file.entity'
 import { ROLES } from '../auth/enums/roles.enum'
 
 const mockSaldoService = {
@@ -21,6 +24,21 @@ const mockSaldoService = {
   createFromPago: jest.fn().mockResolvedValue({}),
   consume: jest.fn().mockResolvedValue(0),
   sumAmounts: jest.fn().mockResolvedValue(0),
+}
+
+const mockClientService = {
+  getTesoreriaEmails: jest.fn().mockResolvedValue([]),
+}
+
+/**
+ * La plataforma es PEN-only: `toBase` devuelve el importe tal cual y el umbral
+ * de aprobación no se convierte. Sirve para que los tests de aprobación no
+ * dependan de un tipo de cambio.
+ */
+const mockCurrencyService = {
+  getConfig: jest.fn().mockResolvedValue(null),
+  toBase: jest.fn(async (_clientId: unknown, amount: number) => amount),
+  resolveApprovalThresholdL: jest.fn(async (_clientId: unknown, threshold: number) => threshold),
 }
 
 const mockAdvanceService = {
@@ -109,6 +127,12 @@ describe('ExpenseReportService — Fase 5 (envío y aprobación final)', () => {
         { provide: ProjectService, useValue: {} },
         { provide: CategoryService, useValue: {} },
         { provide: SaldoService, useValue: mockSaldoService },
+        { provide: ClientService, useValue: mockClientService },
+        {
+          provide: getModelToken(AccountingEntriesFile.name),
+          useValue: {},
+        },
+        { provide: CurrencyService, useValue: mockCurrencyService },
       ],
     }).compile()
 
@@ -398,6 +422,12 @@ describe('ExpenseReportService — Fase 8 (cierre definitivo)', () => {
         { provide: ProjectService, useValue: {} },
         { provide: CategoryService, useValue: {} },
         { provide: SaldoService, useValue: mockSaldoService },
+        { provide: ClientService, useValue: mockClientService },
+        {
+          provide: getModelToken(AccountingEntriesFile.name),
+          useValue: {},
+        },
+        { provide: CurrencyService, useValue: mockCurrencyService },
       ],
     }).compile()
 
@@ -757,6 +787,12 @@ describe('ExpenseReportService — Fase 6 (reembolso: tenant y registro)', () =>
         { provide: ProjectService, useValue: {} },
         { provide: CategoryService, useValue: {} },
         { provide: SaldoService, useValue: mockSaldoService },
+        { provide: ClientService, useValue: mockClientService },
+        {
+          provide: getModelToken(AccountingEntriesFile.name),
+          useValue: {},
+        },
+        { provide: CurrencyService, useValue: mockCurrencyService },
       ],
     }).compile()
 

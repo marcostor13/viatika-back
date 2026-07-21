@@ -822,6 +822,41 @@ describe('AccountingEntriesService — asiento de aplicación', () => {
     }) as Promise<ContanetLine[]>
   }
 
+  it('varias facturas: una sola línea de cuenta 14 (Haber) por el total, con una 42 (Debe) por comprobante', async () => {
+    const mkFactura = (id: string, serie: string, total: number) => ({
+      _id: id,
+      expenseType: 'factura',
+      total,
+      data: '{}',
+      comprobanteDetallado: {
+        emisor: { ruc: `20${id}`, razonSocial: `PROVEEDOR ${id}` },
+        comprobante: { tipo: 'Factura', serie, correlativo: id },
+        totales: { importeTotal: total },
+      },
+    })
+    const expenses = [
+      mkFactura('e1', 'F001', 100),
+      mkFactura('e2', 'F001', 250),
+      mkFactura('e3', 'F002', 59),
+    ]
+    const lines = await build(expenses)
+
+    const l42s = lines.filter(l => l.nroCuenta === config.cuenta42)
+    const l14s = lines.filter(l => l.nroCuenta === '14.1.3.100')
+    // Una 42 (Debe) por comprobante...
+    expect(l42s).toHaveLength(3)
+    expect(l42s.every(l => Number(l.montoDebe ?? 0) > 0)).toBe(true)
+    // ...pero UNA sola 14 (Haber) por el total de las tres facturas.
+    expect(l14s).toHaveLength(1)
+    expect(l14s[0].montoHaber).toBe(409)
+    expect(l14s[0].razonSocialTrab).toBe('JUAN PEREZ')
+    // Todas las líneas viven en un único asiento (mismo `relacionado`) que cuadra.
+    expect(new Set(lines.map(l => l.relacionado)).size).toBe(1)
+    expect(service.validateCuadre(lines)).toHaveLength(0)
+    // La cuenta 14 no debe repetirse (era una por factura antes de consolidar).
+    expect(l14s).toHaveLength(1)
+  })
+
   it('boleta (código 03) genera su asiento 9X/42/6X/79 en Aplicación aunque no entre a Compra', async () => {
     const expense = {
       _id: 'e10',

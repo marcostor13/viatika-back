@@ -1802,6 +1802,54 @@ export class AccountingEntriesService {
     const trabDni = colaborador?.dni || ''
     const trabNombre = colaborador?.name || ''
     const cuenta14 = this.cuenta14(config, colaborador)
+    // Consolidación de la cuenta 14 de las FACTURAS: en vez de una línea 14 por
+    // comprobante (par 42/14), todas las facturas de la rendición comparten UN
+    // solo asiento con una única línea 14 (Haber) por el total rendido. La 42
+    // (Debe) sigue siendo una línea por comprobante con su detalle de proveedor
+    // (el detalle vive en la 42; la 14 solo refleja el total contra el anticipo
+    // del colaborador, igual que la Solicitud lo entrega en un único monto).
+    // Cuadre: Σ(42 Debe) = 14 Haber. Las facturas quedan contiguas en el orden
+    // ordenado (comparten "Codigo Tipo Document" = '01'), así que se acumulan y
+    // la línea 14 se vuelca al terminar su corrida (`flushFacturas`). Fecha /
+    // tipo de cambio / centro de costo de la línea 14 = los de la factura MÁS
+    // RECIENTE por fecha de emisión (decisión del usuario).
+    let facturaRelacionado: number | null = null
+    let facturaTotalPEN = 0
+    let facturaTotalME = 0
+    let facturaLatestDate: Date | null = null
+    let facturaLatestCur: { mdaOrigen: string; cambioMoneda: number } | null = null
+    let facturaLatestProject: any = undefined
+    const flushFacturas = () => {
+      if (facturaRelacionado == null || !facturaLatestCur) return
+      const line = this.baseLine(
+        config,
+        facturaLatestDate as Date,
+        config.fuenteAplicacion,
+        'APLICACION',
+        facturaLatestCur.cambioMoneda,
+        periodDate,
+        {
+          nroCuenta: cuenta14,
+          mdaOrigen: facturaLatestCur.mdaOrigen,
+          montoHaber: this.round2(facturaTotalPEN),
+          montoHaberME: this.round2(facturaTotalME),
+          codTipDocIdentTrab: trabDni ? '01' : '',
+          nroDocTrab: trabDni,
+          razonSocialTrab: trabNombre,
+        }
+      )
+      this.applyProjectCostCenter(line, facturaLatestProject)
+      line.relacionado = facturaRelacionado
+      line.correlativo = correlativo++
+      lines.push(line)
+      relacionado++
+      facturaRelacionado = null
+      facturaTotalPEN = 0
+      facturaTotalME = 0
+      facturaLatestDate = null
+      facturaLatestCur = null
+      facturaLatestProject = undefined
+    }
     // La rendición completa es UNA sola planilla de movilidad física, aunque
     // el colaborador haya cargado varios `expense` de tipo planilla_movilidad
     // (el PDF ya los consolida en una sola hoja, ver
@@ -1866,40 +1914,44 @@ export class AccountingEntriesService {
           expense.proyectId,
           report?.projectId
         )
-        const push = (line: ContanetLine) => {
-          this.applyProjectCostCenter(line, expProject)
-          line.relacionado = relacionado
-          line.correlativo = correlativo++
-          lines.push(line)
+        // Todas las facturas comparten UN asiento: se emite la 42 (Debe) por
+        // comprobante y se acumula el total; la única línea 14 (Haber) se
+        // vuelca en `flushFacturas`. Reserva el `relacionado` en la primera.
+        if (facturaRelacionado == null) facturaRelacionado = relacionado
+        const montoDebePEN = this.round2(total * cur.fxFactor)
+        const montoDebeME = this.toMEForComprobante(total, cur.isForeign, tc)
+        const line42 = this.baseLine(config, date, config.fuenteAplicacion, 'APLICACION', cur.cambioMoneda, periodDate, {
+          nroCuenta: config.cuenta42,
+          codTipDoc,
+          nroSerie: serie,
+          nroDoc,
+          mdaOrigen: cur.mdaOrigen,
+          montoDebe: montoDebePEN,
+          montoDebeME,
+          codTipDocIdentProv: ruc ? '06' : '',
+          nroDocProv: ruc,
+          razonSocialProv: razonSocial,
+        })
+        this.applyProjectCostCenter(line42, expProject)
+        line42.relacionado = facturaRelacionado
+        line42.correlativo = correlativo++
+        lines.push(line42)
+        facturaTotalPEN = this.round2(facturaTotalPEN + montoDebePEN)
+        facturaTotalME = this.round2(facturaTotalME + montoDebeME)
+        // Fecha / TC / centro de costo de la línea 14 = los de la factura más
+        // reciente por fecha de emisión.
+        if (!facturaLatestDate || date.getTime() >= facturaLatestDate.getTime()) {
+          facturaLatestDate = date
+          facturaLatestCur = { mdaOrigen: cur.mdaOrigen, cambioMoneda: cur.cambioMoneda }
+          facturaLatestProject = expProject
         }
-        push(
-          this.baseLine(config, date, config.fuenteAplicacion, 'APLICACION', cur.cambioMoneda, periodDate, {
-            nroCuenta: config.cuenta42,
-            codTipDoc,
-            nroSerie: serie,
-            nroDoc,
-            mdaOrigen: cur.mdaOrigen,
-            montoDebe: this.round2(total * cur.fxFactor),
-            montoDebeME: this.toMEForComprobante(total, cur.isForeign, tc),
-            codTipDocIdentProv: ruc ? '06' : '',
-            nroDocProv: ruc,
-            razonSocialProv: razonSocial,
-          })
-        )
-        push(
-          this.baseLine(config, date, config.fuenteAplicacion, 'APLICACION', cur.cambioMoneda, periodDate, {
-            nroCuenta: cuenta14,
-            mdaOrigen: cur.mdaOrigen,
-            montoHaber: this.round2(total * cur.fxFactor),
-            montoHaberME: this.toMEForComprobante(total, cur.isForeign, tc),
-            codTipDocIdentTrab: trabDni ? '01' : '',
-            nroDocTrab: trabDni,
-            razonSocialTrab: trabNombre,
-          })
-        )
-        relacionado++
         continue
       }
+
+      // Corrida de facturas terminada (este comprobante es no-factura): vuelca
+      // la única línea 14 antes de procesarlo, para mantener las líneas del
+      // asiento de facturas contiguas y liberar su `relacionado`.
+      flushFacturas()
 
       // NO-FACTURA (boleta/ticket/planilla/recibo/otros, código ≠ 01): no dan
       // crédito fiscal y ya no pasan por `buildCompraLines`. Su gasto se
@@ -2035,6 +2087,10 @@ export class AccountingEntriesService {
         nroDoc,
       })
     }
+
+    // Facturas al final del lote (sin ningún no-factura después): vuelca su
+    // única línea 14 antes del bloque de movilidad.
+    flushFacturas()
 
     // Planilla de movilidad: TODAS las de la rendición son un solo
     // documento físico (ver resolveSharedMovilidadNroDoc), así que se

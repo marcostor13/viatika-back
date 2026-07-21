@@ -667,6 +667,48 @@ export class ExpenseService {
     }
   }
 
+  /**
+   * Regla de negocio (decisión del cliente): una factura solo se guarda si
+   * SUNAT la confirma como VÁLIDA y ACEPTADA. Todo lo demás bloquea el
+   * guardado con un mensaje que explica el caso.
+   *
+   * ⚠️ Es una regla estricta a propósito: si SUNAT no responde (caída, timeout)
+   * o la empresa no tiene configuración SUNAT, la carga de facturas se detiene
+   * hasta que el servicio vuelva. Se registra en el log para poder distinguir
+   * una caída del servicio de un rechazo real del comprobante.
+   */
+  private assertSunatConforme(
+    expenseStatus: string,
+    validation: SunatValidationMeta
+  ): void {
+    if (expenseStatus === 'VALIDO_ACEPTADO') return
+
+    let mensaje: string
+    switch (expenseStatus) {
+      case 'VALIDO_NO_PERTENECE':
+        mensaje =
+          'SUNAT indica que el comprobante existe pero no está aceptado. Revisa los datos de la factura.'
+        break
+      case 'NO_ENCONTRADO':
+        mensaje =
+          'SUNAT no encontró este comprobante. Verifica el RUC del emisor, la serie y el correlativo.'
+        break
+      case 'sunat_error':
+        mensaje =
+          'No se pudo validar la factura con SUNAT (servicio no disponible o sin configuración). Intenta nuevamente en unos minutos.'
+        break
+      default:
+        // 'pending': no se llegó a consultar porque faltan datos o config.
+        mensaje =
+          'No se pudo validar la factura con SUNAT. Verifica que el RUC del emisor, la serie, el correlativo y la fecha estén completos.'
+    }
+
+    this.logger.warn(
+      `[confirmInvoice] Guardado bloqueado por SUNAT: status=${expenseStatus} veredicto=${validation.status} — ${validation.message}`
+    )
+    throw new HttpException(mensaje, HttpStatus.UNPROCESSABLE_ENTITY)
+  }
+
   private async validateWithSunatIfPossible(
     data: ExtractedInvoiceData,
     clientId: string,
@@ -1349,6 +1391,11 @@ export class ExpenseService {
       body.clientId,
       configSunat?.ruc
     )
+
+    // Solo se guarda una factura que SUNAT confirmó como válida y aceptada.
+    // Cualquier otro resultado (no encontrada, no aceptada, servicio caído,
+    // datos incompletos, sin configuración) bloquea el guardado.
+    this.assertSunatConforme(expenseStatus, validation)
 
     const expense = await this.createExpenseDocument(
       body,

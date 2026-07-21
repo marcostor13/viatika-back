@@ -10,6 +10,9 @@ import { ExpenseService } from './expense.service'
  */
 describe('ExpenseService — tipo de comprobante', () => {
   const service = Object.create(ExpenseService.prototype) as ExpenseService
+  // El servicio se instancia sin DI; se le inyecta un logger mudo para los
+  // métodos que loguean (assertSunatConforme).
+  ;(service as any).logger = { warn: jest.fn(), log: jest.fn(), error: jest.fn() }
   const determineCodComp = (tipo?: string, serie?: string): string =>
     (service as any)['determineCodComp'](tipo, serie)
   const normalize = (tipo?: string, serie?: string): string | undefined =>
@@ -98,6 +101,28 @@ describe('ExpenseService — tipo de comprobante', () => {
       expect(normalize('Boleta de Venta', '001')).toBe('Boleta')
       expect(normalize('Ticket', '0001')).toBe('Ticket')
       expect(normalize('Factura', '')).toBe('Factura')
+    })
+  })
+
+  describe('assertSunatConforme — solo VALIDO_ACEPTADO pasa', () => {
+    const assertConforme = (estado: string, veredicto = 'X'): void =>
+      (service as any)['assertSunatConforme'](estado, {
+        status: veredicto,
+        details: null,
+        message: 'msg',
+      })
+
+    it('no lanza cuando SUNAT acepta el comprobante', () => {
+      expect(() => assertConforme('VALIDO_ACEPTADO')).not.toThrow()
+    })
+
+    it.each([
+      ['VALIDO_NO_PERTENECE', /no está aceptado/],
+      ['NO_ENCONTRADO', /no encontró/],
+      ['sunat_error', /servicio no disponible/],
+      ['pending', /no se pudo validar/i],
+    ])('bloquea con mensaje para %s', (estado, patron) => {
+      expect(() => assertConforme(estado)).toThrow(patron)
     })
   })
 

@@ -68,6 +68,17 @@ interface ExtractedInvoiceData {
   [key: string]: unknown
 }
 
+/**
+ * Resultado del análisis de una factura: datos extraídos + URL del archivo ya
+ * subido, sin persistir el gasto. El front lo muestra en la pantalla de
+ * revisión y lo devuelve en `confirmInvoice` para crear el gasto.
+ */
+export interface InvoicePreview {
+  data: ExtractedInvoiceData
+  total: number
+  fileUrl: string
+}
+
 interface SunatValidationMeta {
   status: string
   details: unknown
@@ -1187,19 +1198,23 @@ export class ExpenseService {
     }
   }
 
-  async analyzeImageWithUrl(body: CreateExpenseDto): Promise<Expense> {
+  /**
+   * Analiza una imagen y devuelve SOLO los datos extraídos, sin crear el gasto.
+   * El gasto se persiste después, cuando el colaborador confirma la revisión
+   * (`confirmInvoice`). Así el escaneo no deja un comprobante a medias en la
+   * base si el usuario abandona la pantalla de revisión.
+   */
+  async analyzeImageWithUrl(body: CreateExpenseDto): Promise<InvoicePreview> {
     // Si la caja chica de la rendición ya fue finalizada por Contabilidad, no se
     // permiten más gastos. Se valida antes del análisis para no gastar la llamada
     // a OpenAI en un comprobante que será rechazado.
     await this.expenseReportService.assertReportNotLockedByCajaChica(
       body.expenseReportId
     )
-    const configSunat = await this.sunatConfigService.findOne(body.clientId)
-    const prompt = PROMPT1
     try {
       const completion = await this.openai.chat.completions.create({
         model: this.visionModel,
-        messages: this.buildVisionMessages(prompt, body.imageUrl!),
+        messages: this.buildVisionMessages(PROMPT1, body.imageUrl!),
         temperature: 0,
         max_completion_tokens: 8192,
       })
@@ -1208,30 +1223,15 @@ export class ExpenseService {
         completion.choices[0]?.message?.content
       )
 
+      // Aviso temprano de duplicado, antes de que el usuario revise: se repite en
+      // `confirmInvoice` por si edita serie/correlativo en la revisión.
       await this.validateDuplicateInvoiceIfAny(extraction, body.clientId)
 
-      const { validation, expenseStatus } =
-        await this.validateWithSunatIfPossible(
-          extraction,
-          body.clientId,
-          configSunat?.ruc
-        )
-
-      const expense = await this.createExpenseDocument(
-        body,
-        extraction,
-        validation,
-        expenseStatus
-      )
-
-      if (body.expenseReportId) {
-        await this.expenseReportService.addExpenseToReport(
-          body.expenseReportId,
-          expense._id.toString()
-        )
+      return {
+        data: extraction,
+        total: extraction.montoTotal ?? 0,
+        fileUrl: body.imageUrl ?? '',
       }
-
-      return expense
     } catch (error) {
       if (error instanceof HttpException) {
         throw error
@@ -1245,10 +1245,15 @@ export class ExpenseService {
     }
   }
 
+  /**
+   * Analiza un PDF y devuelve SOLO los datos extraídos, sin crear el gasto. El
+   * archivo sí se sube a storage aquí, para que su URL sobreviva a la pantalla
+   * de revisión y `confirmInvoice` pueda asociarla al gasto.
+   */
   async analyzePdf(
     body: CreateExpenseDto,
     file: Express.Multer.File
-  ): Promise<Expense> {
+  ): Promise<InvoicePreview> {
     if (!file || !file.buffer) {
       throw new HttpException('Archivo PDF no provisto', HttpStatus.BAD_REQUEST)
     }
@@ -1293,36 +1298,15 @@ export class ExpenseService {
 
       await this.validateDuplicateInvoiceIfAny(extraction, body.clientId)
 
-      // Subir el PDF y setear la URL como file/imageUrl del gasto
-      const uploadedUrl = await this.uploadExpensePdfAndGetUrl(
-        file,
-        body.clientId
-      )
-      body.imageUrl = uploadedUrl
+      // El PDF se sube ya para no perder los bytes al cerrar la request; la URL
+      // viaja de vuelta al front y regresa en `confirmInvoice`.
+      const fileUrl = await this.uploadExpensePdfAndGetUrl(file, body.clientId)
 
-      const configSunat = await this.sunatConfigService.findOne(body.clientId)
-      const { validation, expenseStatus } =
-        await this.validateWithSunatIfPossible(
-          extraction,
-          body.clientId,
-          configSunat?.ruc
-        )
-
-      const expense = await this.createExpenseDocument(
-        body,
-        extraction,
-        validation,
-        expenseStatus
-      )
-
-      if (body.expenseReportId) {
-        await this.expenseReportService.addExpenseToReport(
-          body.expenseReportId,
-          expense._id.toString()
-        )
+      return {
+        data: extraction,
+        total: extraction.montoTotal ?? 0,
+        fileUrl,
       }
-
-      return expense
     } catch (error) {
       if (error instanceof HttpException) throw error
       this.logger.error('Error al analizar PDF:', error)
@@ -1331,6 +1315,56 @@ export class ExpenseService {
         HttpStatus.INTERNAL_SERVER_ERROR
       )
     }
+  }
+
+  /**
+   * Persiste la factura recién cuando el colaborador confirma la revisión. Es el
+   * único punto donde un gasto de tipo factura se crea: valida duplicado y SUNAT
+   * con los datos ya revisados (que pueden diferir de lo que leyó el OCR) y crea
+   * el documento.
+   */
+  async confirmInvoice(body: CreateExpenseDto): Promise<Expense> {
+    await this.expenseReportService.assertReportNotLockedByCajaChica(
+      body.expenseReportId
+    )
+
+    // El front manda la extracción revisada en `data` (JSON) y el total final
+    // aparte; se reconstruye el objeto que consumen las validaciones y el create.
+    let extraction: ExtractedInvoiceData = {}
+    try {
+      extraction = body.data ? JSON.parse(body.data) : {}
+    } catch {
+      throw new HttpException(
+        'Datos de la factura inválidos',
+        HttpStatus.BAD_REQUEST
+      )
+    }
+    if (typeof body.total === 'number') extraction.montoTotal = body.total
+
+    await this.validateDuplicateInvoiceIfAny(extraction, body.clientId)
+
+    const configSunat = await this.sunatConfigService.findOne(body.clientId)
+    const { validation, expenseStatus } = await this.validateWithSunatIfPossible(
+      extraction,
+      body.clientId,
+      configSunat?.ruc
+    )
+
+    const expense = await this.createExpenseDocument(
+      body,
+      extraction,
+      validation,
+      expenseStatus
+    )
+
+    if (body.expenseReportId) {
+      await this.expenseReportService.addExpenseToReport(
+        body.expenseReportId,
+        expense._id.toString()
+      )
+    }
+
+    return expense
   }
 
   // ----------------------------------------------------------------------

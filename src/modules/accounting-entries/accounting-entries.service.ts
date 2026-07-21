@@ -1,4 +1,9 @@
-import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common'
+import {
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common'
 import { Cron } from '@nestjs/schedule'
 import { ConfigService } from '@nestjs/config'
 import { InjectModel } from '@nestjs/mongoose'
@@ -21,7 +26,10 @@ import {
   ContanetLine,
   toExcelSerial,
 } from './entities/contanet-columns'
-import { generateContanetExcel, resolveTemplatePath } from './entities/contanet-export'
+import {
+  generateContanetExcel,
+  resolveTemplatePath,
+} from './entities/contanet-export'
 import {
   AccountingEntryStatusDto,
   AsientoTipo,
@@ -94,7 +102,10 @@ export class AccountingEntriesService {
   private async acquireGenerationSlot(): Promise<() => void> {
     // `while` (no `if`): si al despertar el cupo ya fue tomado por otro, se
     // vuelve a esperar. Garantiza el límite aunque haya varios en cola.
-    while (this.activeGenerations >= AccountingEntriesService.MAX_CONCURRENT_GENERATIONS) {
+    while (
+      this.activeGenerations >=
+      AccountingEntriesService.MAX_CONCURRENT_GENERATIONS
+    ) {
       await new Promise<void>(resolve => this.generationQueue.push(resolve))
     }
     this.activeGenerations++
@@ -143,7 +154,10 @@ export class AccountingEntriesService {
     ] as AsientoTipo[]) {
       const p = resolveTemplatePath(tipo)
       if (p) this.logger.log(`[asientos] template OK: ${p}`)
-      else this.logger.warn(`[asientos] template NO encontrado para tipo="${tipo}"`)
+      else
+        this.logger.warn(
+          `[asientos] template NO encontrado para tipo="${tipo}"`
+        )
     }
   }
 
@@ -172,26 +186,44 @@ export class AccountingEntriesService {
       )
     }
 
-    const [config, expenses, advances, colaborador, client] = await Promise.all([
-      this.accountingConfigService.getEffective(reportClientId ?? clientId),
-      this.expenseModel
-        .find({ expenseReportId: report._id, status: { $ne: 'rejected' } })
-        .lean()
-        .exec() as Promise<any[]>,
-      (report.advanceIds?.length
-        ? this.advanceModel
-          .find({ _id: { $in: report.advanceIds } })
+    const [config, expenses, advances, colaborador, client] = await Promise.all(
+      [
+        this.accountingConfigService.getEffective(reportClientId ?? clientId),
+        this.expenseModel
+          .find({ expenseReportId: report._id, status: { $ne: 'rejected' } })
           .lean()
-          .exec()
-        : Promise.resolve([])) as Promise<any[]>,
-      this.userModel.findById(report.userId).lean().exec(),
-      this.clientModel.findById(this.toObjectId(reportClientId ?? clientId)).lean().exec() as Promise<any>,
-    ])
+          .exec() as Promise<any[]>,
+        (report.advanceIds?.length
+          ? this.advanceModel
+            .find({ _id: { $in: report.advanceIds } })
+            .lean()
+            .exec()
+          : Promise.resolve([])) as Promise<any[]>,
+        this.userModel.findById(report.userId).lean().exec(),
+        this.clientModel
+          .findById(this.toObjectId(reportClientId ?? clientId))
+          .lean()
+          .exec() as Promise<any>,
+      ]
+    )
     const movilidadDiario =
       Number(client?.limits?.movilidadDiario) || MOVILIDAD_DAILY_CAP_DEFAULT
 
-    const fingerprint = this.computeFingerprint(report, expenses, advances, config)
-    return { report, config, expenses, advances, colaborador, movilidadDiario, fingerprint }
+    const fingerprint = this.computeFingerprint(
+      report,
+      expenses,
+      advances,
+      config
+    )
+    return {
+      report,
+      config,
+      expenses,
+      advances,
+      colaborador,
+      movilidadDiario,
+      fingerprint,
+    }
   }
 
   /** Estado actual (para pintar la UI) de los tipos solicitados, con URL firmada si hay archivo listo. */
@@ -207,9 +239,7 @@ export class AccountingEntriesService {
       .exec()) as any[]
     const byTipo = new Map<string, any>(docs.map(d => [d.tipo, d]))
     return Promise.all(
-      tipos.map(tipo =>
-        this.toStatusDto(tipo, byTipo.get(tipo), fingerprint)
-      )
+      tipos.map(tipo => this.toStatusDto(tipo, byTipo.get(tipo), fingerprint))
     )
   }
 
@@ -267,11 +297,12 @@ export class AccountingEntriesService {
       )
       // Fire-and-forget: el request responde de inmediato, el trabajo pesado
       // corre en segundo plano dentro del mismo proceso Node.
-      void this.runGeneration(reportId, clientId, tiposToRun, ctx).catch(error =>
-        this.logger.error(
-          `[asientos] fallo no controlado generando reportId=${reportId}: ${error?.message}`,
-          error?.stack
-        )
+      void this.runGeneration(reportId, clientId, tiposToRun, ctx).catch(
+        error =>
+          this.logger.error(
+            `[asientos] fallo no controlado generando reportId=${reportId}: ${error?.message}`,
+            error?.stack
+          )
       )
     }
 
@@ -292,7 +323,10 @@ export class AccountingEntriesService {
     if (!doc) return { tipo, status: 'none', blocked, blockedReason: undefined }
     const hasFile = doc.status === 'ready' && !!doc.s3Key
     const url = doc.s3Key
-      ? await this.uploadService.getPresignedDownloadUrl(doc.s3Key, doc.filename)
+      ? await this.uploadService.getPresignedDownloadUrl(
+        doc.s3Key,
+        doc.filename
+      )
       : undefined
     return {
       tipo,
@@ -352,7 +386,15 @@ export class AccountingEntriesService {
       fingerprint: string
     }
   ): Promise<void> {
-    const { report, config, expenses: rawExpenses, advances, colaborador, movilidadDiario, fingerprint } = ctx
+    const {
+      report,
+      config,
+      expenses: rawExpenses,
+      advances,
+      colaborador,
+      movilidadDiario,
+      fingerprint,
+    } = ctx
     // Orden pedido por Contabilidad para revisar el Excel: agrupado por tipo de
     // documento y, dentro de un mismo tipo, por fecha de emisión ascendente.
     const expenses = this.sortExpensesForAsiento(rawExpenses, report)
@@ -437,7 +479,10 @@ export class AccountingEntriesService {
       // hojas TABLAS/ImportCONTABILIDAD intactas). Si el template no está
       // disponible en el servidor, `generateContanetExcel` lanza y el catch
       // de este método deja el tipo en estado 'error' con el motivo exacto.
-      const { buffer, ext, contentType } = await generateContanetExcel(lines, tipo)
+      const { buffer, ext, contentType } = await generateContanetExcel(
+        lines,
+        tipo
+      )
       const filename = this.fileName(tipo, report, ext)
       const asientosCount = this.countAsientos(lines)
       const s3Key = this.s3Key(report.clientId ?? clientId, reportId, tipo, ext)
@@ -533,7 +578,8 @@ export class AccountingEntriesService {
         {
           $set: {
             status: 'error',
-            errorMessage: 'Generación interrumpida. Vuelve a generar el archivo.',
+            errorMessage:
+              'Generación interrumpida. Vuelve a generar el archivo.',
           },
         }
       )
@@ -545,11 +591,7 @@ export class AccountingEntriesService {
     }
   }
 
-  private fileName(
-    tipo: AsientoTipo,
-    report: any,
-    ext: 'xlsm'
-  ): string {
+  private fileName(tipo: AsientoTipo, report: any, ext: 'xlsm'): string {
     const code =
       report.codigo || report._id?.toString()?.slice(-6) || 'rendicion'
     return `asientos_${tipo}_${code}.${ext}`
@@ -593,9 +635,15 @@ export class AccountingEntriesService {
     // `mobilityRows`). Sin esto, esos días no se prefetchean y `tcFor` cae
     // al fallback `config.tipoCambio` (a veces 1) en vez del tipo de cambio
     // real de esa fecha.
-    const movilidadExpenses = expenses.filter(e => e.expenseType === 'planilla_movilidad')
+    const movilidadExpenses = expenses.filter(
+      e => e.expenseType === 'planilla_movilidad'
+    )
     if (movilidadExpenses.length) {
-      for (const block of this.buildMovilidadBlocks(movilidadExpenses, report, movilidadDiario)) {
+      for (const block of this.buildMovilidadBlocks(
+        movilidadExpenses,
+        report,
+        movilidadDiario
+      )) {
         add(block.date)
       }
     }
@@ -762,7 +810,10 @@ export class AccountingEntriesService {
    * documentos (PDF completo y Excel de asientos) muestren la misma fecha.
    */
   private asientoDate(expense: any, report: any): Date {
-    if (expense?.expenseType === 'planilla_movilidad' && Array.isArray(expense.mobilityRows)) {
+    if (
+      expense?.expenseType === 'planilla_movilidad' &&
+      Array.isArray(expense.mobilityRows)
+    ) {
       const rowDates = (expense.mobilityRows as Array<{ fecha?: string }>)
         .map(r => parseFechaEmisionInput(r?.fecha))
         .filter((d): d is Date => !!d)
@@ -787,7 +838,10 @@ export class AccountingEntriesService {
       const codA = resolveCodTipDoc(a, this.parseData(a).tipoComprobante)
       const codB = resolveCodTipDoc(b, this.parseData(b).tipoComprobante)
       if (codA !== codB) return codA.localeCompare(codB)
-      return this.asientoDate(a, report).getTime() - this.asientoDate(b, report).getTime()
+      return (
+        this.asientoDate(a, report).getTime() -
+        this.asientoDate(b, report).getTime()
+      )
     })
   }
 
@@ -797,7 +851,10 @@ export class AccountingEntriesService {
    * Cada planilla es un documento INDEPENDIENTE con su propio internalCode
    * (correlativo AML012, AML013, ...); el asiento ya no las consolida.
    */
-  private orderMovilidadForAsiento(movilidadExpenses: any[], report: any): any[] {
+  private orderMovilidadForAsiento(
+    movilidadExpenses: any[],
+    report: any
+  ): any[] {
     return [...movilidadExpenses].sort((a, b) => {
       const da = this.asientoDate(a, report).getTime()
       const db = this.asientoDate(b, report).getTime()
@@ -846,7 +903,9 @@ export class AccountingEntriesService {
     }
 
     const blocks: Array<{ date: Date; monto: number; expense: any }> = []
-    const startDate = this.toDateOrNull(report?.startDate ?? report?.viaticoStartDate)
+    const startDate = this.toDateOrNull(
+      report?.startDate ?? report?.viaticoStartDate
+    )
     const endDate = this.toDateOrNull(report?.endDate ?? report?.viaticoEndDate)
 
     if (startDate && endDate) {
@@ -857,9 +916,12 @@ export class AccountingEntriesService {
         0,
         Math.round((endDate.getTime() - day2.getTime()) / msPerDay) + 1
       )
-      const grandTotal = this.round2(ordered.reduce((s, e) => s + totalOf(e), 0))
+      const grandTotal = this.round2(
+        ordered.reduce((s, e) => s + totalOf(e), 0)
+      )
       const rowsNeeded = Math.ceil(grandTotal / movilidadDiario)
-      const cur = rowsNeeded <= daysFromDay2 ? new Date(day2) : new Date(startDate)
+      const cur =
+        rowsNeeded <= daysFromDay2 ? new Date(day2) : new Date(startDate)
       for (const e of ordered) {
         let remaining = totalOf(e)
         while (remaining > 0.005) {
@@ -1157,12 +1219,15 @@ export class AccountingEntriesService {
     const otrosCargos = this.round2(num(tot.otrosCargos))
     if (otrosTributos > 0)
       out.push({ concepto: 'otrosTributos', monto: otrosTributos })
-    if (otrosCargos > 0) out.push({ concepto: 'otrosCargos', monto: otrosCargos })
+    if (otrosCargos > 0)
+      out.push({ concepto: 'otrosCargos', monto: otrosCargos })
     return out
   }
 
   /** Hash de los cargos: si no cambian, la clasificación persistida sigue válida. */
-  private cargosHash(cargos: Array<{ concepto: string; monto: number }>): string {
+  private cargosHash(
+    cargos: Array<{ concepto: string; monto: number }>
+  ): string {
     return createHash('sha1').update(JSON.stringify(cargos)).digest('hex')
   }
 
@@ -1214,8 +1279,10 @@ export class AccountingEntriesService {
     const trunc = (s: string, max: number) =>
       s.length > max ? s.slice(0, max) + '…' : s
     const contexts: CargoContext[] = []
-    const owners: Array<{ pendiente: (typeof pendientes)[0]; cargoIdx: number }> =
-      []
+    const owners: Array<{
+      pendiente: (typeof pendientes)[0]
+      cargoIdx: number
+    }> = []
     for (const pendiente of pendientes) {
       const det = pendiente.expense.comprobanteDetallado ?? {}
       const items: string[] = (det.items ?? [])
@@ -1261,8 +1328,11 @@ export class AccountingEntriesService {
         .replace(/^```(?:json)?\s*/i, '')
         .replace(/\s*```\s*$/i, '')
         .trim()
-      const parsed: Array<{ idx: number; deducible?: boolean; serie?: string }> =
-        JSON.parse(raw)
+      const parsed: Array<{
+        idx: number
+        deducible?: boolean
+        serie?: string
+      }> = JSON.parse(raw)
       for (const entry of parsed) {
         const verdict = verdicts[entry.idx - 1]
         if (!verdict) continue
@@ -1385,7 +1455,10 @@ export class AccountingEntriesService {
       // porciones. Avisar la causa exacta en vez de dejar que Contabilidad
       // adivine a partir de un "descuadre" genérico.
       if (!cuenta9x) {
-        const categoryKey = category?._id?.toString() || expense.categoryId?.toString() || 'sin-categoria'
+        const categoryKey =
+          category?._id?.toString() ||
+          expense.categoryId?.toString() ||
+          'sin-categoria'
         if (!warnedCategoryKeys.has(categoryKey)) {
           warnedCategoryKeys.add(categoryKey)
           // Tres causas distintas, cada una con acción distinta:
@@ -1413,7 +1486,9 @@ export class AccountingEntriesService {
           warnedCategoryKeys.add(dest6xKey)
           const msg = `La categoría "${category.name}" no tiene la Cuenta Destino 6X configurada (Categorías → editar categoría). El asiento de destino saldrá como 79/79 en vez de 6X/79, sin registrar el gasto por naturaleza.`
           warnings.push(msg)
-          this.logger.warn(`[asientos] ${msg} (categoryId=${category._id?.toString()})`)
+          this.logger.warn(
+            `[asientos] ${msg} (categoryId=${category._id?.toString()})`
+          )
         }
       }
 
@@ -1510,7 +1585,11 @@ export class AccountingEntriesService {
                 mdaOrigen: cur.mdaOrigen,
                 identTipAfecto: p.condicion === 'afecto' ? 'S' : 'N',
                 montoDebe: this.round2(p.monto * cur.fxFactor),
-                montoDebeME: this.toMEForComprobante(p.monto, cur.isForeign, tc),
+                montoDebeME: this.toMEForComprobante(
+                  p.monto,
+                  cur.isForeign,
+                  tc
+                ),
               }
             )
           )
@@ -1695,7 +1774,16 @@ export class AccountingEntriesService {
     rateMap: Map<string, number>
     warnings: string[]
   }): Promise<ContanetLine[]> {
-    const { config, advances, colaborador, report, projectMap, periodDate, rateMap, warnings } = ctx
+    const {
+      config,
+      advances,
+      colaborador,
+      report,
+      projectMap,
+      periodDate,
+      rateMap,
+      warnings,
+    } = ctx
     const lines: ContanetLine[] = []
     let relacionado = 1
     let correlativo = 1
@@ -1738,25 +1826,41 @@ export class AccountingEntriesService {
 
       // 14 (Debe) — nace la obligación del colaborador
       push(
-        this.baseLine(config, date, config.fuenteCajaBancos, glosa, cur.cambioMoneda, periodDate, {
-          nroCuenta: cuenta14,
-          mdaOrigen: cur.mdaOrigen,
-          montoDebe: this.round2(amount * cur.fxFactor),
-          montoDebeME: this.toMEForComprobante(amount, cur.isForeign, tc),
-          codTipDocIdentTrab: trabDni ? '01' : '',
-          nroDocTrab: trabDni,
-          razonSocialTrab: trabNombre,
-        })
+        this.baseLine(
+          config,
+          date,
+          config.fuenteCajaBancos,
+          glosa,
+          cur.cambioMoneda,
+          periodDate,
+          {
+            nroCuenta: cuenta14,
+            mdaOrigen: cur.mdaOrigen,
+            montoDebe: this.round2(amount * cur.fxFactor),
+            montoDebeME: this.toMEForComprobante(amount, cur.isForeign, tc),
+            codTipDocIdentTrab: trabDni ? '01' : '',
+            nroDocTrab: trabDni,
+            razonSocialTrab: trabNombre,
+          }
+        )
       )
 
       // 104 (Haber) — sale el dinero del banco
       push(
-        this.baseLine(config, date, config.fuenteCajaBancos, glosa, cur.cambioMoneda, periodDate, {
-          nroCuenta: banco,
-          mdaOrigen: cur.mdaOrigen,
-          montoHaber: this.round2(amount * cur.fxFactor),
-          montoHaberME: this.toMEForComprobante(amount, cur.isForeign, tc),
-        })
+        this.baseLine(
+          config,
+          date,
+          config.fuenteCajaBancos,
+          glosa,
+          cur.cambioMoneda,
+          periodDate,
+          {
+            nroCuenta: banco,
+            mdaOrigen: cur.mdaOrigen,
+            montoHaber: this.round2(amount * cur.fxFactor),
+            montoHaberME: this.toMEForComprobante(amount, cur.isForeign, tc),
+          }
+        )
       )
 
       relacionado++
@@ -1796,12 +1900,71 @@ export class AccountingEntriesService {
     const trabDni = colaborador?.dni || ''
     const trabNombre = colaborador?.name || ''
     const cuenta14 = this.cuenta14(config, colaborador)
+    // Consolidación de la cuenta 14 de las FACTURAS: en vez de una línea 14 por
+    // comprobante (par 42/14), todas las facturas de la rendición comparten UN
+    // solo asiento con una única línea 14 (Haber) por el total rendido. La 42
+    // (Debe) sigue siendo una línea por comprobante con su detalle de proveedor
+    // (el detalle vive en la 42; la 14 solo refleja el total contra el anticipo
+    // del colaborador, igual que la Solicitud lo entrega en un único monto).
+    // Cuadre: Σ(42 Debe) = 14 Haber. Las facturas quedan contiguas en el orden
+    // ordenado (comparten "Codigo Tipo Document" = '01'), así que se acumulan y
+    // la línea 14 se vuelca al terminar su corrida (`flushFacturas`). Fecha /
+    // tipo de cambio / centro de costo de la línea 14 = los de la factura MÁS
+    // RECIENTE por fecha de emisión (decisión del usuario).
+    let facturaRelacionado: number | null = null
+    let facturaTotalPEN = 0
+    let facturaTotalME = 0
+    let facturaLatestDate: Date | null = null
+    let facturaLatestCur: { mdaOrigen: string; cambioMoneda: number } | null =
+      null
+    let facturaLatestProject: any = undefined
+    const flushFacturas = () => {
+      if (facturaRelacionado == null || !facturaLatestCur) return
+      const line = this.baseLine(
+        config,
+        facturaLatestDate as Date,
+        config.fuenteAplicacion,
+        'APLICACION',
+        facturaLatestCur.cambioMoneda,
+        periodDate,
+        {
+          nroCuenta: cuenta14,
+          mdaOrigen: facturaLatestCur.mdaOrigen,
+          montoHaber: this.round2(facturaTotalPEN),
+          montoHaberME: this.round2(facturaTotalME),
+          codTipDocIdentTrab: trabDni ? '01' : '',
+          nroDocTrab: trabDni,
+          razonSocialTrab: trabNombre,
+        }
+      )
+      this.applyProjectCostCenter(line, facturaLatestProject)
+      line.relacionado = facturaRelacionado
+      line.correlativo = correlativo++
+      lines.push(line)
+      relacionado++
+      facturaRelacionado = null
+      facturaTotalPEN = 0
+      facturaTotalME = 0
+      facturaLatestDate = null
+      facturaLatestCur = null
+      facturaLatestProject = undefined
+    }
+    // La rendición completa es UNA sola planilla de movilidad física, aunque
+    // el colaborador haya cargado varios `expense` de tipo planilla_movilidad
+    // (el PDF ya los consolida en una sola hoja, ver
+    // buildConsolidatedMobilityPageData en el frontend). Todos sus bloques en
+    // el asiento de Aplicación deben compartir el mismo "Numero Documento";
+    // usar el internalCode de cada expense por separado hacía que Contanet
+    // viera varias planillas distintas dentro de la misma rendición.
+    const movilidadNroDoc = this.resolveSharedMovilidadNroDoc(expenses)
     // Cada `expense` de tipo planilla_movilidad es un documento independiente
     // con su propio internalCode (correlativo AML012, AML013, ...). El asiento
     // de Aplicación ya NO consolida: cada bloque de S/40 se emite con el
     // "Numero Documento" de la planilla a la que pertenece (ver el bloque de
     // movilidad al final de esta función).
-    const movilidadExpenses = expenses.filter(e => e.expenseType === 'planilla_movilidad')
+    const movilidadExpenses = expenses.filter(
+      e => e.expenseType === 'planilla_movilidad'
+    )
 
     for (const expense of expenses) {
       // Toda la planilla de movilidad de la rendición se procesa UNA sola
@@ -1822,7 +1985,9 @@ export class AccountingEntriesService {
       const esFactura = codTipDoc === TIPO_DOCUMENTO.FT
       // Numero Serie: solo la factura (01) lleva la serie real del comprobante;
       // el resto de tipos de documento va con la serie de control fija 0001.
-      const serie = esFactura ? det?.comprobante?.serie || data.serie || '' : '0001'
+      const serie = esFactura
+        ? det?.comprobante?.serie || data.serie || ''
+        : '0001'
       // Planilla de movilidad / comprobante de caja no traen `comprobante.correlativo`
       // (no son comprobantes SUNAT): su número es el internalCode generado al crearlos
       // (expense.service.ts `generateInternalCode`, ej. "MT001"). Sin este fallback
@@ -1857,40 +2022,58 @@ export class AccountingEntriesService {
           expense.proyectId,
           report?.projectId
         )
-        const push = (line: ContanetLine) => {
-          this.applyProjectCostCenter(line, expProject)
-          line.relacionado = relacionado
-          line.correlativo = correlativo++
-          lines.push(line)
-        }
-        push(
-          this.baseLine(config, date, config.fuenteAplicacion, 'APLICACION', cur.cambioMoneda, periodDate, {
+        // Todas las facturas comparten UN asiento: se emite la 42 (Debe) por
+        // comprobante y se acumula el total; la única línea 14 (Haber) se
+        // vuelca en `flushFacturas`. Reserva el `relacionado` en la primera.
+        if (facturaRelacionado == null) facturaRelacionado = relacionado
+        const montoDebePEN = this.round2(total * cur.fxFactor)
+        const montoDebeME = this.toMEForComprobante(total, cur.isForeign, tc)
+        const line42 = this.baseLine(
+          config,
+          date,
+          config.fuenteAplicacion,
+          'APLICACION',
+          cur.cambioMoneda,
+          periodDate,
+          {
             nroCuenta: config.cuenta42,
             codTipDoc,
             nroSerie: serie,
             nroDoc,
             mdaOrigen: cur.mdaOrigen,
-            montoDebe: this.round2(total * cur.fxFactor),
-            montoDebeME: this.toMEForComprobante(total, cur.isForeign, tc),
+            montoDebe: montoDebePEN,
+            montoDebeME,
             codTipDocIdentProv: ruc ? '06' : '',
             nroDocProv: ruc,
             razonSocialProv: razonSocial,
-          })
+          }
         )
-        push(
-          this.baseLine(config, date, config.fuenteAplicacion, 'APLICACION', cur.cambioMoneda, periodDate, {
-            nroCuenta: cuenta14,
+        this.applyProjectCostCenter(line42, expProject)
+        line42.relacionado = facturaRelacionado
+        line42.correlativo = correlativo++
+        lines.push(line42)
+        facturaTotalPEN = this.round2(facturaTotalPEN + montoDebePEN)
+        facturaTotalME = this.round2(facturaTotalME + montoDebeME)
+        // Fecha / TC / centro de costo de la línea 14 = los de la factura más
+        // reciente por fecha de emisión.
+        if (
+          !facturaLatestDate ||
+          date.getTime() >= facturaLatestDate.getTime()
+        ) {
+          facturaLatestDate = date
+          facturaLatestCur = {
             mdaOrigen: cur.mdaOrigen,
-            montoHaber: this.round2(total * cur.fxFactor),
-            montoHaberME: this.toMEForComprobante(total, cur.isForeign, tc),
-            codTipDocIdentTrab: trabDni ? '01' : '',
-            nroDocTrab: trabDni,
-            razonSocialTrab: trabNombre,
-          })
-        )
-        relacionado++
+            cambioMoneda: cur.cambioMoneda,
+          }
+          facturaLatestProject = expProject
+        }
         continue
       }
+
+      // Corrida de facturas terminada (este comprobante es no-factura): vuelca
+      // la única línea 14 antes de procesarlo, para mantener las líneas del
+      // asiento de facturas contiguas y liberar su `relacionado`.
+      flushFacturas()
 
       // NO-FACTURA (boleta/ticket/planilla/recibo/otros, código ≠ 01): no dan
       // crédito fiscal y ya no pasan por `buildCompraLines`. Su gasto se
@@ -1906,7 +2089,10 @@ export class AccountingEntriesService {
       const cuenta6xCat = category?.cuentaDestino6x || config.cuenta79
 
       if (!cuenta9x) {
-        const categoryKey = category?._id?.toString() || expense.categoryId?.toString() || 'sin-categoria'
+        const categoryKey =
+          category?._id?.toString() ||
+          expense.categoryId?.toString() ||
+          'sin-categoria'
         if (!warnedCategoryKeys.has(categoryKey)) {
           warnedCategoryKeys.add(categoryKey)
           const msg = category
@@ -1924,7 +2110,9 @@ export class AccountingEntriesService {
           warnedCategoryKeys.add(dest6xKey)
           const msg = `La categoría "${category.name}" no tiene la Cuenta Destino 6X configurada (Categorías → editar categoría). El asiento de destino saldrá como 79/79 en vez de 6X/79, sin registrar el gasto por naturaleza.`
           warnings.push(msg)
-          this.logger.warn(`[asientos] ${msg} (categoryId=${category._id?.toString()})`)
+          this.logger.warn(
+            `[asientos] ${msg} (categoryId=${category._id?.toString()})`
+          )
         }
       }
 
@@ -1953,56 +2141,102 @@ export class AccountingEntriesService {
 
         if (cuenta9x) {
           for (const p of portions) {
-            const glosa = p.etiqueta ? `${glosaBase} (${p.etiqueta})` : glosaBase
+            const glosa = p.etiqueta
+              ? `${glosaBase} (${p.etiqueta})`
+              : glosaBase
             const pFields = p.serieNoDeducible
               ? { codTipDoc: '', nroSerie: '', nroDoc: p.serieNoDeducible }
               : docFields
             push(
-              this.baseLine(config, date, config.fuenteAplicacion, glosa, cur.cambioMoneda, periodDate, {
-                nroCuenta: cuenta9x,
-                ...pFields,
-                mdaOrigen: cur.mdaOrigen,
-                identTipAfecto: p.condicion === 'afecto' ? 'S' : 'N',
-                montoDebe: this.round2(p.monto * cur.fxFactor),
-                montoDebeME: this.toMEForComprobante(p.monto, cur.isForeign, tc),
-              })
+              this.baseLine(
+                config,
+                date,
+                config.fuenteAplicacion,
+                glosa,
+                cur.cambioMoneda,
+                periodDate,
+                {
+                  nroCuenta: cuenta9x,
+                  ...pFields,
+                  mdaOrigen: cur.mdaOrigen,
+                  identTipAfecto: p.condicion === 'afecto' ? 'S' : 'N',
+                  montoDebe: this.round2(p.monto * cur.fxFactor),
+                  montoDebeME: this.toMEForComprobante(
+                    p.monto,
+                    cur.isForeign,
+                    tc
+                  ),
+                }
+              )
             )
           }
         }
 
         push(
-          this.baseLine(config, date, config.fuenteAplicacion, glosaBase, cur.cambioMoneda, periodDate, {
-            nroCuenta: config.cuenta42,
-            ...docFields,
-            mdaOrigen: cur.mdaOrigen,
-            montoHaber: this.round2(total * cur.fxFactor),
-            montoHaberME: this.toMEForComprobante(total, cur.isForeign, tc),
-            esProvision: 1,
-            codTipDocIdentProv: ruc ? '06' : '',
-            nroDocProv: ruc,
-            razonSocialProv: razonSocial,
-          })
+          this.baseLine(
+            config,
+            date,
+            config.fuenteAplicacion,
+            glosaBase,
+            cur.cambioMoneda,
+            periodDate,
+            {
+              nroCuenta: config.cuenta42,
+              ...docFields,
+              mdaOrigen: cur.mdaOrigen,
+              montoHaber: this.round2(total * cur.fxFactor),
+              montoHaberME: this.toMEForComprobante(total, cur.isForeign, tc),
+              esProvision: 1,
+              codTipDocIdentProv: ruc ? '06' : '',
+              nroDocProv: ruc,
+              razonSocialProv: razonSocial,
+            }
+          )
         )
 
         for (const p of portions) {
           const glosa = p.etiqueta ? `${glosaBase} (${p.etiqueta})` : glosaBase
           push(
-            this.baseLine(config, date, config.fuenteAplicacion, glosa, cur.cambioMoneda, periodDate, {
-              nroCuenta: cuenta6xCat,
-              mdaOrigen: cur.mdaOrigen,
-              montoDebe: this.round2(p.monto * cur.fxFactor),
-              montoDebeME: this.toMEForComprobante(p.monto, cur.isForeign, tc),
-              esDestino: 1,
-            })
+            this.baseLine(
+              config,
+              date,
+              config.fuenteAplicacion,
+              glosa,
+              cur.cambioMoneda,
+              periodDate,
+              {
+                nroCuenta: cuenta6xCat,
+                mdaOrigen: cur.mdaOrigen,
+                montoDebe: this.round2(p.monto * cur.fxFactor),
+                montoDebeME: this.toMEForComprobante(
+                  p.monto,
+                  cur.isForeign,
+                  tc
+                ),
+                esDestino: 1,
+              }
+            )
           )
           push(
-            this.baseLine(config, date, config.fuenteAplicacion, glosa, cur.cambioMoneda, periodDate, {
-              nroCuenta: config.cuenta79,
-              mdaOrigen: cur.mdaOrigen,
-              montoHaber: this.round2(p.monto * cur.fxFactor),
-              montoHaberME: this.toMEForComprobante(p.monto, cur.isForeign, tc),
-              esDestino: 1,
-            })
+            this.baseLine(
+              config,
+              date,
+              config.fuenteAplicacion,
+              glosa,
+              cur.cambioMoneda,
+              periodDate,
+              {
+                nroCuenta: config.cuenta79,
+                mdaOrigen: cur.mdaOrigen,
+                montoHaber: this.round2(p.monto * cur.fxFactor),
+                montoHaberME: this.toMEForComprobante(
+                  p.monto,
+                  cur.isForeign,
+                  tc
+                ),
+                esDestino: 1,
+              }
+            )
           )
         }
 
@@ -2027,6 +2261,20 @@ export class AccountingEntriesService {
       })
     }
 
+    // Facturas al final del lote (sin ningún no-factura después): vuelca su
+    // única línea 14 antes del bloque de movilidad.
+    flushFacturas()
+
+    // Planilla de movilidad: TODAS las de la rendición son un solo
+    // documento físico (ver resolveSharedMovilidadNroDoc), así que se
+    // consolidan en un único total y se reparten en bloques de
+    // `movilidadDiario` con las mismas fechas SINTÉTICAS que ya muestra el
+    // PDF completo (buildConsolidatedMobilityPageData en
+    // rendicion-detail.component.ts): empiezan al día siguiente de
+    // report.startDate/viaticoStartDate y avanzan un día por bloque — nunca
+    // las fechas reales de `mobilityRows`, que el PDF tampoco usa para esto.
+    // Se procesa acá, fuera del loop de arriba, porque necesita el total de
+    // TODOS los expense de movilidad juntos antes de repartirlo.
     // Planilla de movilidad: cada `expense` es un documento INDEPENDIENTE con
     // su propio internalCode (correlativo AML012, AML013, ...). Su total se
     // reparte en bloques de `movilidadDiario` con fechas SINTÉTICAS (día
@@ -2037,7 +2285,11 @@ export class AccountingEntriesService {
     // acá, fuera del loop de arriba, porque las fechas sintéticas se asignan
     // de forma corrida sobre el conjunto de planillas de la rendición.
     if (movilidadExpenses.length) {
-      const blocks = this.buildMovilidadBlocks(movilidadExpenses, report, movilidadDiario)
+      const blocks = this.buildMovilidadBlocks(
+        movilidadExpenses,
+        report,
+        movilidadDiario
+      )
       if (!blocks.length) {
         const label = movilidadExpenses
           .map(e => e.internalCode || e.comentario || e._id)
@@ -2050,7 +2302,12 @@ export class AccountingEntriesService {
         // avisos deduplicados por categoría vía `warnedCategoryKeys`.
         const metaCache = new Map<
           string,
-          { cuenta9x: string; cuenta6xCat: string; project: any; nroDoc: string }
+          {
+            cuenta9x: string
+            cuenta6xCat: string
+            project: any
+            nroDoc: string
+          }
         >()
         const resolveMovMeta = (expense: any) => {
           const cacheKey = expense?._id?.toString() || ''
@@ -2065,7 +2322,9 @@ export class AccountingEntriesService {
 
           if (!cuenta9x) {
             const categoryKey =
-              category?._id?.toString() || expense?.categoryId?.toString() || 'sin-categoria'
+              category?._id?.toString() ||
+              expense?.categoryId?.toString() ||
+              'sin-categoria'
             if (!warnedCategoryKeys.has(categoryKey)) {
               warnedCategoryKeys.add(categoryKey)
               const msg = category
@@ -2083,14 +2342,21 @@ export class AccountingEntriesService {
               warnedCategoryKeys.add(dest6xKey)
               const msg = `La categoría "${category.name}" no tiene la Cuenta Destino 6X configurada (Categorías → editar categoría). El asiento de destino saldrá como 79/79 en vez de 6X/79, sin registrar el gasto por naturaleza.`
               warnings.push(msg)
-              this.logger.warn(`[asientos] ${msg} (categoryId=${category._id?.toString()})`)
+              this.logger.warn(
+                `[asientos] ${msg} (categoryId=${category._id?.toString()})`
+              )
             }
           }
 
           const projectId =
             report?.projectId?.toString() || expense?.proyectId?.toString()
           const project = projectId ? projectMap.get(projectId) : undefined
-          const meta = { cuenta9x, cuenta6xCat, project, nroDoc: expense?.internalCode || '' }
+          const meta = {
+            cuenta9x,
+            cuenta6xCat,
+            project,
+            nroDoc: expense?.internalCode || '',
+          }
           metaCache.set(cacheKey, meta)
           return meta
         }
@@ -2107,43 +2373,75 @@ export class AccountingEntriesService {
           }
           if (meta.cuenta9x) {
             push(
-              this.baseLine(config, block.date, config.fuenteAplicacion, glosaBase, tc, periodDate, {
-                nroCuenta: meta.cuenta9x,
-                codTipDoc: TIPO_DOCUMENTO.PM,
-                nroSerie: '0001',
-                nroDoc: meta.nroDoc,
-                identTipAfecto: 'N',
-                montoDebe: block.monto,
-                montoDebeME: this.toME(block.monto, tc),
-              })
+              this.baseLine(
+                config,
+                block.date,
+                config.fuenteAplicacion,
+                glosaBase,
+                tc,
+                periodDate,
+                {
+                  nroCuenta: meta.cuenta9x,
+                  codTipDoc: TIPO_DOCUMENTO.PM,
+                  nroSerie: '0001',
+                  nroDoc: meta.nroDoc,
+                  identTipAfecto: 'N',
+                  montoDebe: block.monto,
+                  montoDebeME: this.toME(block.monto, tc),
+                }
+              )
             )
           }
           push(
-            this.baseLine(config, block.date, config.fuenteAplicacion, glosaBase, tc, periodDate, {
-              nroCuenta: config.cuenta42,
-              codTipDoc: TIPO_DOCUMENTO.PM,
-              nroSerie: '0001',
-              nroDoc: meta.nroDoc,
-              montoHaber: block.monto,
-              montoHaberME: this.toME(block.monto, tc),
-              esProvision: 1,
-            })
+            this.baseLine(
+              config,
+              block.date,
+              config.fuenteAplicacion,
+              glosaBase,
+              tc,
+              periodDate,
+              {
+                nroCuenta: config.cuenta42,
+                codTipDoc: TIPO_DOCUMENTO.PM,
+                nroSerie: '0001',
+                nroDoc: meta.nroDoc,
+                montoHaber: block.monto,
+                montoHaberME: this.toME(block.monto, tc),
+                esProvision: 1,
+              }
+            )
           )
           push(
-            this.baseLine(config, block.date, config.fuenteAplicacion, glosaBase, tc, periodDate, {
-              nroCuenta: meta.cuenta6xCat,
-              montoDebe: block.monto,
-              montoDebeME: this.toME(block.monto, tc),
-              esDestino: 1,
-            })
+            this.baseLine(
+              config,
+              block.date,
+              config.fuenteAplicacion,
+              glosaBase,
+              tc,
+              periodDate,
+              {
+                nroCuenta: meta.cuenta6xCat,
+                montoDebe: block.monto,
+                montoDebeME: this.toME(block.monto, tc),
+                esDestino: 1,
+              }
+            )
           )
           push(
-            this.baseLine(config, block.date, config.fuenteAplicacion, glosaBase, tc, periodDate, {
-              nroCuenta: config.cuenta79,
-              montoHaber: block.monto,
-              montoHaberME: this.toME(block.monto, tc),
-              esDestino: 1,
-            })
+            this.baseLine(
+              config,
+              block.date,
+              config.fuenteAplicacion,
+              glosaBase,
+              tc,
+              periodDate,
+              {
+                nroCuenta: config.cuenta79,
+                montoHaber: block.monto,
+                montoHaberME: this.toME(block.monto, tc),
+                esDestino: 1,
+              }
+            )
           )
           relacionado++
         }
@@ -2165,7 +2463,15 @@ export class AccountingEntriesService {
     },
     modo: 'devolucion' | 'reembolso'
   ): Promise<ContanetLine[]> {
-    const { config, colaborador, report, advances, projectMap, periodDate, rateMap } = ctx
+    const {
+      config,
+      colaborador,
+      report,
+      advances,
+      projectMap,
+      periodDate,
+      rateMap,
+    } = ctx
     const settlement = report.settlement
     const diff = this.round2(Math.abs(Number(settlement?.difference) || 0))
     if (diff <= 0) return []
@@ -2208,40 +2514,72 @@ export class AccountingEntriesService {
     if (modo === 'devolucion') {
       // 104 (Debe) entra al banco / 14 (Haber) reduce la CxC
       push(
-        this.baseLine(config, date, config.fuenteCajaBancos, glosa, tc, periodDate, {
-          nroCuenta: banco,
-          montoDebe: diff,
-          montoDebeME: this.toME(diff, tc),
-        })
+        this.baseLine(
+          config,
+          date,
+          config.fuenteCajaBancos,
+          glosa,
+          tc,
+          periodDate,
+          {
+            nroCuenta: banco,
+            montoDebe: diff,
+            montoDebeME: this.toME(diff, tc),
+          }
+        )
       )
       push(
-        this.baseLine(config, date, config.fuenteCajaBancos, glosa, tc, periodDate, {
-          nroCuenta: cuenta14,
-          montoHaber: diff,
-          montoHaberME: this.toME(diff, tc),
-          codTipDocIdentTrab: trabDni ? '01' : '',
-          nroDocTrab: trabDni,
-          razonSocialTrab: trabNombre,
-        })
+        this.baseLine(
+          config,
+          date,
+          config.fuenteCajaBancos,
+          glosa,
+          tc,
+          periodDate,
+          {
+            nroCuenta: cuenta14,
+            montoHaber: diff,
+            montoHaberME: this.toME(diff, tc),
+            codTipDocIdentTrab: trabDni ? '01' : '',
+            nroDocTrab: trabDni,
+            razonSocialTrab: trabNombre,
+          }
+        )
       )
     } else {
       // Reembolso: 14/46 (Debe) / 104 (Haber) sale del banco
       push(
-        this.baseLine(config, date, config.fuenteCajaBancos, glosa, tc, periodDate, {
-          nroCuenta: cuentaColab,
-          montoDebe: diff,
-          montoDebeME: this.toME(diff, tc),
-          codTipDocIdentTrab: trabDni ? '01' : '',
-          nroDocTrab: trabDni,
-          razonSocialTrab: trabNombre,
-        })
+        this.baseLine(
+          config,
+          date,
+          config.fuenteCajaBancos,
+          glosa,
+          tc,
+          periodDate,
+          {
+            nroCuenta: cuentaColab,
+            montoDebe: diff,
+            montoDebeME: this.toME(diff, tc),
+            codTipDocIdentTrab: trabDni ? '01' : '',
+            nroDocTrab: trabDni,
+            razonSocialTrab: trabNombre,
+          }
+        )
       )
       push(
-        this.baseLine(config, date, config.fuenteCajaBancos, glosa, tc, periodDate, {
-          nroCuenta: banco,
-          montoHaber: diff,
-          montoHaberME: this.toME(diff, tc),
-        })
+        this.baseLine(
+          config,
+          date,
+          config.fuenteCajaBancos,
+          glosa,
+          tc,
+          periodDate,
+          {
+            nroCuenta: banco,
+            montoHaber: diff,
+            montoHaberME: this.toME(diff, tc),
+          }
+        )
       )
     }
 
@@ -2278,7 +2616,8 @@ export class AccountingEntriesService {
     >()
     lines.forEach((line, idx) => {
       const rel = Number(line.relacionado)
-      if (!groups.has(rel)) groups.set(rel, { debe: 0, haber: 0, firstIdx: idx, lastIdx: idx })
+      if (!groups.has(rel))
+        groups.set(rel, { debe: 0, haber: 0, firstIdx: idx, lastIdx: idx })
       const g = groups.get(rel)!
       g.debe += Number(line.montoDebe) || 0
       g.haber += Number(line.montoHaber) || 0
@@ -2309,7 +2648,11 @@ export class AccountingEntriesService {
   }
 
   /** Descripción legible del documento (comprobante o anticipo) al que pertenece un grupo de líneas. */
-  private describeRelacionado(lines: ContanetLine[], firstIdx: number, lastIdx: number): string {
+  private describeRelacionado(
+    lines: ContanetLine[],
+    firstIdx: number,
+    lastIdx: number
+  ): string {
     for (let i = firstIdx; i <= lastIdx; i++) {
       const l = lines[i]
       if (l.razonSocialProv) {

@@ -12,8 +12,8 @@ describe('ExpenseService — tipo de comprobante', () => {
   const service = Object.create(ExpenseService.prototype) as ExpenseService
   const determineCodComp = (tipo?: string, serie?: string): string =>
     (service as any)['determineCodComp'](tipo, serie)
-  const normalize = (tipo?: string): string | undefined =>
-    (service as any)['normalizeTipoComprobante'](tipo)
+  const normalize = (tipo?: string, serie?: string): string | undefined =>
+    (service as any)['normalizeTipoComprobante'](tipo, serie)
   const sync = (updateDoc: Record<string, any>, existing: any): void =>
     (service as any)['syncTipoComprobanteOnWrite'](updateDoc, existing)
 
@@ -71,12 +71,29 @@ describe('ExpenseService — tipo de comprobante', () => {
       expect(normalize(undefined)).toBeUndefined()
       expect(normalize('cualquier cosa')).toBeUndefined()
     })
+
+    // Desde que la consulta a SUNAT resuelve el código por la serie, una
+    // etiqueta errada ya no hace fallar la validación: si no se corrigiera
+    // aquí también, quedaría un error silencioso (SUNAT conforme, pero el
+    // asiento contable tratando la factura como boleta).
+    it('la serie corrige la etiqueta errada', () => {
+      expect(normalize('Boleta de Venta Electrónica', 'E001')).toBe('Factura')
+      expect(normalize('Boleta', 'F002')).toBe('Factura')
+      expect(normalize('Factura', 'B880')).toBe('Boleta')
+      expect(normalize('Factura Electronica', 'EB01')).toBe('Boleta')
+    })
+
+    it('sin serie que identifique el tipo, se respeta la etiqueta', () => {
+      expect(normalize('Boleta de Venta', '001')).toBe('Boleta')
+      expect(normalize('Ticket', '0001')).toBe('Ticket')
+      expect(normalize('Factura', '')).toBe('Factura')
+    })
   })
 
   describe('syncTipoComprobanteOnWrite', () => {
     it('propaga el tipo a comprobanteDetallado, que es el que manda en el asiento', () => {
       const updateDoc: Record<string, any> = {
-        data: JSON.stringify({ serie: 'F001', tipoComprobante: 'Boleta' }),
+        data: JSON.stringify({ serie: 'B001', tipoComprobante: 'Boleta' }),
       }
       sync(updateDoc, { comprobanteDetallado: { emisor: { ruc: '20503840121' } } })
 
@@ -88,6 +105,19 @@ describe('ExpenseService — tipo de comprobante', () => {
     it('normaliza la etiqueta al escribir para no acumular variantes', () => {
       const updateDoc: Record<string, any> = {
         data: JSON.stringify({ tipoComprobante: 'FACTURA ELECTRONICA' }),
+      }
+      sync(updateDoc, {})
+
+      expect(JSON.parse(updateDoc.data).tipoComprobante).toBe('Factura')
+      expect(updateDoc.comprobanteDetallado.comprobante.tipo).toBe('Factura')
+    })
+
+    it('corrige por la serie una etiqueta que la contradice', () => {
+      const updateDoc: Record<string, any> = {
+        data: JSON.stringify({
+          serie: 'E001',
+          tipoComprobante: 'Boleta de Venta Electrónica',
+        }),
       }
       sync(updateDoc, {})
 

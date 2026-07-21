@@ -383,7 +383,10 @@ export class ExpenseService {
     }
     if (!parsed || typeof parsed !== 'object') return
 
-    const tipo = this.normalizeTipoComprobante(parsed.tipoComprobante)
+    const tipo = this.normalizeTipoComprobante(
+      parsed.tipoComprobante,
+      parsed.serie
+    )
     if (!tipo) return
 
     // Se reescribe `data` con la etiqueta canónica para que no queden variantes
@@ -407,8 +410,25 @@ export class ExpenseService {
   /**
    * Etiqueta canónica del tipo de comprobante. Se persiste esta cadena exacta
    * porque es la que ya escriben la IA y los mapeadores del front.
+   *
+   * Si la serie identifica el tipo, manda sobre la etiqueta, por el mismo
+   * criterio que `determineCodComp`. Es importante que ambos usen la misma
+   * regla: desde que la consulta a SUNAT resuelve el código por la serie, una
+   * etiqueta errada ya no hace fallar la validación, así que dejarla sin
+   * corregir la volvería un error silencioso — SUNAT diría "conforme" mientras
+   * el asiento contable, que lee esta etiqueta vía `resolveCodTipDoc`, trataría
+   * una factura como boleta y perdería el crédito fiscal.
    */
-  private normalizeTipoComprobante(tipo?: string): string | undefined {
+  private normalizeTipoComprobante(
+    tipo?: string,
+    serie?: string
+  ): string | undefined {
+    const s = String(serie || '')
+      .trim()
+      .toUpperCase()
+    if (s.startsWith('EB') || s.startsWith('B')) return 'Boleta'
+    if (s.startsWith('F') || s.startsWith('E')) return 'Factura'
+
     const t = String(tipo || '')
       .trim()
       .toLowerCase()
@@ -3069,7 +3089,10 @@ export class ExpenseService {
       // precedencia en `resolveCodTipDoc` al armar el asiento contable. Si solo
       // se actualizara el primero, la pantalla mostraría el tipo corregido
       // mientras la contabilidad sigue usando el viejo.
-      const tipoCorregido = this.normalizeTipoComprobante(data.tipoComprobante)
+      const tipoCorregido = this.normalizeTipoComprobante(
+        data.tipoComprobante,
+        data.serie
+      )
 
       const updatedData =
         parsed && typeof parsed === 'object'

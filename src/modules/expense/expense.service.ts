@@ -343,6 +343,53 @@ export class ExpenseService {
   }
 
   /**
+   * El tipo de comprobante vive en dos sitios: el JSON `data` (lo que muestra
+   * la pantalla) y `comprobanteDetallado.comprobante.tipo`, que es el que tiene
+   * precedencia en `resolveCodTipDoc` al armar el asiento contable. Cualquier
+   * escritura del tipo debe tocar los dos: si solo se guarda el primero, la
+   * pantalla muestra el tipo corregido mientras la contabilidad sigue usando el
+   * viejo, que es peor que no corregirlo porque aparenta estar arreglado.
+   *
+   * Se aplica en el PATCH y no solo en la revalidación SUNAT, porque esa
+   * revalidación depende de que el comprobante tenga RUC, serie, correlativo y
+   * fecha; sin alguno de esos datos el tipo se guardaría desincronizado.
+   */
+  private syncTipoComprobanteOnWrite(
+    updateDoc: Record<string, any>,
+    existing: Expense
+  ): void {
+    if (typeof updateDoc.data !== 'string') return
+
+    let parsed: any
+    try {
+      parsed = JSON.parse(updateDoc.data)
+    } catch {
+      return
+    }
+    if (!parsed || typeof parsed !== 'object') return
+
+    const tipo = this.normalizeTipoComprobante(parsed.tipoComprobante)
+    if (!tipo) return
+
+    // Se reescribe `data` con la etiqueta canónica para que no queden variantes
+    // ("Factura Electrónica", "01") conviviendo en el mismo campo.
+    if (parsed.tipoComprobante !== tipo) {
+      updateDoc.data = JSON.stringify({ ...parsed, tipoComprobante: tipo })
+    }
+
+    const detalleActual =
+      (updateDoc.comprobanteDetallado as Record<string, any>) ??
+      (existing.comprobanteDetallado as Record<string, any>) ??
+      {}
+    if (detalleActual.comprobante?.tipo === tipo) return
+
+    updateDoc.comprobanteDetallado = {
+      ...detalleActual,
+      comprobante: { ...(detalleActual.comprobante ?? {}), tipo },
+    }
+  }
+
+  /**
    * Etiqueta canónica del tipo de comprobante. Se persiste esta cadena exacta
    * porque es la que ya escriben la IA y los mapeadores del front.
    */
@@ -2494,6 +2541,8 @@ export class ExpenseService {
       updateDoc.rejectionReason = ''
       updateDoc.rejectedBy = ''
     }
+
+    this.syncTipoComprobanteOnWrite(updateDoc, existing)
 
     const updated = await this.expenseRepository
       .findOneAndUpdate({ _id: expenseIdObject }, updateDoc, {

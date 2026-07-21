@@ -6,6 +6,7 @@ import {
   IsNumber,
   Min,
   IsArray,
+  IsIn,
 } from 'class-validator'
 
 export class CreateCategoryDto {
@@ -41,6 +42,14 @@ export class CreateCategoryDto {
   @Min(0)
   @IsOptional()
   limit?: number | null
+
+  /**
+   * Rubro de Declaración Jurada al que se autoasigna esta categoría.
+   * `null` limpia el flag. Solo una categoría por perfil debería llevar cada valor.
+   */
+  @IsOptional()
+  @IsIn(['alimentacion', 'movilidad'])
+  djType?: 'alimentacion' | 'movilidad' | null
 
   @IsString()
   @IsNotEmpty()

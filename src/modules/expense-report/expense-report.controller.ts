@@ -680,7 +680,8 @@ export class ExpenseReportController {
     const clientId = this.resolveClientId(req)
     if (!clientId) throw new BadRequestException('Cliente no identificado en la sesión.')
     const allowBackdate = req.user?.permissions?.canBackdateViaticos === true
-    const result = await this.expenseReportService.createViatico(dto, userId, clientId, allowBackdate)
+    const userRole = req.user?.roles?.[0] ?? ''
+    const result = await this.expenseReportService.createViatico(dto, userId, clientId, allowBackdate, userRole)
     await this.auditLogService.log({
       userId: req.user._id || req.user.sub,
       userName: req.user.name || req.user.email || 'Usuario',

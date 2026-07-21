@@ -1949,14 +1949,6 @@ export class AccountingEntriesService {
       facturaLatestCur = null
       facturaLatestProject = undefined
     }
-    // La rendición completa es UNA sola planilla de movilidad física, aunque
-    // el colaborador haya cargado varios `expense` de tipo planilla_movilidad
-    // (el PDF ya los consolida en una sola hoja, ver
-    // buildConsolidatedMobilityPageData en el frontend). Todos sus bloques en
-    // el asiento de Aplicación deben compartir el mismo "Numero Documento";
-    // usar el internalCode de cada expense por separado hacía que Contanet
-    // viera varias planillas distintas dentro de la misma rendición.
-    const movilidadNroDoc = this.resolveSharedMovilidadNroDoc(expenses)
     // Cada `expense` de tipo planilla_movilidad es un documento independiente
     // con su propio internalCode (correlativo AML012, AML013, ...). El asiento
     // de Aplicación ya NO consolida: cada bloque de S/40 se emite con el

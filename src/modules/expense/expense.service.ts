@@ -327,10 +327,34 @@ export class ExpenseService {
     }
   }
 
+  /**
+   * Código de comprobante que espera SUNAT. Tolerante a mayúsculas y a
+   * variantes ("Boleta de Venta Electrónica", "TICKET"), con el mismo criterio
+   * de substring que `resolveCodTipDoc` usa para el asiento contable: si ambos
+   * no coinciden, la validación SUNAT y la contabilidad se contradicen.
+   */
   private determineCodComp(tipo?: string): string {
-    if (tipo === 'Factura') return '01'
-    if (tipo === 'Boleta') return '03'
+    const t = String(tipo || '')
+      .trim()
+      .toLowerCase()
+    if (t.includes('bolet')) return '03'
+    if (t.includes('ticket') || t.includes('tique')) return '12'
     return '01'
+  }
+
+  /**
+   * Etiqueta canónica del tipo de comprobante. Se persiste esta cadena exacta
+   * porque es la que ya escriben la IA y los mapeadores del front.
+   */
+  private normalizeTipoComprobante(tipo?: string): string | undefined {
+    const t = String(tipo || '')
+      .trim()
+      .toLowerCase()
+    if (!t) return undefined
+    if (t.includes('bolet')) return 'Boleta'
+    if (t.includes('ticket') || t.includes('tique')) return 'Ticket'
+    if (t.includes('factura')) return 'Factura'
+    return undefined
   }
 
   private formatDateForSunat(dateStr?: string): string | undefined {
@@ -2974,11 +2998,21 @@ export class ExpenseService {
             ? JSON.parse(expense.data)
             : (expense.data ?? {})
       } catch {}
+      // Si la llamada trae un tipo de comprobante corregido a mano, se persiste
+      // junto con el resultado de la validación. Debe escribirse en los DOS
+      // lugares donde vive el dato: el JSON `data` (lo que muestra la pantalla)
+      // y `comprobanteDetallado.comprobante.tipo`, que es el que tiene
+      // precedencia en `resolveCodTipDoc` al armar el asiento contable. Si solo
+      // se actualizara el primero, la pantalla mostraría el tipo corregido
+      // mientras la contabilidad sigue usando el viejo.
+      const tipoCorregido = this.normalizeTipoComprobante(data.tipoComprobante)
+
       const updatedData =
         parsed && typeof parsed === 'object'
           ? JSON.stringify({
               ...parsed,
               ...(razonSocialFresca ? { razonSocial: razonSocialFresca } : {}),
+              ...(tipoCorregido ? { tipoComprobante: tipoCorregido } : {}),
               sunatValidation: validation,
             })
           : undefined
@@ -2988,6 +3022,18 @@ export class ExpenseService {
         status: expenseStatus,
       }
       if (updatedData !== undefined) updateDoc.data = updatedData
+
+      if (tipoCorregido) {
+        const detalleActual =
+          (expense.comprobanteDetallado as Record<string, any>) ?? {}
+        updateDoc.comprobanteDetallado = {
+          ...detalleActual,
+          comprobante: {
+            ...(detalleActual.comprobante ?? {}),
+            tipo: tipoCorregido,
+          },
+        }
+      }
 
       const updatedExpense = await this.expenseRepository
         .findByIdAndUpdate(id, updateDoc, { new: true })

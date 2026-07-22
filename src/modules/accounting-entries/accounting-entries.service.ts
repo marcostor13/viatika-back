@@ -193,12 +193,22 @@ export class AccountingEntriesService {
           .find({ expenseReportId: report._id, status: { $ne: 'rejected' } })
           .lean()
           .exec() as Promise<any[]>,
-        (report.advanceIds?.length
-          ? this.advanceModel
-            .find({ _id: { $in: report.advanceIds } })
-            .lean()
-            .exec()
-          : Promise.resolve([])) as Promise<any[]>,
+        // `report.advanceIds` NO es la única fuente de verdad del vínculo
+        // anticipo↔rendición (ver `AdvanceService.findByExpenseReportId`,
+        // que siempre hace fallback a `Advance.expenseReportId`): quedarse
+        // solo con `advanceIds` dejaba `advances` vacío para rendiciones
+        // donde el anticipo se linkeó por `expenseReportId` sin poblar ese
+        // arreglo, y sin anticipos `buildSolicitudLines` no emite ninguna
+        // línea — el asiento de Solicitud salía siempre vacío.
+        this.advanceModel
+          .find({
+            $or: [
+              { _id: { $in: this.toObjectIds(report.advanceIds ?? []) } },
+              { expenseReportId: report._id },
+            ],
+          })
+          .lean()
+          .exec() as Promise<any[]>,
         this.userModel.findById(report.userId).lean().exec(),
         this.clientModel
           .findById(this.toObjectId(reportClientId ?? clientId))
@@ -1104,8 +1114,12 @@ export class AccountingEntriesService {
 
   /**
    * Línea base con los campos comunes a todo asiento.
-   * `date` = fecha del comprobante (para las columnas de fechas y el tipo de cambio).
-   * `periodDate` = fecha de inicio de la solicitud (para ejercicio/periodo).
+   * `date` = fecha del comprobante (para las columnas de fechas, el tipo de
+   * cambio Y el ejercicio/periodo: Contabilidad pidió que el periodo de CADA
+   * línea coincida con la fecha de emisión de SU comprobante, no con una
+   * única fecha de solicitud compartida por todo el archivo).
+   * `periodDate` ya no se usa para el periodo (se mantiene en la firma solo
+   * por compatibilidad con los ~20 call sites existentes).
    * `tc` = tipo de cambio PEN/USD del día.
    */
   private baseLine(
@@ -1119,8 +1133,8 @@ export class AccountingEntriesService {
   ): ContanetLine {
     const serial = toExcelSerial(date)
     return {
-      ejercicio: periodDate.getUTCFullYear(),
-      periodo: String(periodDate.getUTCMonth() + 1).padStart(2, '0'),
+      ejercicio: date.getUTCFullYear(),
+      periodo: String(date.getUTCMonth() + 1).padStart(2, '0'),
       codModulo: config.codModulo,
       modulo: config.modulo,
       fuente,
@@ -1900,19 +1914,21 @@ export class AccountingEntriesService {
     const trabDni = colaborador?.dni || ''
     const trabNombre = colaborador?.name || ''
     const cuenta14 = this.cuenta14(config, colaborador)
-    // Consolidación de la cuenta 14 de TODOS los comprobantes de la rendición:
-    // en vez de una línea 14 por comprobante (o por corrida de facturas), la
-    // rendición completa comparte UN solo asiento de CRUCE con una única línea
-    // 14 (Haber) por el TOTAL RENDIDO. Cada comprobante — factura, boleta /
-    // ticket / recibo / otros y cada bloque de movilidad — aporta una línea 42
-    // (Debe) con su detalle de proveedor/documento a ese mismo asiento. La 14
-    // solo refleja la cancelación total de la entrega a rendir (1413) del
-    // colaborador, igual que la Solicitud la entrega en un único monto.
-    // Para los no-factura y la movilidad, esta 42 (Debe) cancela la 42 (Haber)
-    // de provisión que crea su propio bloque de gasto 9X/42/6X/79 (asientos
+    // La cuenta 42 es EXCLUSIVA de facturas (única con crédito fiscal / cuenta
+    // por pagar formal a proveedor): cada factura aporta una línea 42 (Debe)
+    // con su detalle de proveedor/documento a un asiento de CRUCE compartido,
+    // que se liquida con una única línea 14 (Haber) por el total de FACTURAS.
+    // Esa 42 (Debe) cancela la 42 (Haber) de provisión que crea el propio
+    // bloque de gasto de la factura en `buildCompraLines` (asientos
     // independientes que cuadran por sí solos). Cuadre del cruce:
     // Σ(42 Debe) = 14 Haber. Fecha / tipo de cambio / centro de costo de la
-    // línea 14 = los del comprobante MÁS RECIENTE por fecha.
+    // línea 14 = los de la factura MÁS RECIENTE por fecha.
+    // No-factura y movilidad NO pasan por la 42: su propio bloque de gasto
+    // (9X/14/6X/79, ver `pushBloque` y el bloque de movilidad más abajo)
+    // cancela directo contra la 14, sin necesidad de este cruce. Sumando
+    // ambos caminos, la 14 (Haber) del archivo totaliza el gasto de TODOS
+    // los documentos de la rendición (factura o no), tal como pide
+    // Contabilidad.
     let crossingRelacionado: number | null = null
     let crossingTotalPEN = 0
     let crossingTotalME = 0
@@ -2180,6 +2196,11 @@ export class AccountingEntriesService {
           }
         }
 
+        // La cuenta 42 es EXCLUSIVA de facturas (crédito fiscal / cuenta por
+        // pagar a proveedor). Boleta/ticket/planilla/recibo/otros no generan
+        // una cuenta por pagar: su gasto cancela directo contra la 14 del
+        // colaborador (misma cuenta que consolida el total de TODOS los
+        // documentos de la rendición, factura o no).
         push(
           this.baseLine(
             config,
@@ -2189,15 +2210,14 @@ export class AccountingEntriesService {
             cur.cambioMoneda,
             periodDate,
             {
-              nroCuenta: config.cuenta42,
+              nroCuenta: cuenta14,
               ...docFields,
               mdaOrigen: cur.mdaOrigen,
               montoHaber: this.round2(total * cur.fxFactor),
               montoHaberME: this.toMEForComprobante(total, cur.isForeign, tc),
-              esProvision: 1,
-              codTipDocIdentProv: ruc ? '06' : '',
-              nroDocProv: ruc,
-              razonSocialProv: razonSocial,
+              codTipDocIdentTrab: trabDni ? '01' : '',
+              nroDocTrab: trabDni,
+              razonSocialTrab: trabNombre,
             }
           )
         )
@@ -2262,34 +2282,14 @@ export class AccountingEntriesService {
         )
         continue
       }
+      // `pushBloque` ya cancela el gasto directo contra la 14 (Haber); a
+      // diferencia de la factura, el no-factura NO pasa por la 42 y por lo
+      // tanto no necesita un segundo asiento de cruce.
       pushBloque(this.asientoDate(expense, report), portions, 'APLICACION', {
         codTipDoc,
         nroSerie: serie,
         nroDoc,
       })
-
-      // Cruce del no-factura contra la 14: una 42(Debe) por el total del
-      // comprobante que cancela la 42(Haber) de provisión del bloque anterior.
-      const nfTotal = this.round2(portions.reduce((s, p) => s + p.monto, 0))
-      if (nfTotal > 0) {
-        const nfDate = this.asientoDate(expense, report)
-        const nfTc = this.tcFor(nfDate, rateMap, config)
-        const nfCur = this.resolveComprobanteCurrency(
-          config,
-          expense,
-          nfTotal,
-          nfTc
-        )
-        addCrossing42({
-          date: nfDate,
-          montoDebePEN: this.round2(nfTotal * nfCur.fxFactor),
-          montoDebeME: this.toMEForComprobante(nfTotal, nfCur.isForeign, nfTc),
-          cur: nfCur,
-          project: expenseProject,
-          docFields: { codTipDoc, nroSerie: serie, nroDoc },
-          prov: { ruc, razonSocial },
-        })
-      }
     }
 
     // Planilla de movilidad: cada `expense` es un documento INDEPENDIENTE con
@@ -2409,6 +2409,9 @@ export class AccountingEntriesService {
               )
             )
           }
+          // La cuenta 42 es exclusiva de facturas; la planilla de movilidad
+          // cancela su gasto directo contra la 14 del colaborador (igual que
+          // el resto de no-factura, ver `pushBloque` más arriba).
           push(
             this.baseLine(
               config,
@@ -2418,13 +2421,15 @@ export class AccountingEntriesService {
               tc,
               periodDate,
               {
-                nroCuenta: config.cuenta42,
+                nroCuenta: cuenta14,
                 codTipDoc: TIPO_DOCUMENTO.PM,
                 nroSerie: '0001',
                 nroDoc: meta.nroDoc,
                 montoHaber: block.monto,
                 montoHaberME: this.toME(block.monto, tc),
-                esProvision: 1,
+                codTipDocIdentTrab: trabDni ? '01' : '',
+                nroDocTrab: trabDni,
+                razonSocialTrab: trabNombre,
               }
             )
           )
@@ -2461,36 +2466,15 @@ export class AccountingEntriesService {
             )
           )
           relacionado++
-          // Cruce del bloque de movilidad contra la 14: una 42(Debe) que
-          // cancela la 42(Haber) de provisión de este mismo bloque.
-          const movCur = this.resolveComprobanteCurrency(
-            config,
-            block.expense,
-            block.monto,
-            tc
-          )
-          addCrossing42({
-            date: block.date,
-            montoDebePEN: this.round2(block.monto * movCur.fxFactor),
-            montoDebeME: this.toMEForComprobante(
-              block.monto,
-              movCur.isForeign,
-              tc
-            ),
-            cur: movCur,
-            project: meta.project,
-            docFields: {
-              codTipDoc: TIPO_DOCUMENTO.PM,
-              nroSerie: '0001',
-              nroDoc: meta.nroDoc,
-            },
-          })
         }
       }
     }
 
-    // Única línea 14 (Haber) del cruce: liquida la entrega a rendir por el
-    // TOTAL rendido (facturas + no-factura + movilidad).
+    // Única línea 14 (Haber) del cruce: liquida contra la 42 el total de
+    // FACTURAS (único tipo de documento que pasa por la 42). No-factura y
+    // movilidad ya cancelaron su gasto directo contra la 14 arriba: sumando
+    // ambos caminos, la 14 (Haber) del archivo de Aplicación totaliza el
+    // gasto de TODOS los documentos de la rendición.
     flushCrossing()
 
     return lines

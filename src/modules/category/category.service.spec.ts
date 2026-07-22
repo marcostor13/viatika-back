@@ -4,6 +4,7 @@ import { NotFoundException } from '@nestjs/common'
 import { Types } from 'mongoose'
 import { CategoryService } from './category.service'
 import { Category } from './entities/category.entity'
+import { CategoryGroupService } from '../category-group/category-group.service'
 
 const clientId = new Types.ObjectId().toString()
 const categoryId = new Types.ObjectId().toString()
@@ -73,6 +74,12 @@ describe('CategoryService', () => {
       providers: [
         CategoryService,
         { provide: getModelToken(Category.name), useValue: MockModel },
+        {
+          provide: CategoryGroupService,
+          useValue: {
+            addCategoryToGroupByName: jest.fn().mockResolvedValue(undefined),
+          },
+        },
       ],
     }).compile()
     service = module.get<CategoryService>(CategoryService)

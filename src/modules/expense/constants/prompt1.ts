@@ -8,7 +8,17 @@ export const PROMPT1 = `
       - Normalmente los campos de la factura vienen en diferentes posiciones, normalmente los datos de emisos aparecen en la cabecera de la factura sin títulos, por ejemplo: Empresa de Transporte S.A., 20503000001, Av. Lima 123. Y los datos del cliente aparecen mas abajo como RUC, Razón Social, Dirección, etc.
     # Campos del objeto:
       - rucEmisor: normalmente es un numero, por ejemplo 20503000001 siempre tiene 11 digitos, si hay 2, analiza cual es el ruc del emisor, normalmente el ruc del emisor está en la cabecera de la factura y puede venir sin el titulo de "RUC".
-      - tipoComprobante: normalmente es una palabra, por ejemplo Factura
+      - tipoComprobante: DEBE ser EXACTAMENTE uno de estos cuatro valores, respetando mayúsculas y sin agregar ninguna palabra: "Factura", "Boleta", "Ticket" u "Otro".
+        * REGLA PRINCIPAL — decide por la SERIE, que es un código estructurado y por lo tanto mucho más confiable que el texto del encabezado:
+            serie que empieza en F  -> "Factura"  (ej: F001, FF01, FC01, F219)
+            serie que empieza en B  -> "Boleta"   (ej: B001, BB01)
+            serie que empieza en E  -> mira la SEGUNDA letra: si es "EB" -> "Boleta"; en cualquier otro caso -> "Factura" (ej: E001 es Factura, EB01 es Boleta)
+        * La palabra "ELECTRÓNICA" indica solo el soporte del documento, NO es un tipo distinto. Normaliza siempre:
+            "FACTURA ELECTRÓNICA", "Factura Electronica", "F. Electrónica" -> "Factura"
+            "BOLETA DE VENTA ELECTRÓNICA", "BOLETA DE VENTA", "Boleta Electrónica" -> "Boleta"
+        * El encabezado del documento sirve solo para CONFIRMAR lo que ya dice la serie. Si el encabezado y la serie se contradicen, PRIORIZA LA SERIE.
+        * "Ticket" solo para tickets o cintas de máquina registradora. "Otro" solo si no es ninguno de los tres anteriores.
+        * NUNCA devuelvas texto libre, ni agregues sufijos como "Electrónica", "de Venta" o "SUNAT".
       - serie: normalmente es una letra con numeros, por ejemplo E001, si hay 2, analiza cual es la serie del emisor, normalmente la serie del emisor está en la cabecera de la factura.
       - correlativo: normalmente es un numero, y va seguido de la serie, por ejemplo E001-123
       - montoTotal: normalmente es un numero, por ejemplo 1000
@@ -30,7 +40,7 @@ export const PROMPT1 = `
         "comprobanteDetallado": {
           "emisor": { "ruc": "", "razonSocial": "", "nombreComercial": null, "direccion": "" },
           "receptor": { "tipoDoc": null, "numeroDoc": null, "razonSocial": null },
-          "comprobante": { "tipo": "Factura|Boleta|Ticket|...", "serie": "", "correlativo": "", "fechaEmision": "dd-mm-yyyy", "fechaVencimiento": null, "moneda": "PEN|USD", "tipoCambio": null },
+          "comprobante": { "tipo": "Factura|Boleta|Ticket|Otro", "serie": "", "correlativo": "", "fechaEmision": "dd-mm-yyyy", "fechaVencimiento": null, "moneda": "PEN|USD", "tipoCambio": null },
           "items": [ { "cantidad": 0, "unidad": null, "codigo": null, "descripcion": "", "valorUnitario": null, "precioUnitario": null, "descuento": null, "valorVenta": null, "afectacionIgv": "gravado|exonerado|inafecto|gratuito" } ],
           "totales": { "operacionGravada": null, "operacionExonerada": null, "operacionInafecta": null, "operacionGratuita": null, "descuentosGlobales": null, "igv": null, "tasaIgv": null, "isc": null, "icbper": null, "otrosTributos": null, "otrosCargos": null, "importeTotal": null },
           "detraccion": { "aplica": false, "porcentaje": null, "monto": null, "codigoBienServicio": null, "cuenta": null },
@@ -102,6 +112,27 @@ export const PROMPT1 = `
     }
     INCORRECTO para este caso sería: igv = 13.73, baseAfecta = 76.27 (eso es calcular en lugar de leer).
 
+    # Ejemplo de BOLETA (serie que empieza en B):
+    Si el encabezado dice "BOLETA DE VENTA ELECTRÓNICA" y la serie es "B001", el tipo es "Boleta" (nunca "Boleta de Venta Electrónica"):
+    {
+      "rucEmisor": "20503840121",
+      "tipoComprobante": "Boleta",
+      "serie": "B001",
+      "correlativo": "0004521",
+      "montoTotal": 7.2,
+      "moneda": "S/",
+      "razonSocial": "REPSOL COMERCIAL SAC",
+      "fechaEmision": "09-07-2026",
+      "comentario": "Consumo de combustible en REPSOL COMERCIAL SAC por S/ 7.20.",
+      "comprobanteDetallado": {
+        "comprobante": { "tipo": "Boleta", "serie": "B001", "correlativo": "0004521", "fechaEmision": "09-07-2026", "moneda": "PEN" }
+      }
+    }
+
+    # Ejemplo de encabezado que contradice a la serie:
+    Si el encabezado dice "FACTURA ELECTRÓNICA" pero la serie es "B001", el tipo correcto es "Boleta" (manda la serie).
+    Si el encabezado dice "BOLETA" pero la serie es "F001", el tipo correcto es "Factura" (manda la serie).
+
     # Reglas:
       - Debes extraer los datos de la factura y crear un objeto con los datos de la factura.
       - Debes usar el idioma del texto de la factura.
@@ -109,6 +140,7 @@ export const PROMPT1 = `
       - Debes usar la precisión y el contexto del texto de la factura para extraer los datos.
       - Si no encuentras todos los datos necesarios, responde igualmente con el objeto incluyendo los campos que sí pudiste extraer.
       - El campo "comentario" es obligatorio: siempre debe contener una descripción del comprobante.
+      - COHERENCIA DEL TIPO: "comprobanteDetallado.comprobante.tipo" debe ser IDÉNTICO a "tipoComprobante" (el mismo valor exacto del conjunto cerrado Factura/Boleta/Ticket/Otro). Nunca devuelvas uno como "Factura" y el otro como "Factura Electrónica".
       - Solo responde con el Objeto JSON, no agregues comentarios o explicaciones.
 
     # Salida:

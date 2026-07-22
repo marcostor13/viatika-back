@@ -91,16 +91,8 @@ export class ExpenseController {
     }
     body.clientId = clientId
     body.userId = req.user?.sub || req.user?._id || body.userId
-    const result = await this.expenseService.analyzeImageWithUrl(body)
-    this.auditLogService.log({
-      userId: req.user?._id || req.user?.sub,
-      userName: req.user?.name || req.user?.email || 'Usuario',
-      action: 'create_invoice',
-      module: 'facturas',
-      entityId: (result as any)?._id?.toString(),
-      clientId,
-    })
-    return result
+    // Solo analiza (OCR); el gasto se crea al confirmar, en `confirmInvoice`.
+    return this.expenseService.analyzeImageWithUrl(body)
   }
 
   @Post('analize-pdf')
@@ -118,7 +110,25 @@ export class ExpenseController {
     }
     body.clientId = clientId
     body.userId = req.user?.sub || req.user?._id || body.userId
-    const result = await this.expenseService.analyzePdf(body, file)
+    // Solo analiza (OCR); el gasto se crea al confirmar, en `confirmInvoice`.
+    return this.expenseService.analyzePdf(body, file)
+  }
+
+  /**
+   * Confirma la revisión post-OCR y crea el gasto de tipo factura. Es el único
+   * punto donde una factura se persiste: los endpoints de análisis ya no crean.
+   */
+  @Post('invoice/confirm')
+  @Roles(ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.COLABORADOR)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  async confirmInvoice(@Body() body: CreateExpenseDto, @Request() req) {
+    const clientId = body.clientId || req.user?.clientId
+    if (!clientId) {
+      throw new Error('No se pudo obtener la empresa del usuario ni del body')
+    }
+    body.clientId = clientId
+    body.userId = req.user?.sub || req.user?._id || body.userId
+    const result = await this.expenseService.confirmInvoice(body)
     this.auditLogService.log({
       userId: req.user?._id || req.user?.sub,
       userName: req.user?.name || req.user?.email || 'Usuario',
@@ -420,10 +430,13 @@ export class ExpenseController {
     @Body() updateExpenseDto: UpdateExpenseDto,
     @Request() req
   ) {
+    // El desglose contable es competencia de Contabilidad y sigue permitido
+    // sobre facturas, a diferencia de la edición del comprobante en sí.
     const result = await this.expenseService.update(
       id,
       { ...updateExpenseDto, desgloseRevisado: true },
-      this.toActorContext(req.user)
+      this.toActorContext(req.user),
+      { allowFacturaEdit: true }
     )
     this.auditLogService.log({
       userId: req.user?._id || req.user?.sub,

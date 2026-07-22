@@ -126,6 +126,51 @@ describe('ExpenseService — tipo de comprobante', () => {
     })
   })
 
+  describe('assertComprobanteFormat — formato antes de consultar SUNAT', () => {
+    const assertFormato = (data: any): void =>
+      (service as any)['assertComprobanteFormat'](data)
+
+    it('no lanza con RUC de 11 dígitos, serie de 4 y correlativo numérico', () => {
+      expect(() =>
+        assertFormato({ rucEmisor: '20505270348', serie: 'F102', correlativo: '482370' })
+      ).not.toThrow()
+      expect(() =>
+        assertFormato({ rucEmisor: '20603381697', serie: 'FW01', correlativo: '00001708' })
+      ).not.toThrow()
+    })
+
+    // El caso reportado: un dígito de más en el RUC hacía que SUNAT rechazara
+    // la petición y el error se mostraba como "servicio no disponible".
+    it.each([
+      ['206033816971', 'RUC de 12 dígitos'],
+      ['2050527034', 'RUC de 10 dígitos'],
+      ['2050527034A', 'RUC con letra'],
+      ['', 'RUC vacío'],
+    ])('lanza mensaje de RUC para "%s" (%s)', (ruc) => {
+      expect(() =>
+        assertFormato({ rucEmisor: ruc, serie: 'F102', correlativo: '482370' })
+      ).toThrow(/11 dígitos/)
+    })
+
+    // Mismo síntoma con la serie: un carácter de más o de menos.
+    it.each([
+      ['F1021', 'serie de 5 caracteres'],
+      ['F10', 'serie de 3 caracteres'],
+      ['0001', 'serie que no empieza con letra'],
+      ['', 'serie vacía'],
+    ])('lanza mensaje de serie para "%s" (%s)', (serie) => {
+      expect(() =>
+        assertFormato({ rucEmisor: '20505270348', serie, correlativo: '482370' })
+      ).toThrow(/serie/i)
+    })
+
+    it('lanza mensaje de correlativo cuando no es numérico', () => {
+      expect(() =>
+        assertFormato({ rucEmisor: '20505270348', serie: 'F102', correlativo: 'A12' })
+      ).toThrow(/correlativo/i)
+    })
+  })
+
   describe('syncTipoComprobanteOnWrite', () => {
     it('propaga el tipo a comprobanteDetallado, que es el que manda en el asiento', () => {
       const updateDoc: Record<string, any> = {

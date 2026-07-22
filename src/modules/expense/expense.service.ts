@@ -709,6 +709,43 @@ export class ExpenseService {
     throw new HttpException(mensaje, HttpStatus.UNPROCESSABLE_ENTITY)
   }
 
+  /**
+   * Valida el formato de los identificadores del comprobante ANTES de consultar
+   * SUNAT. Un RUC con más de 11 dígitos o una serie con un carácter de más hacen
+   * que SUNAT rechace la petición; sin este chequeo ese rechazo caía en el balde
+   * `sunat_error` y se mostraba como "servicio no disponible", dando la impresión
+   * de una caída de SUNAT cuando en realidad el dato está mal escrito. El mensaje
+   * apunta al campo exacto que el colaborador debe corregir.
+   */
+  private assertComprobanteFormat(data: ExtractedInvoiceData): void {
+    const ruc = (data.rucEmisor ?? '').trim()
+    if (!/^\d{11}$/.test(ruc)) {
+      throw new HttpException(
+        'El RUC del emisor debe tener exactamente 11 dígitos. Revisa el campo "RUC Emisor".',
+        HttpStatus.UNPROCESSABLE_ENTITY
+      )
+    }
+
+    // Comprobante electrónico: serie de 4 caracteres que empieza con letra
+    // (F### factura, B### boleta, E###/EB## electrónicas). 3 o 5 caracteres la
+    // rechaza SUNAT.
+    const serie = (data.serie ?? '').trim()
+    if (!/^[A-Za-z][A-Za-z0-9]{3}$/.test(serie)) {
+      throw new HttpException(
+        'La serie debe tener 4 caracteres y empezar con una letra (por ejemplo F001 para factura o B001 para boleta). Revisa el campo "Serie".',
+        HttpStatus.UNPROCESSABLE_ENTITY
+      )
+    }
+
+    const correlativo = (data.correlativo ?? '').trim()
+    if (!/^\d+$/.test(correlativo)) {
+      throw new HttpException(
+        'El correlativo debe contener solo números. Revisa el campo "Correlativo".',
+        HttpStatus.UNPROCESSABLE_ENTITY
+      )
+    }
+  }
+
   private async validateWithSunatIfPossible(
     data: ExtractedInvoiceData,
     clientId: string,
@@ -1382,6 +1419,11 @@ export class ExpenseService {
       )
     }
     if (typeof body.total === 'number') extraction.montoTotal = body.total
+
+    // Formato antes que SUNAT: un RUC/serie mal escritos daban el mensaje
+    // genérico de "servicio no disponible" (parecía una caída de SUNAT). Ahora
+    // el colaborador ve exactamente qué campo corregir.
+    this.assertComprobanteFormat(extraction)
 
     await this.validateDuplicateInvoiceIfAny(extraction, body.clientId)
 

@@ -2292,16 +2292,6 @@ export class AccountingEntriesService {
       }
     }
 
-    // Planilla de movilidad: TODAS las de la rendición son un solo
-    // documento físico (ver resolveSharedMovilidadNroDoc), así que se
-    // consolidan en un único total y se reparten en bloques de
-    // `movilidadDiario` con las mismas fechas SINTÉTICAS que ya muestra el
-    // PDF completo (buildConsolidatedMobilityPageData en
-    // rendicion-detail.component.ts): empiezan al día siguiente de
-    // report.startDate/viaticoStartDate y avanzan un día por bloque — nunca
-    // las fechas reales de `mobilityRows`, que el PDF tampoco usa para esto.
-    // Se procesa acá, fuera del loop de arriba, porque necesita el total de
-    // TODOS los expense de movilidad juntos antes de repartirlo.
     // Planilla de movilidad: cada `expense` es un documento INDEPENDIENTE con
     // su propio internalCode (correlativo AML012, AML013, ...). Su total se
     // reparte en bloques de `movilidadDiario` con fechas SINTÉTICAS (día

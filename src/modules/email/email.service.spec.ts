@@ -1,6 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing'
+import { getModelToken } from '@nestjs/mongoose'
 import { MailerService } from '@nestjs-modules/mailer'
 import { EmailService } from './email.service'
+import { Client } from '../client/entities/client.entity'
 
 describe('EmailService', () => {
   let service: EmailService
@@ -15,6 +17,8 @@ describe('EmailService', () => {
       providers: [
         EmailService,
         { provide: MailerService, useValue: mailerService },
+        // Se inyecta pero no se usa en los flujos que cubren estos tests.
+        { provide: getModelToken(Client.name), useValue: {} },
       ],
     }).compile()
     service = module.get<EmailService>(EmailService)

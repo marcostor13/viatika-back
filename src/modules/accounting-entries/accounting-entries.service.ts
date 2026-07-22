@@ -1949,14 +1949,6 @@ export class AccountingEntriesService {
       facturaLatestCur = null
       facturaLatestProject = undefined
     }
-    // La rendición completa es UNA sola planilla de movilidad física, aunque
-    // el colaborador haya cargado varios `expense` de tipo planilla_movilidad
-    // (el PDF ya los consolida en una sola hoja, ver
-    // buildConsolidatedMobilityPageData en el frontend). Todos sus bloques en
-    // el asiento de Aplicación deben compartir el mismo "Numero Documento";
-    // usar el internalCode de cada expense por separado hacía que Contanet
-    // viera varias planillas distintas dentro de la misma rendición.
-    const movilidadNroDoc = this.resolveSharedMovilidadNroDoc(expenses)
     // Cada `expense` de tipo planilla_movilidad es un documento independiente
     // con su propio internalCode (correlativo AML012, AML013, ...). El asiento
     // de Aplicación ya NO consolida: cada bloque de S/40 se emite con el
@@ -2265,16 +2257,6 @@ export class AccountingEntriesService {
     // única línea 14 antes del bloque de movilidad.
     flushFacturas()
 
-    // Planilla de movilidad: TODAS las de la rendición son un solo
-    // documento físico (ver resolveSharedMovilidadNroDoc), así que se
-    // consolidan en un único total y se reparten en bloques de
-    // `movilidadDiario` con las mismas fechas SINTÉTICAS que ya muestra el
-    // PDF completo (buildConsolidatedMobilityPageData en
-    // rendicion-detail.component.ts): empiezan al día siguiente de
-    // report.startDate/viaticoStartDate y avanzan un día por bloque — nunca
-    // las fechas reales de `mobilityRows`, que el PDF tampoco usa para esto.
-    // Se procesa acá, fuera del loop de arriba, porque necesita el total de
-    // TODOS los expense de movilidad juntos antes de repartirlo.
     // Planilla de movilidad: cada `expense` es un documento INDEPENDIENTE con
     // su propio internalCode (correlativo AML012, AML013, ...). Su total se
     // reparte en bloques de `movilidadDiario` con fechas SINTÉTICAS (día

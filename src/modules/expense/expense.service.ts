@@ -68,6 +68,17 @@ interface ExtractedInvoiceData {
   [key: string]: unknown
 }
 
+/**
+ * Resultado del análisis de una factura: datos extraídos + URL del archivo ya
+ * subido, sin persistir el gasto. El front lo muestra en la pantalla de
+ * revisión y lo devuelve en `confirmInvoice` para crear el gasto.
+ */
+export interface InvoicePreview {
+  data: ExtractedInvoiceData
+  total: number
+  fileUrl: string
+}
+
 interface SunatValidationMeta {
   status: string
   details: unknown
@@ -327,10 +338,116 @@ export class ExpenseService {
     }
   }
 
-  private determineCodComp(tipo?: string): string {
-    if (tipo === 'Factura') return '01'
-    if (tipo === 'Boleta') return '03'
+  /**
+   * Código de comprobante que espera SUNAT.
+   *
+   * La SERIE manda sobre la etiqueta: es un código estructurado que el OCR lee
+   * bien, mientras que el tipo la IA lo infiere de un encabezado que varía en
+   * tipografía y posición. Medido sobre la base local (974 facturas con serie
+   * legible), la etiqueta coincide con la serie en 948 y discrepa en 15; en
+   * todas las discrepancias la serie decía Factura y la IA había puesto
+   * Boleta, que es justo el caso que rompe la consulta a SUNAT.
+   *
+   * Sin este criterio, una factura mal etiquetada como "Boleta de Venta
+   * Electrónica" se consultaría con codComp 03 y SUNAT la rechazaría.
+   */
+  private determineCodComp(tipo?: string, serie?: string): string {
+    const s = String(serie || '')
+      .trim()
+      .toUpperCase()
+    if (s.startsWith('EB') || s.startsWith('B')) return '03'
+    if (s.startsWith('F') || s.startsWith('E')) return '01'
+
+    // Serie ausente o con un prefijo que no identifica al tipo (tickets de
+    // máquina registradora, series no estándar): se cae a la etiqueta.
+    const t = String(tipo || '')
+      .trim()
+      .toLowerCase()
+    if (t.includes('bolet')) return '03'
+    if (t.includes('ticket') || t.includes('tique')) return '12'
     return '01'
+  }
+
+  /**
+   * El tipo de comprobante vive en dos sitios: el JSON `data` (lo que muestra
+   * la pantalla) y `comprobanteDetallado.comprobante.tipo`, que es el que tiene
+   * precedencia en `resolveCodTipDoc` al armar el asiento contable. Cualquier
+   * escritura del tipo debe tocar los dos: si solo se guarda el primero, la
+   * pantalla muestra el tipo corregido mientras la contabilidad sigue usando el
+   * viejo, que es peor que no corregirlo porque aparenta estar arreglado.
+   *
+   * Se aplica en el PATCH y no solo en la revalidación SUNAT, porque esa
+   * revalidación depende de que el comprobante tenga RUC, serie, correlativo y
+   * fecha; sin alguno de esos datos el tipo se guardaría desincronizado.
+   */
+  private syncTipoComprobanteOnWrite(
+    updateDoc: Record<string, any>,
+    existing: Expense
+  ): void {
+    if (typeof updateDoc.data !== 'string') return
+
+    let parsed: any
+    try {
+      parsed = JSON.parse(updateDoc.data)
+    } catch {
+      return
+    }
+    if (!parsed || typeof parsed !== 'object') return
+
+    const tipo = this.normalizeTipoComprobante(
+      parsed.tipoComprobante,
+      parsed.serie
+    )
+    if (!tipo) return
+
+    // Se reescribe `data` con la etiqueta canónica para que no queden variantes
+    // ("Factura Electrónica", "01") conviviendo en el mismo campo.
+    if (parsed.tipoComprobante !== tipo) {
+      updateDoc.data = JSON.stringify({ ...parsed, tipoComprobante: tipo })
+    }
+
+    const detalleActual =
+      (updateDoc.comprobanteDetallado as Record<string, any>) ??
+      (existing.comprobanteDetallado as Record<string, any>) ??
+      {}
+    if (detalleActual.comprobante?.tipo === tipo) return
+
+    updateDoc.comprobanteDetallado = {
+      ...detalleActual,
+      comprobante: { ...(detalleActual.comprobante ?? {}), tipo },
+    }
+  }
+
+  /**
+   * Etiqueta canónica del tipo de comprobante. Se persiste esta cadena exacta
+   * porque es la que ya escriben la IA y los mapeadores del front.
+   *
+   * Si la serie identifica el tipo, manda sobre la etiqueta, por el mismo
+   * criterio que `determineCodComp`. Es importante que ambos usen la misma
+   * regla: desde que la consulta a SUNAT resuelve el código por la serie, una
+   * etiqueta errada ya no hace fallar la validación, así que dejarla sin
+   * corregir la volvería un error silencioso — SUNAT diría "conforme" mientras
+   * el asiento contable, que lee esta etiqueta vía `resolveCodTipDoc`, trataría
+   * una factura como boleta y perdería el crédito fiscal.
+   */
+  private normalizeTipoComprobante(
+    tipo?: string,
+    serie?: string
+  ): string | undefined {
+    const s = String(serie || '')
+      .trim()
+      .toUpperCase()
+    if (s.startsWith('EB') || s.startsWith('B')) return 'Boleta'
+    if (s.startsWith('F') || s.startsWith('E')) return 'Factura'
+
+    const t = String(tipo || '')
+      .trim()
+      .toLowerCase()
+    if (!t) return undefined
+    if (t.includes('bolet')) return 'Boleta'
+    if (t.includes('ticket') || t.includes('tique')) return 'Ticket'
+    if (t.includes('factura')) return 'Factura'
+    return undefined
   }
 
   private formatDateForSunat(dateStr?: string): string | undefined {
@@ -550,6 +667,48 @@ export class ExpenseService {
     }
   }
 
+  /**
+   * Regla de negocio (decisión del cliente): una factura solo se guarda si
+   * SUNAT la confirma como VÁLIDA y ACEPTADA. Todo lo demás bloquea el
+   * guardado con un mensaje que explica el caso.
+   *
+   * ⚠️ Es una regla estricta a propósito: si SUNAT no responde (caída, timeout)
+   * o la empresa no tiene configuración SUNAT, la carga de facturas se detiene
+   * hasta que el servicio vuelva. Se registra en el log para poder distinguir
+   * una caída del servicio de un rechazo real del comprobante.
+   */
+  private assertSunatConforme(
+    expenseStatus: string,
+    validation: SunatValidationMeta
+  ): void {
+    if (expenseStatus === 'VALIDO_ACEPTADO') return
+
+    let mensaje: string
+    switch (expenseStatus) {
+      case 'VALIDO_NO_PERTENECE':
+        mensaje =
+          'SUNAT indica que el comprobante existe pero no está aceptado. Revisa los datos de la factura.'
+        break
+      case 'NO_ENCONTRADO':
+        mensaje =
+          'SUNAT no encontró este comprobante. Verifica el RUC del emisor, la serie y el correlativo.'
+        break
+      case 'sunat_error':
+        mensaje =
+          'No se pudo validar la factura con SUNAT (servicio no disponible o sin configuración). Intenta nuevamente en unos minutos.'
+        break
+      default:
+        // 'pending': no se llegó a consultar porque faltan datos o config.
+        mensaje =
+          'No se pudo validar la factura con SUNAT. Verifica que el RUC del emisor, la serie, el correlativo y la fecha estén completos.'
+    }
+
+    this.logger.warn(
+      `[confirmInvoice] Guardado bloqueado por SUNAT: status=${expenseStatus} veredicto=${validation.status} — ${validation.message}`
+    )
+    throw new HttpException(mensaje, HttpStatus.UNPROCESSABLE_ENTITY)
+  }
+
   private async validateWithSunatIfPossible(
     data: ExtractedInvoiceData,
     clientId: string,
@@ -573,7 +732,7 @@ export class ExpenseService {
 
           const params = {
             numRuc: data.rucEmisor,
-            codComp: this.determineCodComp(data.tipoComprobante),
+            codComp: this.determineCodComp(data.tipoComprobante, data.serie),
             numeroSerie: data.serie,
             numero: data.correlativo,
             fechaEmision: fechaEmision,
@@ -1081,19 +1240,23 @@ export class ExpenseService {
     }
   }
 
-  async analyzeImageWithUrl(body: CreateExpenseDto): Promise<Expense> {
+  /**
+   * Analiza una imagen y devuelve SOLO los datos extraídos, sin crear el gasto.
+   * El gasto se persiste después, cuando el colaborador confirma la revisión
+   * (`confirmInvoice`). Así el escaneo no deja un comprobante a medias en la
+   * base si el usuario abandona la pantalla de revisión.
+   */
+  async analyzeImageWithUrl(body: CreateExpenseDto): Promise<InvoicePreview> {
     // Si la caja chica de la rendición ya fue finalizada por Contabilidad, no se
     // permiten más gastos. Se valida antes del análisis para no gastar la llamada
     // a OpenAI en un comprobante que será rechazado.
     await this.expenseReportService.assertReportNotLockedByCajaChica(
       body.expenseReportId
     )
-    const configSunat = await this.sunatConfigService.findOne(body.clientId)
-    const prompt = PROMPT1
     try {
       const completion = await this.openai.chat.completions.create({
         model: this.visionModel,
-        messages: this.buildVisionMessages(prompt, body.imageUrl!),
+        messages: this.buildVisionMessages(PROMPT1, body.imageUrl!),
         temperature: 0,
         max_completion_tokens: 8192,
       })
@@ -1102,30 +1265,15 @@ export class ExpenseService {
         completion.choices[0]?.message?.content
       )
 
+      // Aviso temprano de duplicado, antes de que el usuario revise: se repite en
+      // `confirmInvoice` por si edita serie/correlativo en la revisión.
       await this.validateDuplicateInvoiceIfAny(extraction, body.clientId)
 
-      const { validation, expenseStatus } =
-        await this.validateWithSunatIfPossible(
-          extraction,
-          body.clientId,
-          configSunat?.ruc
-        )
-
-      const expense = await this.createExpenseDocument(
-        body,
-        extraction,
-        validation,
-        expenseStatus
-      )
-
-      if (body.expenseReportId) {
-        await this.expenseReportService.addExpenseToReport(
-          body.expenseReportId,
-          expense._id.toString()
-        )
+      return {
+        data: extraction,
+        total: extraction.montoTotal ?? 0,
+        fileUrl: body.imageUrl ?? '',
       }
-
-      return expense
     } catch (error) {
       if (error instanceof HttpException) {
         throw error
@@ -1139,10 +1287,15 @@ export class ExpenseService {
     }
   }
 
+  /**
+   * Analiza un PDF y devuelve SOLO los datos extraídos, sin crear el gasto. El
+   * archivo sí se sube a storage aquí, para que su URL sobreviva a la pantalla
+   * de revisión y `confirmInvoice` pueda asociarla al gasto.
+   */
   async analyzePdf(
     body: CreateExpenseDto,
     file: Express.Multer.File
-  ): Promise<Expense> {
+  ): Promise<InvoicePreview> {
     if (!file || !file.buffer) {
       throw new HttpException('Archivo PDF no provisto', HttpStatus.BAD_REQUEST)
     }
@@ -1187,36 +1340,15 @@ export class ExpenseService {
 
       await this.validateDuplicateInvoiceIfAny(extraction, body.clientId)
 
-      // Subir el PDF y setear la URL como file/imageUrl del gasto
-      const uploadedUrl = await this.uploadExpensePdfAndGetUrl(
-        file,
-        body.clientId
-      )
-      body.imageUrl = uploadedUrl
+      // El PDF se sube ya para no perder los bytes al cerrar la request; la URL
+      // viaja de vuelta al front y regresa en `confirmInvoice`.
+      const fileUrl = await this.uploadExpensePdfAndGetUrl(file, body.clientId)
 
-      const configSunat = await this.sunatConfigService.findOne(body.clientId)
-      const { validation, expenseStatus } =
-        await this.validateWithSunatIfPossible(
-          extraction,
-          body.clientId,
-          configSunat?.ruc
-        )
-
-      const expense = await this.createExpenseDocument(
-        body,
-        extraction,
-        validation,
-        expenseStatus
-      )
-
-      if (body.expenseReportId) {
-        await this.expenseReportService.addExpenseToReport(
-          body.expenseReportId,
-          expense._id.toString()
-        )
+      return {
+        data: extraction,
+        total: extraction.montoTotal ?? 0,
+        fileUrl,
       }
-
-      return expense
     } catch (error) {
       if (error instanceof HttpException) throw error
       this.logger.error('Error al analizar PDF:', error)
@@ -1225,6 +1357,61 @@ export class ExpenseService {
         HttpStatus.INTERNAL_SERVER_ERROR
       )
     }
+  }
+
+  /**
+   * Persiste la factura recién cuando el colaborador confirma la revisión. Es el
+   * único punto donde un gasto de tipo factura se crea: valida duplicado y SUNAT
+   * con los datos ya revisados (que pueden diferir de lo que leyó el OCR) y crea
+   * el documento.
+   */
+  async confirmInvoice(body: CreateExpenseDto): Promise<Expense> {
+    await this.expenseReportService.assertReportNotLockedByCajaChica(
+      body.expenseReportId
+    )
+
+    // El front manda la extracción revisada en `data` (JSON) y el total final
+    // aparte; se reconstruye el objeto que consumen las validaciones y el create.
+    let extraction: ExtractedInvoiceData = {}
+    try {
+      extraction = body.data ? JSON.parse(body.data) : {}
+    } catch {
+      throw new HttpException(
+        'Datos de la factura inválidos',
+        HttpStatus.BAD_REQUEST
+      )
+    }
+    if (typeof body.total === 'number') extraction.montoTotal = body.total
+
+    await this.validateDuplicateInvoiceIfAny(extraction, body.clientId)
+
+    const configSunat = await this.sunatConfigService.findOne(body.clientId)
+    const { validation, expenseStatus } = await this.validateWithSunatIfPossible(
+      extraction,
+      body.clientId,
+      configSunat?.ruc
+    )
+
+    // Solo se guarda una factura que SUNAT confirmó como válida y aceptada.
+    // Cualquier otro resultado (no encontrada, no aceptada, servicio caído,
+    // datos incompletos, sin configuración) bloquea el guardado.
+    this.assertSunatConforme(expenseStatus, validation)
+
+    const expense = await this.createExpenseDocument(
+      body,
+      extraction,
+      validation,
+      expenseStatus
+    )
+
+    if (body.expenseReportId) {
+      await this.expenseReportService.addExpenseToReport(
+        body.expenseReportId,
+        expense._id.toString()
+      )
+    }
+
+    return expense
   }
 
   // ----------------------------------------------------------------------
@@ -2376,10 +2563,29 @@ export class ExpenseService {
     return applyFechaEmisionDisplayToExpense(expense)
   }
 
+  /**
+   * Una factura ya guardada no se edita, por ningún rol. Sus datos salen del
+   * comprobante y quedan fijados al validarse contra SUNAT; permitir editarlos
+   * después dejaría el gasto diciendo algo distinto de lo que SUNAT valida. Si
+   * los datos están mal, el camino es rechazarla y volver a cargarla.
+   *
+   * No alcanza al desglose contable de Contabilidad (ver `updateDesglose`, que
+   * pasa `allowFacturaEdit`), ni a la revalidación SUNAT, que no pasa por
+   * `update()`, ni al borrado, que tiene su propio endpoint.
+   */
+  private assertFacturaNotEditable(existing: Expense): void {
+    if (existing.expenseType === 'factura') {
+      throw new ForbiddenException(
+        'Una factura no se puede editar una vez guardada. Si los datos son incorrectos, elimínala o recházala y vuelve a cargarla.'
+      )
+    }
+  }
+
   async update(
     id: string,
     updateExpenseDto: UpdateExpenseDto,
-    actor: ExpenseActorContext
+    actor: ExpenseActorContext,
+    options: { allowFacturaEdit?: boolean } = {}
   ): Promise<Expense | null> {
     if (!/^[0-9a-fA-F]{24}$/.test(id)) {
       throw new Error(`ID de expense inválido: ${id}`)
@@ -2388,6 +2594,7 @@ export class ExpenseService {
     const expenseIdObject = Types.ObjectId.createFromHexString(id)
     const existing = await this.loadExpenseOrThrow(id)
     await this.assertCanMutateExpense(existing, actor)
+    if (!options.allowFacturaEdit) this.assertFacturaNotEditable(existing)
 
     const dto = { ...updateExpenseDto }
     this.sanitizeFechaEmisionOnWrite(dto)
@@ -2470,6 +2677,8 @@ export class ExpenseService {
       updateDoc.rejectionReason = ''
       updateDoc.rejectedBy = ''
     }
+
+    this.syncTipoComprobanteOnWrite(updateDoc, existing)
 
     const updated = await this.expenseRepository
       .findOneAndUpdate({ _id: expenseIdObject }, updateDoc, {
@@ -2974,11 +3183,24 @@ export class ExpenseService {
             ? JSON.parse(expense.data)
             : (expense.data ?? {})
       } catch {}
+      // Si la llamada trae un tipo de comprobante corregido a mano, se persiste
+      // junto con el resultado de la validación. Debe escribirse en los DOS
+      // lugares donde vive el dato: el JSON `data` (lo que muestra la pantalla)
+      // y `comprobanteDetallado.comprobante.tipo`, que es el que tiene
+      // precedencia en `resolveCodTipDoc` al armar el asiento contable. Si solo
+      // se actualizara el primero, la pantalla mostraría el tipo corregido
+      // mientras la contabilidad sigue usando el viejo.
+      const tipoCorregido = this.normalizeTipoComprobante(
+        data.tipoComprobante,
+        data.serie
+      )
+
       const updatedData =
         parsed && typeof parsed === 'object'
           ? JSON.stringify({
               ...parsed,
               ...(razonSocialFresca ? { razonSocial: razonSocialFresca } : {}),
+              ...(tipoCorregido ? { tipoComprobante: tipoCorregido } : {}),
               sunatValidation: validation,
             })
           : undefined
@@ -2988,6 +3210,18 @@ export class ExpenseService {
         status: expenseStatus,
       }
       if (updatedData !== undefined) updateDoc.data = updatedData
+
+      if (tipoCorregido) {
+        const detalleActual =
+          (expense.comprobanteDetallado as Record<string, any>) ?? {}
+        updateDoc.comprobanteDetallado = {
+          ...detalleActual,
+          comprobante: {
+            ...(detalleActual.comprobante ?? {}),
+            tipo: tipoCorregido,
+          },
+        }
+      }
 
       const updatedExpense = await this.expenseRepository
         .findByIdAndUpdate(id, updateDoc, { new: true })

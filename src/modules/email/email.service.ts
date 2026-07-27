@@ -938,7 +938,12 @@ export class EmailService {
     }
   }
 
-  /** Notifica a Tesorería que una rendición fue aprobada y requiere pago al colaborador. */
+  /**
+   * Notifica a Tesorería que una rendición aprobada requiere reembolso al
+   * colaborador. `amountFormatted` es el reembolso (gastado − fondos ya
+   * entregados), no el total gastado: quien lo llama solo debe enviarlo cuando
+   * ese monto es positivo.
+   */
   async sendRendicionAprobadaTesoreria(
     email: string,
     data: {
@@ -946,7 +951,7 @@ export class EmailService {
       reportTitle: string
       collaboratorName: string
       collaboratorDni?: string
-      budgetFormatted: string
+      amountFormatted: string
       bankName?: string
       accountType?: string
       accountNumber?: string
@@ -961,7 +966,7 @@ export class EmailService {
       const reportTitle = this.normalizeIsoDatesInText(data.reportTitle)
       await this.send({
         to: email,
-        subject: `Rendicion aprobada - Pendiente de pago — ${reportTitle}`,
+        subject: `Rendicion aprobada - Pendiente de reembolso — ${reportTitle}`,
         template: './rendicion-aprobada-tesoreria',
         context: {
           logoUrl: await this.resolveLogoUrl(this.extractClientId(data)),

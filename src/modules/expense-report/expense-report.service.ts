@@ -1293,38 +1293,14 @@ export class ExpenseReportService implements OnModuleInit {
         )
       }
 
-      // Enviar correo a tesorería con datos de pago al colaborador.
-      try {
-        const clientIdStr = String(fullyUpdatedReport.clientId)
-        console.log(`[TESORESRÍA RENDICIÓN] Buscando emails para clientId=${clientIdStr}`)
-        const tesoreriaEmails = await this.clientService.getTesoreriaEmails(clientIdStr)
-        console.log(`[TESORERÍA RENDICIÓN] Emails configurados: ${JSON.stringify(tesoreriaEmails)}`)
-        if (tesoreriaEmails.length > 0) {
-          const bank = (typeof owner === 'object' && owner?.bankAccount) || null
-          const hasBankAccount = !!(bank?.accountNumber)
-          console.log(`[TESORERÍA RENDICIÓN] hasBankAccount=${hasBankAccount}, banco=${bank?.bankName}`)
-          const tesoreriaEmailData = {
-            clientId: clientIdStr,
-            reportTitle,
-            collaboratorName,
-            collaboratorDni: (typeof owner === 'object' && owner?.dni) || undefined,
-            budgetFormatted: Number(budgetDisplay).toFixed(2),
-            hasBankAccount,
-            bankName: bank?.bankName || undefined,
-            accountType: bank?.accountType === 'ahorros' ? 'Ahorros' : bank?.accountType === 'corriente' ? 'Corriente' : undefined,
-            accountNumber: bank?.accountNumber || undefined,
-            cci: bank?.cci || undefined,
-            platformUrl,
-          }
-          for (const tesoEmail of tesoreriaEmails) {
-            console.log(`[TESORERÍA RENDICIÓN] Enviando a ${tesoEmail}...`)
-            await this.emailService.sendRendicionAprobadaTesoreria(tesoEmail, tesoreriaEmailData)
-            console.log(`[TESORERÍA RENDICIÓN] Enviado a ${tesoEmail} OK`)
-          }
-        }
-      } catch (err) {
-        console.error(`[TESORERÍA RENDICIÓN] ERROR:`, err)
-      }
+      await this.notifyTesoreriaSiHayReembolso({
+        reportId: id,
+        report: fullyUpdatedReport,
+        owner,
+        reportTitle,
+        collaboratorName,
+        platformUrl,
+      })
 
       try {
         await this.advanceService.liquidateExpenseReport(id)
@@ -2350,6 +2326,109 @@ export class ExpenseReportService implements OnModuleInit {
       return this.reportSettlementAmountBase(report, report?.budget ?? 0)
     }
     return 0
+  }
+
+  /**
+   * Monto que Tesorería debe desembolsar al colaborador al aprobarse la rendición.
+   * Solo hay pago cuando gastó MÁS de lo que recibió (reembolso). Si sobró, el
+   * saldo vuelve a su bolsa (directa financiada con saldos) o se devuelve a la
+   * empresa: Tesorería no tiene nada que pagar.
+   *
+   * Fondos ya entregados:
+   *  - directa: depósito de contabilidad, saldo heredado o financiamiento con la
+   *    bolsa (`directaFundsGiven`). Una directa "de bolsillo" no tiene fondos,
+   *    así que todo lo gastado es reembolso.
+   *  - viático / con anticipos: lo efectivamente pagado (`computeReportBudgetDisplay`).
+   *
+   * Devuelve un número negativo o cero cuando no corresponde pago.
+   */
+  private async computeReembolsoAlColaborador(report: any): Promise<number> {
+    const expenses = Array.isArray(report?.expenseIds) ? report.expenseIds : []
+    const gastado = expenses.reduce(
+      (s: number, e: any) =>
+        String(e?.status || '').toLowerCase() === 'rejected'
+          ? s
+          : s + this.expenseSettlementAmountBase(e),
+      0
+    )
+    const fondos =
+      report?.isDirecta === true
+        ? this.directaFundsGiven(report)
+        : await this.computeReportBudgetDisplay(report)
+    return Math.round((gastado - fondos) * 100) / 100
+  }
+
+  /**
+   * Avisa a Tesorería que debe depositarle al colaborador, SOLO si hay reembolso.
+   * Una directa financiada con la propia bolsa que gastó de menos deja el sobrante
+   * en la bolsa: no hay nada que pagar y el correo "pendiente de pago" era un
+   * falso positivo. El monto notificado es el reembolso, no el total gastado.
+   *
+   * Nunca propaga errores: notificar no debe tumbar la aprobación.
+   */
+  private async notifyTesoreriaSiHayReembolso(params: {
+    reportId: string
+    report: any
+    owner: any
+    reportTitle: string
+    collaboratorName: string
+    platformUrl: string
+  }): Promise<void> {
+    const { reportId, report, owner, reportTitle, collaboratorName, platformUrl } =
+      params
+    try {
+      const reembolso = await this.computeReembolsoAlColaborador(report)
+      console.log(
+        `[TESORERÍA RENDICIÓN] reembolso al colaborador = ${reembolso.toFixed(2)}`
+      )
+      if (reembolso < 0.01) {
+        console.log(
+          `[TESORERÍA RENDICIÓN] Sin reembolso: no se notifica a tesorería (${reportId})`
+        )
+        return
+      }
+      const clientIdStr = String(report.clientId)
+      const tesoreriaEmails =
+        await this.clientService.getTesoreriaEmails(clientIdStr)
+      console.log(
+        `[TESORERÍA RENDICIÓN] Emails configurados: ${JSON.stringify(tesoreriaEmails)}`
+      )
+      if (tesoreriaEmails.length === 0) return
+
+      const bank = (typeof owner === 'object' && owner?.bankAccount) || null
+      const hasBankAccount = !!bank?.accountNumber
+      console.log(
+        `[TESORERÍA RENDICIÓN] hasBankAccount=${hasBankAccount}, banco=${bank?.bankName}`
+      )
+      const tesoreriaEmailData = {
+        clientId: clientIdStr,
+        reportTitle,
+        collaboratorName,
+        collaboratorDni: (typeof owner === 'object' && owner?.dni) || undefined,
+        amountFormatted: reembolso.toFixed(2),
+        hasBankAccount,
+        bankName: bank?.bankName || undefined,
+        accountType:
+          bank?.accountType === 'ahorros'
+            ? 'Ahorros'
+            : bank?.accountType === 'corriente'
+              ? 'Corriente'
+              : undefined,
+        accountNumber: bank?.accountNumber || undefined,
+        cci: bank?.cci || undefined,
+        platformUrl,
+      }
+      for (const tesoEmail of tesoreriaEmails) {
+        console.log(`[TESORERÍA RENDICIÓN] Enviando a ${tesoEmail}...`)
+        await this.emailService.sendRendicionAprobadaTesoreria(
+          tesoEmail,
+          tesoreriaEmailData
+        )
+        console.log(`[TESORERÍA RENDICIÓN] Enviado a ${tesoEmail} OK`)
+      }
+    } catch (err) {
+      console.error(`[TESORERÍA RENDICIÓN] ERROR:`, err)
+    }
   }
 
   /**

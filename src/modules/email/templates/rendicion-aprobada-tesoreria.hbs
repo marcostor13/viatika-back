@@ -3,7 +3,7 @@
 <head>
   <meta charset='UTF-8' />
   <meta name='viewport' content='width=device-width, initial-scale=1.0' />
-  <title>Rendición aprobada - Pendiente de pago</title>
+  <title>Rendición aprobada - Pendiente de reembolso</title>
   <style>
     body { margin: 0; padding: 0; background: #f5f7fb; font-family: Arial, sans-serif; color: #1f2937; }
     .wrap { padding: 24px 12px; }
@@ -31,16 +31,16 @@
       </div>
       <div class='content'>
         <span class='badge'>Aprobada por Contabilidad</span>
-        <h1 class='title'>Rendicion pendiente de pago</h1>
-        <p class='muted'>La siguiente rendicion fue aprobada y requiere procesamiento de pago al colaborador.</p>
+        <h1 class='title'>Rendicion pendiente de reembolso</h1>
+        <p class='muted'>La siguiente rendicion fue aprobada y el colaborador gasto mas de lo que recibio: requiere reembolso de la diferencia.</p>
 
         <div class='box'>
           <p class='box-title'>Datos de la rendicion</p>
           <div class='row'><strong>Rendicion:</strong> {{reportTitle}}</div>
           <div class='row'><strong>Colaborador:</strong> {{collaboratorName}}</div>
           {{#if collaboratorDni}}<div class='row'><strong>DNI:</strong> {{collaboratorDni}}</div>{{/if}}
-          <div class='row'><strong>Monto aprobado:</strong></div>
-          <div class='amount'>S/ {{budgetFormatted}}</div>
+          <div class='row'><strong>Monto a reembolsar:</strong></div>
+          <div class='amount'>S/ {{amountFormatted}}</div>
         </div>
 
         {{#if hasBankAccount}}

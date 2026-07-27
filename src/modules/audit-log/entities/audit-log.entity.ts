@@ -71,6 +71,8 @@ export type AuditAction =
   | 'resubmit_viatico'
   | 'register_viatico_payment'
   | 'cancel_viatico'
+  /** El PDF completo no pudo incrustar el archivo de uno o más comprobantes. */
+  | 'export_pdf_attachment_failed'
 
 @Schema({ timestamps: true })
 export class AuditLog {

@@ -634,7 +634,17 @@ export class AccountingEntriesService {
     const add = (d: Date) => dates.add(d.toISOString().slice(0, 10))
     for (const e of expenses) add(this.asientoDate(e, report))
     for (const a of advances) {
-      const d = a?.payment?.transferDate || a?.startDate || a?.createdAt
+      // `a.payment` no existe en el schema (solo `paymentInfo`/`payments[]`).
+      const d = a?.paymentInfo?.transferDate || a?.startDate || a?.createdAt
+      if (d) add(new Date(d))
+    }
+    // Solicitudes del flujo unificado de viáticos (sin `Advance` asociado):
+    // su fecha de pago vive en `report.viaticoPaymentInfo`, no en `advances`.
+    if (report?.type === 'viatico' && !advances.length) {
+      const d =
+        report?.viaticoPaymentInfo?.transferDate ||
+        report?.viaticoStartDate ||
+        report?.createdAt
       if (d) add(new Date(d))
     }
     if (report?.updatedAt) add(new Date(report.updatedAt))
@@ -1805,34 +1815,85 @@ export class AccountingEntriesService {
     const trabNombre = colaborador?.name || ''
     const cuenta14 = this.cuenta14(config, colaborador)
 
-    for (const adv of advances) {
-      const amount = this.round2(Number(adv.amount) || 0)
+    /**
+     * Fuente de la "solicitud" (dinero que salió del banco hacia el
+     * colaborador): anticipos legados (colección `Advance`) y, desde la
+     * migración al flujo único de viáticos, rendiciones `type: 'viatico'`
+     * que YA NO crean un `Advance` — sus datos de solicitud/pago viven
+     * directo en `ExpenseReport` (`viaticoAmount`, `viaticoPaymentInfo`,
+     * etc., ver `ExpenseReportService.createViatico`/`registerViaticoPayment`).
+     * Sin esta segunda rama, `advances` salía siempre vacío para toda
+     * rendición moderna y el asiento de Solicitud se generaba SIN líneas.
+     */
+    interface SolicitudSource {
+      id: string
+      amount: number
+      description: string
+      transferDate?: string | Date
+      startDate?: string | Date
+      createdAt?: string | Date
+      accountNumber?: string
+      projectId?: any
+      moneda?: string
+      montoBase?: number
+      tipoCambio?: number
+    }
+    const sources: SolicitudSource[] = advances.map(adv => ({
+      id: adv._id?.toString?.() ?? String(adv._id),
+      amount: Number(adv.amount) || 0,
+      description: adv.description || 'SOLICITUD VIATICO',
+      // `adv.payment` no existe en el schema (solo `paymentInfo`/`payments[]`,
+      // ver `AdvanceService.registerPayment`): quedaba siempre undefined y la
+      // fecha/cuenta bancaria REAL del desembolso nunca se usaba.
+      transferDate: adv.paymentInfo?.transferDate,
+      startDate: adv.startDate,
+      createdAt: adv.createdAt,
+      accountNumber: adv.paymentInfo?.accountNumber,
+      projectId: adv.projectId,
+      moneda: adv.moneda,
+      montoBase: adv.montoBase,
+      tipoCambio: adv.tipoCambio,
+    }))
+    if (report?.type === 'viatico' && !advances.length) {
+      sources.push({
+        id: report._id?.toString?.() ?? String(report._id),
+        amount: Number(report.viaticoAmount) || 0,
+        description: report.description || report.viaticoPlace || 'SOLICITUD VIATICO',
+        transferDate: report.viaticoPaymentInfo?.transferDate,
+        startDate: report.viaticoStartDate,
+        createdAt: report.createdAt,
+        accountNumber: report.viaticoPaymentInfo?.accountNumber,
+        projectId: report.projectId,
+        moneda: report.moneda,
+        montoBase: report.viaticoAmountBase,
+        tipoCambio: report.tipoCambio,
+      })
+    }
+
+    for (const src of sources) {
+      const amount = this.round2(src.amount)
       if (amount <= 0) {
         warnings.push(
-          `El anticipo "${adv.description || adv._id}" tiene monto ${amount} y no genera asiento de solicitud (revisa el monto del anticipo).`
+          `La solicitud "${src.description || src.id}" tiene monto ${amount} y no genera asiento de solicitud (revisa el monto solicitado).`
         )
         continue
       }
-      const rawDate =
-        adv.payment?.transferDate || adv.startDate || adv.createdAt
+      const rawDate = src.transferDate || src.startDate || src.createdAt
       const date = rawDate ? new Date(rawDate) : new Date()
       const tc = this.tcFor(date, rateMap, config)
-      const cur = this.resolveComprobanteCurrency(config, adv, amount, tc)
-      const banco = this.resolveBankAccount(config, adv.payment?.accountNumber)
-      const glosa = (adv.description || 'SOLICITUD VIATICO')
-        .toString()
-        .slice(0, 100)
-        .toUpperCase()
+      const cur = this.resolveComprobanteCurrency(config, src, amount, tc)
+      const banco = this.resolveBankAccount(config, src.accountNumber)
+      const glosa = src.description.toString().slice(0, 100).toUpperCase()
 
-      // Centro de costo: proyecto del anticipo, o el de la rendición si el
-      // anticipo no tiene uno propio asignado.
-      const advProject = this.resolveLineProject(
+      // Centro de costo: proyecto de la solicitud, o el de la rendición si
+      // no tiene uno propio asignado.
+      const srcProject = this.resolveLineProject(
         projectMap,
-        adv.projectId,
+        src.projectId,
         report?.projectId
       )
       const push = (line: ContanetLine) => {
-        this.applyProjectCostCenter(line, advProject)
+        this.applyProjectCostCenter(line, srcProject)
         line.relacionado = relacionado
         line.correlativo = correlativo++
         lines.push(line)
@@ -1914,21 +1975,16 @@ export class AccountingEntriesService {
     const trabDni = colaborador?.dni || ''
     const trabNombre = colaborador?.name || ''
     const cuenta14 = this.cuenta14(config, colaborador)
-    // La cuenta 42 es EXCLUSIVA de facturas (única con crédito fiscal / cuenta
-    // por pagar formal a proveedor): cada factura aporta una línea 42 (Debe)
-    // con su detalle de proveedor/documento a un asiento de CRUCE compartido,
-    // que se liquida con una única línea 14 (Haber) por el total de FACTURAS.
-    // Esa 42 (Debe) cancela la 42 (Haber) de provisión que crea el propio
-    // bloque de gasto de la factura en `buildCompraLines` (asientos
-    // independientes que cuadran por sí solos). Cuadre del cruce:
-    // Σ(42 Debe) = 14 Haber. Fecha / tipo de cambio / centro de costo de la
-    // línea 14 = los de la factura MÁS RECIENTE por fecha.
-    // No-factura y movilidad NO pasan por la 42: su propio bloque de gasto
-    // (9X/14/6X/79, ver `pushBloque` y el bloque de movilidad más abajo)
-    // cancela directo contra la 14, sin necesidad de este cruce. Sumando
-    // ambos caminos, la 14 (Haber) del archivo totaliza el gasto de TODOS
-    // los documentos de la rendición (factura o no), tal como pide
-    // Contabilidad.
+    // Contabilidad pidió UNA sola línea de cuenta 14 en TODO el asiento de
+    // Aplicación: la suma de lo gastado en la rendición, sea factura o no.
+    // Para que esa única línea cuadre (partida doble validada por
+    // `relacionado`, ver `validateCuadre`), TODOS los documentos —factura
+    // (vía 42, crédito fiscal) y no-factura/movilidad (directo, sin 42)—
+    // comparten el MISMO asiento de cruce: cada uno aporta sus líneas
+    // analíticas (42 Debe para factura; 9X/6X/79 para no-factura/movilidad)
+    // a ese asiento y acumula su total; al final `flushCrossing` vuelca la
+    // única 14 (Haber) por el gran total. Fecha / tipo de cambio / centro de
+    // costo de esa línea 14 = los del documento MÁS RECIENTE por fecha.
     let crossingRelacionado: number | null = null
     let crossingTotalPEN = 0
     let crossingTotalME = 0
@@ -1936,15 +1992,36 @@ export class AccountingEntriesService {
     let crossingLatestCur: { mdaOrigen: string; cambioMoneda: number } | null =
       null
     let crossingLatestProject: any = undefined
-    // Reserva (una sola vez) el número de asiento del cruce, consumiéndolo con
-    // `++` para que los bloques de gasto de los no-factura/movilidad usen
-    // números posteriores y no colisionen con el asiento de cruce.
+    // Reserva (una sola vez) el número de asiento del cruce; todo documento
+    // de Aplicación —factura o no— vive en este mismo `relacionado`.
     const reserveCrossing = (): number => {
       if (crossingRelacionado == null) crossingRelacionado = relacionado++
       return crossingRelacionado
     }
-    // Emite la línea 42 (Debe) de un comprobante contra la 14: acumula su total
-    // y recuerda la fecha/moneda/proyecto más recientes (para la línea 14).
+    // Acumula el total (PEN y ME) de un documento hacia la única línea 14 y
+    // recuerda la fecha/moneda/proyecto más recientes (para esa línea).
+    const accumulateCrossingTotal = (args: {
+      date: Date
+      montoPEN: number
+      montoME: number
+      cur: { mdaOrigen: string; cambioMoneda: number }
+      project: any
+    }) => {
+      crossingTotalPEN = this.round2(crossingTotalPEN + args.montoPEN)
+      crossingTotalME = this.round2(crossingTotalME + args.montoME)
+      if (
+        !crossingLatestDate ||
+        args.date.getTime() >= crossingLatestDate.getTime()
+      ) {
+        crossingLatestDate = args.date
+        crossingLatestCur = {
+          mdaOrigen: args.cur.mdaOrigen,
+          cambioMoneda: args.cur.cambioMoneda,
+        }
+        crossingLatestProject = args.project
+      }
+    }
+    // Emite la línea 42 (Debe) de una FACTURA contra la 14 y acumula su total.
     const addCrossing42 = (args: {
       date: Date
       montoDebePEN: number
@@ -1979,19 +2056,13 @@ export class AccountingEntriesService {
       line.relacionado = rel
       line.correlativo = correlativo++
       lines.push(line)
-      crossingTotalPEN = this.round2(crossingTotalPEN + args.montoDebePEN)
-      crossingTotalME = this.round2(crossingTotalME + args.montoDebeME)
-      if (
-        !crossingLatestDate ||
-        args.date.getTime() >= crossingLatestDate.getTime()
-      ) {
-        crossingLatestDate = args.date
-        crossingLatestCur = {
-          mdaOrigen: args.cur.mdaOrigen,
-          cambioMoneda: args.cur.cambioMoneda,
-        }
-        crossingLatestProject = args.project
-      }
+      accumulateCrossingTotal({
+        date: args.date,
+        montoPEN: args.montoDebePEN,
+        montoME: args.montoDebeME,
+        cur: args.cur,
+        project: args.project,
+      })
     }
     // Vuelca la única línea 14 (Haber) del cruce por el total rendido.
     const flushCrossing = () => {
@@ -2156,9 +2227,13 @@ export class AccountingEntriesService {
         if (total <= 0) return
         const tc = this.tcFor(date, rateMap, config)
         const cur = this.resolveComprobanteCurrency(config, expense, total, tc)
+        // No-factura vive en el MISMO asiento de cruce que las facturas: su
+        // 9X/6X/79 se registra aquí, pero ya no emite su propia 14 (Haber) —
+        // esa cancelación se acumula al total único que vuelca `flushCrossing`.
+        const rel = reserveCrossing()
         const push = (line: ContanetLine) => {
           this.applyProjectCostCenter(line, expenseProject)
-          line.relacionado = relacionado
+          line.relacionado = rel
           line.correlativo = correlativo++
           lines.push(line)
         }
@@ -2198,29 +2273,15 @@ export class AccountingEntriesService {
 
         // La cuenta 42 es EXCLUSIVA de facturas (crédito fiscal / cuenta por
         // pagar a proveedor). Boleta/ticket/planilla/recibo/otros no generan
-        // una cuenta por pagar: su gasto cancela directo contra la 14 del
-        // colaborador (misma cuenta que consolida el total de TODOS los
-        // documentos de la rendición, factura o no).
-        push(
-          this.baseLine(
-            config,
-            date,
-            config.fuenteAplicacion,
-            glosaBase,
-            cur.cambioMoneda,
-            periodDate,
-            {
-              nroCuenta: cuenta14,
-              ...docFields,
-              mdaOrigen: cur.mdaOrigen,
-              montoHaber: this.round2(total * cur.fxFactor),
-              montoHaberME: this.toMEForComprobante(total, cur.isForeign, tc),
-              codTipDocIdentTrab: trabDni ? '01' : '',
-              nroDocTrab: trabDni,
-              razonSocialTrab: trabNombre,
-            }
-          )
-        )
+        // una cuenta por pagar: su gasto cancela contra la ÚNICA 14 del
+        // cruce (acumulada aquí, volcada una sola vez por `flushCrossing`).
+        accumulateCrossingTotal({
+          date,
+          montoPEN: this.round2(total * cur.fxFactor),
+          montoME: this.toMEForComprobante(total, cur.isForeign, tc),
+          cur,
+          project: expenseProject,
+        })
 
         for (const p of portions) {
           const glosa = p.etiqueta ? `${glosaBase} (${p.etiqueta})` : glosaBase
@@ -2267,8 +2328,6 @@ export class AccountingEntriesService {
             )
           )
         }
-
-        relacionado++
       }
 
       // Resto de documentos no-factura: respeta `detalleAnalitico` si
@@ -2382,9 +2441,12 @@ export class AccountingEntriesService {
           const meta = resolveMovMeta(block.expense)
           const tc = this.tcFor(block.date, rateMap, config)
           const glosaBase = `APLICACION ${block.date.toISOString().slice(0, 10)}`
+          // Movilidad vive en el MISMO asiento de cruce que facturas y
+          // no-factura: ya no emite su propia 14 (Haber) por bloque.
+          const rel = reserveCrossing()
           const push = (line: ContanetLine) => {
             this.applyProjectCostCenter(line, meta.project)
-            line.relacionado = relacionado
+            line.relacionado = rel
             line.correlativo = correlativo++
             lines.push(line)
           }
@@ -2410,29 +2472,15 @@ export class AccountingEntriesService {
             )
           }
           // La cuenta 42 es exclusiva de facturas; la planilla de movilidad
-          // cancela su gasto directo contra la 14 del colaborador (igual que
-          // el resto de no-factura, ver `pushBloque` más arriba).
-          push(
-            this.baseLine(
-              config,
-              block.date,
-              config.fuenteAplicacion,
-              glosaBase,
-              tc,
-              periodDate,
-              {
-                nroCuenta: cuenta14,
-                codTipDoc: TIPO_DOCUMENTO.PM,
-                nroSerie: '0001',
-                nroDoc: meta.nroDoc,
-                montoHaber: block.monto,
-                montoHaberME: this.toME(block.monto, tc),
-                codTipDocIdentTrab: trabDni ? '01' : '',
-                nroDocTrab: trabDni,
-                razonSocialTrab: trabNombre,
-              }
-            )
-          )
+          // cancela su gasto contra la ÚNICA 14 del cruce (acumulada aquí,
+          // igual que el resto de no-factura, ver `pushBloque` más arriba).
+          accumulateCrossingTotal({
+            date: block.date,
+            montoPEN: block.monto,
+            montoME: this.toME(block.monto, tc),
+            cur: { mdaOrigen: config.monedaOrigen, cambioMoneda: tc },
+            project: meta.project,
+          })
           push(
             this.baseLine(
               config,
@@ -2465,16 +2513,13 @@ export class AccountingEntriesService {
               }
             )
           )
-          relacionado++
         }
       }
     }
 
-    // Única línea 14 (Haber) del cruce: liquida contra la 42 el total de
-    // FACTURAS (único tipo de documento que pasa por la 42). No-factura y
-    // movilidad ya cancelaron su gasto directo contra la 14 arriba: sumando
-    // ambos caminos, la 14 (Haber) del archivo de Aplicación totaliza el
-    // gasto de TODOS los documentos de la rendición.
+    // Única línea 14 (Haber) de TODO el asiento de Aplicación: factura,
+    // no-factura y movilidad ya acumularon su total arriba (vía 42 o
+    // directo); acá se vuelca la sola línea 14 por el gran total rendido.
     flushCrossing()
 
     return lines

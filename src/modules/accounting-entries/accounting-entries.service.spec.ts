@@ -858,7 +858,7 @@ describe('AccountingEntriesService — asiento de aplicación', () => {
     expect(l14s).toHaveLength(1)
   })
 
-  it('mezcla factura + boleta: la 42 solo cruza facturas; la boleta cancela su gasto directo contra la 14, y todo cuadra', async () => {
+  it('mezcla factura + boleta: la 42 solo cruza facturas; la boleta cancela su gasto contra la ÚNICA 14 consolidada, y todo cuadra', async () => {
     const factura = (id: string, serie: string, total: number) => ({
       _id: id,
       expenseType: 'factura',
@@ -887,32 +887,28 @@ describe('AccountingEntriesService — asiento de aplicación', () => {
       boleta,
     ])
 
-    // Dos líneas 14 (Haber): el cruce consolidado de las facturas (100+200)
-    // y la cancelación directa de la boleta (59) — juntas suman el total
-    // rendido de TODOS los documentos, aunque no sea una única línea.
+    // UNA sola línea 14 (Haber) por el total de TODOS los documentos
+    // (facturas + boleta): Contabilidad pidió una única 14 por asiento,
+    // sea el gasto vía 42 (factura) o directo (no-factura).
     const l14s = lines.filter(l => l.nroCuenta === '14.1.3.100')
-    expect(l14s).toHaveLength(2)
-    expect(l14s.reduce((s, l) => s + Number(l.montoHaber), 0)).toBe(359)
-    const l14Cruce = l14s.find(l => l.montoHaber === 300)!
-    const l14Boleta = l14s.find(l => l.montoHaber === 59)!
-    expect(l14Cruce).toBeDefined()
-    expect(l14Boleta).toBeDefined()
+    expect(l14s).toHaveLength(1)
+    expect(l14s[0].montoHaber).toBe(359)
 
-    // El asiento de cruce (el de las facturas) reúne una 42 (Debe) por
-    // factura; la boleta NO pasa por la 42 en absoluto.
+    // El cruce reúne una 42 (Debe) por factura; la boleta NO pasa por la 42.
     const cruce42 = lines.filter(
       l => l.nroCuenta === '42.1.2.100' && Number(l.montoDebe) > 0
     )
     expect(cruce42).toHaveLength(2)
     expect(cruce42.reduce((s, l) => s + Number(l.montoDebe), 0)).toBe(300)
-    expect(lines.some(l => l.nroCuenta === '42.1.2.100' && l.relacionado === l14Boleta.relacionado)).toBe(false)
 
-    // La boleta conserva su propio bloque de gasto 9X/14/6X/79.
+    // La boleta conserva su propio bloque de gasto 9X/6X/79, dentro del
+    // MISMO asiento consolidado que las facturas (mismo `relacionado`).
     const l9x = lines.find(l => l.nroCuenta === '91.3.1.410')!
     expect(l9x.montoDebe).toBe(59)
-    expect(l9x.relacionado).toBe(l14Boleta.relacionado)
+    expect(l9x.relacionado).toBe(l14s[0].relacionado)
+    expect(new Set(lines.map(l => l.relacionado)).size).toBe(1)
 
-    // Cada asiento (por `relacionado`) cuadra: Σ Debe = Σ Haber.
+    // Todo el asiento (un único `relacionado`) cuadra: Σ Debe = Σ Haber.
     expect(service.validateCuadre(lines)).toHaveLength(0)
   })
 
@@ -929,13 +925,13 @@ describe('AccountingEntriesService — asiento de aplicación', () => {
       },
     }
     const lines = await build([expense])
-    // Bloque de gasto 9X(Debe)/14(Haber)/6X(Debe)/79(Haber): la boleta no da
-    // crédito fiscal ni pasa por la 42 (exclusiva de facturas); su gasto
-    // cancela directo contra la 14 del colaborador.
+    // Bloque de gasto 9X(Debe)/6X(Debe)/79(Haber): la boleta no da crédito
+    // fiscal ni pasa por la 42 (exclusiva de facturas); su gasto cancela
+    // contra la única 14 (Haber) consolidada del asiento (sin `codTipDoc`
+    // propio: esa línea ya no representa un solo documento).
     expect(lines).toHaveLength(4)
     expect(lines.some(l => l.nroCuenta === '42.1.2.100')).toBe(false)
     const l14 = lines.find(l => l.nroCuenta === '14.1.3.100')!
-    expect(l14.codTipDoc).toBe('03')
     expect(l14.montoHaber).toBe(59)
     const l9x = lines.find(l => l.nroCuenta === '91.3.1.410')!
     expect(l9x.montoDebe).toBe(59)
@@ -960,13 +956,13 @@ describe('AccountingEntriesService — asiento de aplicación', () => {
     // Sin report.startDate/endDate, buildMovilidadBlocks cae a UN bloque por
     // planilla con su total (120) en vez de repartir por fecha — ver el test
     // "cada una con su propio Numero Documento" para el caso con fechas de viaje.
-    // Bloque de gasto 9X(Debe)/14(Haber)/6X(Debe)/79(Haber): la planilla de
-    // movilidad no pasa por la 42 (exclusiva de facturas).
+    // Bloque de gasto 9X(Debe)/6X(Debe)/79(Haber): la planilla de movilidad
+    // no pasa por la 42 (exclusiva de facturas); su gasto cancela contra la
+    // única 14 (Haber) consolidada del asiento (sin `codTipDoc` propio).
     expect(lines).toHaveLength(4)
     expect(lines.some(l => l.nroCuenta === '42.1.2.100')).toBe(false)
     const l14s = lines.filter(l => l.nroCuenta === '14.1.3.100')
     expect(l14s).toHaveLength(1)
-    expect(l14s[0].codTipDoc).toBe('94')
     expect(l14s[0].montoHaber).toBe(120)
     const l9xs = lines.filter(l => l.nroCuenta === '91.3.1.410')
     expect(l9xs).toHaveLength(1)
@@ -1004,6 +1000,7 @@ describe('AccountingEntriesService — asiento de aplicación', () => {
         _id: 'e20',
         expenseType: 'planilla_movilidad',
         internalCode: 'MT002',
+        categoryId: 'cat1',
         createdAt: new Date('2026-05-05'),
         total: 40,
         data: '{}',
@@ -1013,6 +1010,7 @@ describe('AccountingEntriesService — asiento de aplicación', () => {
         _id: 'e21',
         expenseType: 'planilla_movilidad',
         internalCode: 'MT001',
+        categoryId: 'cat1',
         createdAt: new Date('2026-05-01'),
         total: 40,
         data: '{}',
@@ -1026,23 +1024,27 @@ describe('AccountingEntriesService — asiento de aplicación', () => {
       colaborador,
       movilidadDiario: 40,
       projectMap: new Map(),
-      categoryMap: new Map(),
+      categoryMap,
       periodDate,
       rateMap,
       warnings: [],
     })
     // La planilla de movilidad no pasa por la 42 (exclusiva de facturas).
     expect(lines.some((l: ContanetLine) => l.nroCuenta === '42.1.2.100')).toBe(false)
-    // Cada planilla cancela su propio bloque directo contra la 14: dos
-    // líneas 14 (Haber) independientes, una por planilla.
-    const l14s = lines.filter((l: ContanetLine) => l.nroCuenta === '14.1.3.100')
-    expect(l14s).toHaveLength(2)
+    // Cada planilla conserva su propio bloque 9X con SU internalCode y fecha
+    // sintética; ya no tiene una 14 propia — el gasto de ambas planillas se
+    // consolida en la ÚNICA línea 14 del asiento.
+    const l9xs = lines.filter((l: ContanetLine) => l.nroCuenta === '91.3.1.410')
+    expect(l9xs).toHaveLength(2)
     // MT001 (fecha real 2026-05-02) va primero en 2026-05-02; MT002 sigue en
     // 2026-05-03. Cada bloque conserva el internalCode de SU planilla.
-    const byDoc = new Map(l14s.map((l: ContanetLine) => [l.nroDoc, l.fechaEmision]))
+    const byDoc = new Map(l9xs.map((l: ContanetLine) => [l.nroDoc, l.fechaEmision]))
     expect(byDoc.get('MT001')).toBe(toExcelSerial(new Date('2026-05-02')))
     expect(byDoc.get('MT002')).toBe(toExcelSerial(new Date('2026-05-03')))
-    expect(l14s.reduce((s: number, l: ContanetLine) => s + Number(l.montoHaber), 0)).toBe(80)
+    const l14s = lines.filter((l: ContanetLine) => l.nroCuenta === '14.1.3.100')
+    expect(l14s).toHaveLength(1)
+    expect(l14s[0].montoHaber).toBe(80)
+    expect(service.validateCuadre(lines)).toHaveLength(0)
   })
 
   it('sortExpensesForAsiento ordena planillas de movilidad por su fecha real (mobilityRows), no por report.createdAt', () => {

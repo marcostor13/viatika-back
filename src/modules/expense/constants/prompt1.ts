@@ -21,7 +21,7 @@ export const PROMPT1 = `
         * NUNCA devuelvas texto libre, ni agregues sufijos como "Electrónica", "de Venta" o "SUNAT".
       - serie: normalmente es una letra con numeros, por ejemplo E001, si hay 2, analiza cual es la serie del emisor, normalmente la serie del emisor está en la cabecera de la factura.
       - correlativo: normalmente es un numero, y va seguido de la serie, por ejemplo E001-123
-      - montoTotal: normalmente es un numero, por ejemplo 1000
+      - montoTotal: el importe total del comprobante como número, por ejemplo 1000 ó 597.60. CONSERVA SIEMPRE los céntimos tal como están impresos: "S/ 597.60" es 597.60 y NUNCA 59760; "S/ 1,234.50" es 1234.50 y NUNCA 123450. En Perú la coma separa miles y el punto separa decimales; devuelve el número sin símbolo de moneda ni separadores de miles.
       - moneda: normalmente es un simbolo de moneda, por ejemplo PEN, S/ O $, el resultado siempre debe ser en este formato: S/ ó $
       - razonSocial: normalmente es un nombre, por ejemplo Empresa de Transporte S.A., si hay 2, analiza cual es la razon social del emisor, normalmente la razon social del emisor está en la cabecera de la factura y puede venir sin el titulo de "Razón Social".
       - direccionEmisor: normalmente es una direccion, por ejemplo Av. Lima 123, si hay 2, analiza cual es la direccion del emisor, normalmente la direccion del emisor está en la cabecera de la factura y puede venir sin el titulo de "Dirección".

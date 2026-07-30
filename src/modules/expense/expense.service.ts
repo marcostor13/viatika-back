@@ -836,7 +836,8 @@ export class ExpenseService {
     }
 
     const deadlineMeta = this.evaluateDeadline(dataPayload.fechaEmision)
-    const amount = Number(data.montoTotal ?? 0)
+    const rawMonto: unknown = data.montoTotal
+    const amount = ExpenseService.invoiceTotal(rawMonto)
     const categoryMeta = await this.evaluateCategoryLimit(body, amount)
 
     return this.expenseRepository.create({
@@ -846,7 +847,8 @@ export class ExpenseService {
       expenseReportId: body.expenseReportId
         ? new Types.ObjectId(body.expenseReportId)
         : undefined,
-      total: data.montoTotal,
+      // Se conserva el ausente como ausente: solo se normaliza si hubo valor.
+      total: rawMonto == null ? undefined : amount,
       data: JSON.stringify(dataPayload),
       file: body.imageUrl,
       status: status,
@@ -1084,10 +1086,17 @@ export class ExpenseService {
     const prompt =
       'Eres un asistente que extrae datos de un comprobante de depósito o ' +
       'transferencia bancaria (BCP, Scotiabank, BBVA u otro). Devuelve ' +
-      'EXCLUSIVAMENTE un JSON con la forma {"amount": <número>, "fecha": ' +
-      '"<dd/mm/aaaa>", "hora": "<hh:mm>", "operationNumber": "<texto>", ' +
-      '"titular": "<texto>"}. amount es el monto depositado/transferido como ' +
-      'número (sin símbolo de moneda ni separadores de miles, punto decimal). ' +
+      'EXCLUSIVAMENTE un JSON con la forma {"amount": <número>, "amountText": ' +
+      '"<texto>", "fecha": "<dd/mm/aaaa>", "hora": "<hh:mm>", ' +
+      '"operationNumber": "<texto>", "titular": "<texto>"}. ' +
+      'amountText es el importe copiado EXACTAMENTE como está impreso en el ' +
+      'comprobante, con su símbolo y sus separadores (por ejemplo ' +
+      '"S/ 597.60"). amount es ese mismo importe como número, sin símbolo de ' +
+      'moneda ni separadores de miles y con punto decimal. ' +
+      'IMPORTANTE: el importe SIEMPRE lleva dos decimales (céntimos); nunca ' +
+      'los elimines ni juntes la parte entera con los céntimos. En Perú la ' +
+      'coma separa miles y el punto separa decimales: "S/ 597.60" es 597.60 ' +
+      '(NO 59760) y "S/ 1,234.50" es 1234.50 (NO 123450). ' +
       'fecha es la fecha de la operación; hora la hora de la operación; ' +
       'operationNumber el número de operación o constancia; titular el nombre ' +
       'del beneficiario o titular de la cuenta destino que recibe el dinero. ' +
@@ -1118,7 +1127,9 @@ export class ExpenseService {
           model: this.visionModel,
           messages,
           temperature: 0,
-          max_completion_tokens: 512,
+          // Holgura sobre los 512 previos: la respuesta ganó el campo
+          // amountText y un JSON truncado se pierde entero al parsearlo.
+          max_completion_tokens: 768,
         })
         content = completion.choices[0]?.message?.content || ''
       } else {
@@ -1126,7 +1137,7 @@ export class ExpenseService {
           model: this.visionModel,
           messages: this.buildVisionMessages(prompt, url),
           temperature: 0,
-          max_completion_tokens: 512,
+          max_completion_tokens: 768,
         })
         content = completion.choices[0]?.message?.content || ''
       }
@@ -1147,6 +1158,84 @@ export class ExpenseService {
     return Buffer.from(response.data as ArrayBuffer)
   }
 
+  /** Primer número de un texto monetario, sin símbolo ni separadores colgantes. */
+  private static readonly MONEY_TOKEN = /[.,]?\d[\d.,]*/
+  /** Importe con céntimos explícitos, preferido cuando hay varios números sueltos. */
+  private static readonly MONEY_TOKEN_WITH_CENTS = /[.,]?\d[\d.,]*[.,]\d{2}(?!\d)/
+
+  /**
+   * Interpreta un importe escrito en cualquier formato razonable y dice, además
+   * del valor, si traía céntimos explícitos.
+   *
+   * Reglas, pensadas para comprobantes peruanos (importes de dos decimales):
+   * - se toma el PRIMER número del texto, para que un literal con más de un
+   *   importe ("S/ 597.60 (comisión S/ 0.00)") no termine pegado en uno solo;
+   * - el último separador son céntimos si detrás quedan 1 o 2 dígitos:
+   *   "597.60" y "597,60" → 597.6; "1,234.50" y "1.234,50" → 1234.5;
+   * - con exactamente 3 dígitos detrás es separador de miles: "12.345" → 12345;
+   * - con un único separador y una cola distinta de 3 dígitos manda el decimal:
+   *   "597.6000" → 597.6;
+   * - el resto de separadores son de miles y se eliminan.
+   *
+   * Un importe con los miles separados por espacio ("1 234,50", formato que la
+   * banca peruana no usa) se leería como 1: se prefiere ese error visible antes
+   * que concatenar dos importes distintos en uno gigante.
+   */
+  private static parseMoney(value: unknown): {
+    value: number
+    hasCents: boolean
+  } {
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) return { value: 0, hasCents: false }
+      return { value, hasCents: !Number.isInteger(value) }
+    }
+    const match = String(value ?? '').match(ExpenseService.MONEY_TOKEN)
+    const token = (match?.[0] ?? '').replace(/[.,]+$/, '')
+    if (!token) return { value: 0, hasCents: false }
+
+    const lastSep = Math.max(token.lastIndexOf('.'), token.lastIndexOf(','))
+    if (lastSep < 0) {
+      const plain = Number(token)
+      return {
+        value: Number.isFinite(plain) ? plain : 0,
+        hasCents: false,
+      }
+    }
+
+    const decimalDigits = token.length - lastSep - 1
+    const sepCount = (token.match(/[.,]/g) ?? []).length
+    const isDecimalSep =
+      decimalDigits === 1 ||
+      decimalDigits === 2 ||
+      (sepCount === 1 && decimalDigits !== 3)
+
+    const normalized = isDecimalSep
+      ? token.slice(0, lastSep).replace(/[.,]/g, '') +
+        '.' +
+        token.slice(lastSep + 1)
+      : token.replace(/[.,]/g, '')
+
+    const parsed = Number(normalized)
+    if (!Number.isFinite(parsed)) return { value: 0, hasCents: false }
+    return { value: parsed, hasCents: isDecimalSep && !Number.isInteger(parsed) }
+  }
+
+  private static parseMonetaryValue(value: unknown): number {
+    return ExpenseService.parseMoney(value).value
+  }
+
+  /**
+   * Importe de un comprobante como número. En el camino normal ya llega como
+   * número (el front manda el total que el colaborador revisó) y se devuelve
+   * intacto; la normalización solo actúa si el modelo se salió del formato y lo
+   * devolvió como texto ("1,234.50"), que antes se volvía NaN o 0.
+   */
+  private static invoiceTotal(value: unknown): number {
+    return typeof value === 'number' && Number.isFinite(value)
+      ? value
+      : ExpenseService.parseMonetaryValue(value)
+  }
+
   private parseDepositScan(raw: string): DepositScanResult {
     const cleaned = (raw || '')
       .replace(/^```json\s*/i, '')
@@ -1156,13 +1245,25 @@ export class ExpenseService {
     try {
       obj = JSON.parse(cleaned)
     } catch {
-      const m = cleaned.match(/[\d,]+\.?\d*/)
-      if (m) obj.amount = Number(m[0].replace(/,/g, '')) || 0
+      // Sin JSON válido se rescata el importe del texto: primero uno con
+      // céntimos, para no confundirlo con el n° de operación (todo dígitos).
+      const m =
+        cleaned.match(ExpenseService.MONEY_TOKEN_WITH_CENTS) ??
+        cleaned.match(ExpenseService.MONEY_TOKEN)
+      if (m) obj.amount = ExpenseService.parseMonetaryValue(m[0])
     }
-    const amount =
-      typeof obj.amount === 'string'
-        ? Number(String(obj.amount).replace(/,/g, '')) || 0
-        : Number(obj.amount) || 0
+    const fromText = ExpenseService.parseMoney(obj.amountText)
+    const fromNumber = ExpenseService.parseMoney(obj.amount)
+    // El número manda, salvo que no venga o que haya perdido los céntimos que
+    // el literal impreso sí conserva: es el caso de "S/ 597.60" leído como
+    // 59760, que es justo lo que este rescate corrige.
+    let amount = fromNumber.value
+    if (
+      fromText.value > 0 &&
+      (amount <= 0 || (fromText.hasCents && !fromNumber.hasCents))
+    ) {
+      amount = fromText.value
+    }
     const str = (v: unknown) => {
       const s = v == null ? '' : String(v).trim()
       return s.length ? s : undefined
@@ -1199,7 +1300,9 @@ export class ExpenseService {
       '("entregado a", "recibí de", "señor(es)"); fecha es la fecha del ' +
       'comprobante; direccion la dirección si aparece; concepto el detalle o ' +
       'motivo del pago/egreso; monto el importe total como número (sin símbolo ' +
-      'de moneda ni separadores de miles, punto decimal). Si un dato no ' +
+      'de moneda ni separadores de miles, punto decimal). El monto SIEMPRE ' +
+      'lleva dos decimales: en Perú la coma separa miles y el punto los ' +
+      'decimales, así que "S/ 597.60" es 597.60 (NO 59760). Si un dato no ' +
       'aparece, usa cadena vacía (o 0 para monto).'
 
     try {
@@ -1260,10 +1363,7 @@ export class ExpenseService {
     } catch {
       obj = {}
     }
-    const monto =
-      typeof obj.monto === 'string'
-        ? Number(String(obj.monto).replace(/,/g, '')) || 0
-        : Number(obj.monto) || 0
+    const monto = ExpenseService.parseMonetaryValue(obj.monto)
     const str = (v: unknown) => {
       const s = v == null ? '' : String(v).trim()
       return s.length ? s : undefined
@@ -1308,7 +1408,7 @@ export class ExpenseService {
 
       return {
         data: extraction,
-        total: extraction.montoTotal ?? 0,
+        total: ExpenseService.invoiceTotal(extraction.montoTotal),
         fileUrl: body.imageUrl ?? '',
       }
     } catch (error) {
@@ -1383,7 +1483,7 @@ export class ExpenseService {
 
       return {
         data: extraction,
-        total: extraction.montoTotal ?? 0,
+        total: ExpenseService.invoiceTotal(extraction.montoTotal),
         fileUrl,
       }
     } catch (error) {

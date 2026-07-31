@@ -551,6 +551,12 @@ export class ExpenseReportService implements OnModuleInit {
       // Centro de costo: Tesorería lo muestra en el detalle de la solicitud y en
       // el documento descargable. Los consumidores toleran ambas formas.
       .populate('projectId', 'code name')
+      // Saldos de la bolsa que financian el viático (mismo motivo que en findViaticos).
+      .populate({
+        path: 'saldoIds',
+        select: 'type amount concepto deposit sourceReportId createdAt',
+        populate: { path: 'sourceReportId', select: 'codigo title gestion' },
+      })
       .populate('createdBy', 'name email')
       // Nombre de la categoría de cada línea de viático, para mostrar el detalle
       // por categoría al aprobar (la list no traía categoryId poblado).
@@ -4659,6 +4665,13 @@ export class ExpenseReportService implements OnModuleInit {
       // `signature` va en el documento descargable de la solicitud de viático.
       .populate('userId', 'name email bankAccount dni signature')
       .populate('projectId', 'code name')
+      // Saldos de la bolsa que financian el viático: el detalle de la solicitud y su
+      // documento descargable muestran de dónde sale el dinero.
+      .populate({
+        path: 'saldoIds',
+        select: 'type amount concepto deposit sourceReportId createdAt',
+        populate: { path: 'sourceReportId', select: 'codigo title gestion' },
+      })
       .sort({ viaticoStartDate: -1, createdAt: -1 })
       .exec()
   }

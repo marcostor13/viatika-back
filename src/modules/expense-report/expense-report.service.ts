@@ -546,7 +546,11 @@ export class ExpenseReportService implements OnModuleInit {
         clientId: new Types.ObjectId(clientId),
         isCajaChica: { $ne: true },
       })
-      .populate('userId', 'name email signature bankAccount')
+      // `dni` va en el documento descargable de la solicitud de viático.
+      .populate('userId', 'name email signature bankAccount dni')
+      // Centro de costo: Tesorería lo muestra en el detalle de la solicitud y en
+      // el documento descargable. Los consumidores toleran ambas formas.
+      .populate('projectId', 'code name')
       .populate('createdBy', 'name email')
       // Nombre de la categoría de cada línea de viático, para mostrar el detalle
       // por categoría al aprobar (la list no traía categoryId poblado).
@@ -4652,7 +4656,8 @@ export class ExpenseReportService implements OnModuleInit {
     }
 
     return this.expenseReportModel.find(filter)
-      .populate('userId', 'name email bankAccount dni')
+      // `signature` va en el documento descargable de la solicitud de viático.
+      .populate('userId', 'name email bankAccount dni signature')
       .populate('projectId', 'code name')
       .sort({ viaticoStartDate: -1, createdAt: -1 })
       .exec()

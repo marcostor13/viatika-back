@@ -840,7 +840,29 @@ export class ExpenseService {
     const amount = ExpenseService.invoiceTotal(rawMonto)
     const categoryMeta = await this.evaluateCategoryLimit(body, amount)
 
+    // Una factura peruana puede estar emitida en dólares: se congela igual que
+    // en `create` (esta ruta no pasa por ahí) y, si la rendición opera en otra
+    // moneda, también su equivalente en esa moneda.
+    const moneda = this.normalizeMonedaCode(data.moneda)
+    const total = rawMonto == null ? undefined : amount
+    const freeze = await this.computeCurrencyFreeze(
+      body.clientId,
+      moneda,
+      total,
+      dataPayload.fechaEmision
+    )
+    const reportFreeze = await this.computeReportCurrencyFreeze(
+      body.clientId,
+      body.expenseReportId,
+      moneda,
+      total,
+      dataPayload.fechaEmision
+    )
+
     return this.expenseRepository.create({
+      moneda,
+      ...freeze,
+      ...reportFreeze,
       categoryId: categoryObject,
       proyectId: projectObject,
       clientId: body.clientId,
@@ -1788,7 +1810,17 @@ export class ExpenseService {
       'planilla_movilidad',
       body.expenseReportId
     )
+    // Movilidad siempre en soles; si la rendición es en otra moneda, se congela
+    // su equivalente con el TC del día del primer viaje.
+    const reportFreeze = await this.computeReportCurrencyFreeze(
+      body.clientId,
+      body.expenseReportId,
+      body.moneda,
+      total,
+      earliestDate ? earliestDate.toISOString().slice(0, 10) : undefined
+    )
     const expense = await this.expenseRepository.create({
+      ...reportFreeze,
       categoryId: new Types.ObjectId(body.categoryId),
       proyectId: new Types.ObjectId(body.proyectId),
       clientId: body.clientId,
@@ -1868,7 +1900,15 @@ export class ExpenseService {
       normalizedFecha ?? body.fechaEmision
     )
     const categoryMeta = await this.evaluateCategoryLimit(body, body.total)
+    const reportFreeze = await this.computeReportCurrencyFreeze(
+      body.clientId,
+      body.expenseReportId,
+      body.moneda,
+      body.total,
+      normalizedFecha ?? body.fechaEmision
+    )
     const expense = await this.expenseRepository.create({
+      ...reportFreeze,
       categoryId: new Types.ObjectId(body.categoryId),
       proyectId: new Types.ObjectId(body.proyectId),
       clientId: body.clientId,
@@ -1916,6 +1956,28 @@ export class ExpenseService {
    * vinculados por `declaracionJuradaGroupId` para tratarse como un solo
    * documento firmado en pantalla y al generar el PDF.
    */
+  /**
+   * Moneda ISO en la que se registran los gastos de una Declaración Jurada.
+   * Prioridad: la moneda de la rendición a la que se adjunta (un viático al
+   * exterior en USD declara en USD) → la del formulario ('US$') → la base del
+   * cliente. `declaracionJuradaMoneda` sigue guardando el símbolo tal cual para
+   * imprimirlo en el PDF de la DJ.
+   */
+  private async resolveDeclaracionJuradaMoneda(
+    body: CreateDeclaracionJuradaDto,
+    clientId: string
+  ): Promise<string> {
+    if (body.expenseReportId) {
+      const report = await this.expenseReportService.findCurrency(
+        body.expenseReportId
+      )
+      if (report?.moneda) return this.normalizeMonedaCode(report.moneda)
+    }
+    if (body.moneda) return this.normalizeMonedaCode(body.moneda)
+    const config = await this.currencyService.getConfig(clientId)
+    return config.monedaBase || 'PEN'
+  }
+
   async createDeclaracionJurada(
     body: CreateDeclaracionJuradaDto
   ): Promise<{ groupId: string; expenses: Expense[] }> {
@@ -1947,6 +2009,13 @@ export class ExpenseService {
       ? (await this.userService.findEmailNameClient(body.userId))?.name
       : undefined
 
+    // Moneda del gasto: manda la de la rendición (contención single-currency),
+    // porque una DJ del exterior se declara en la misma moneda del viático. Si
+    // la DJ no pertenece a una rendición se usa la del formulario ('US$' → USD).
+    // Sin esto los importes se guardaban como soles y el gastado del viático
+    // salía en soles contra un presupuesto en dólares.
+    const monedaDJ = await this.resolveDeclaracionJuradaMoneda(body, body.clientId)
+
     const groupId = new Types.ObjectId().toString()
     const expenses: Expense[] = []
 
@@ -1968,6 +2037,23 @@ export class ExpenseService {
         total
       )
 
+      const fechaEmision = earliestDate
+        ? this.normalizeFechaEmisionValue(earliestDate)
+        : undefined
+      const freeze = await this.computeCurrencyFreeze(
+        body.clientId,
+        monedaDJ,
+        total,
+        fechaEmision
+      )
+      const reportFreeze = await this.computeReportCurrencyFreeze(
+        body.clientId,
+        body.expenseReportId,
+        monedaDJ,
+        total,
+        fechaEmision
+      )
+
       const expense = await this.expenseRepository.create({
         categoryId: new Types.ObjectId(seccion.categoryId),
         proyectId: new Types.ObjectId(body.proyectId),
@@ -1976,14 +2062,15 @@ export class ExpenseService {
           ? new Types.ObjectId(body.expenseReportId)
           : undefined,
         total,
+        moneda: monedaDJ,
+        ...freeze,
+        ...reportFreeze,
         expenseType: 'otros_gastos',
         subTipo: 'DJ',
         file: body.imageUrl || undefined,
         status: 'pending',
         createdBy: body.userId || 'system',
-        fechaEmision: earliestDate
-          ? this.normalizeFechaEmisionValue(earliestDate)
-          : undefined,
+        fechaEmision,
         observado: deadlineMeta.observado,
         observacionPlazo: deadlineMeta.observacionPlazo,
         diasRetraso: deadlineMeta.diasRetraso,
@@ -2068,7 +2155,15 @@ export class ExpenseService {
       normalizedFecha ?? body.fechaEmision
     )
     const categoryMeta = await this.evaluateCategoryLimit(body, body.total)
+    const reportFreeze = await this.computeReportCurrencyFreeze(
+      body.clientId,
+      body.expenseReportId,
+      body.moneda,
+      body.total,
+      normalizedFecha ?? body.fechaEmision
+    )
     const expense = await this.expenseRepository.create({
+      ...reportFreeze,
       categoryId: new Types.ObjectId(body.categoryId),
       proyectId: new Types.ObjectId(body.proyectId),
       clientId: body.clientId,
@@ -2130,6 +2225,13 @@ export class ExpenseService {
       normalizedFecha ?? body.fechaEmision
     )
     const categoryMeta = await this.evaluateCategoryLimit(body, body.total)
+    const reportFreeze = await this.computeReportCurrencyFreeze(
+      body.clientId,
+      body.expenseReportId,
+      body.moneda,
+      body.total,
+      normalizedFecha ?? body.fechaEmision
+    )
     const internalCode = await this.generateInternalCode(
       body.userId,
       'comprobante_caja',
@@ -2137,6 +2239,7 @@ export class ExpenseService {
     )
 
     const expense = await this.expenseRepository.create({
+      ...reportFreeze,
       categoryId: new Types.ObjectId(body.categoryId),
       proyectId: new Types.ObjectId(body.proyectId),
       clientId: body.clientId,
@@ -2193,7 +2296,8 @@ export class ExpenseService {
   private normalizeMonedaCode(raw: unknown): string {
     const value = String(raw ?? '').trim().toUpperCase()
     if (!value) return 'PEN'
-    if (value.includes('USD') || value === '$') return 'USD'
+    if (value.includes('USD') || value === '$' || value === 'US$' || value === 'US$.')
+      return 'USD'
     if (value.includes('PEN') || value === 'S/' || value === 'S/.') return 'PEN'
     return value
   }
@@ -2249,8 +2353,9 @@ export class ExpenseService {
   ): Promise<{ montoBase?: number; tipoCambio?: number; tcFecha?: string }> {
     if (total === undefined || total === null) return {}
     const config = await this.currencyService.getConfig(clientId)
-    const date = fechaEmision ? new Date(fechaEmision) : new Date()
-    const resolvedDate = Number.isNaN(date.getTime()) ? new Date() : date
+    // `fechaEmision` se persiste como dd/mm/yyyy: `new Date()` lo leería como
+    // mm/dd (o Invalid Date si el día es > 12) y congelaría el TC de otro día.
+    const resolvedDate = this.parseExpenseDate(fechaEmision) ?? new Date()
     const conversion = await this.currencyService.toBase(
       total,
       moneda || config.monedaBase || 'PEN',
@@ -2258,6 +2363,75 @@ export class ExpenseService {
       config
     )
     return conversion
+  }
+
+  /**
+   * Congelado a la moneda de la RENDICIÓN, complementario al congelado a moneda
+   * base. Solo aplica cuando la rendición opera en una moneda distinta de la
+   * base (viático al exterior): guarda el TC de esa moneda **a la fecha de
+   * emisión del comprobante** (`tcReporte`) y el importe convertido
+   * (`montoReporte`), para que un gasto hecho en soles durante un viaje se
+   * descuente en dólares al TC de ese día y no al TC con el que se pidió el
+   * viático.
+   *
+   * Devuelve `{}` (sin campos) cuando el gasto no cuelga de una rendición o
+   * cuando la rendición ya está en la moneda base — el caso normal.
+   */
+  private async computeReportCurrencyFreeze(
+    clientId: string,
+    expenseReportId: string | undefined,
+    moneda: string | undefined,
+    total: number | undefined,
+    fechaEmision: string | undefined
+  ): Promise<{
+    monedaReporte?: string
+    tcReporte?: number
+    montoReporte?: number
+  }> {
+    if (!expenseReportId || total === undefined || total === null) return {}
+
+    const report = await this.expenseReportService.findCurrency(expenseReportId)
+
+    const config = await this.currencyService.getConfig(clientId)
+    const monedaBase = config.monedaBase || 'PEN'
+    const monedaReporte = report?.moneda
+    if (!monedaReporte || monedaReporte === monedaBase) return {}
+
+    // Mismo cuidado con dd/mm/yyyy que en `computeCurrencyFreeze`.
+    const resolvedDate = this.parseExpenseDate(fechaEmision) ?? new Date()
+
+    // TC del día para la moneda del viático. Si SUNAT no lo tiene, se cae al TC
+    // congelado del propio viático — nunca a 1, que trataría dólares como soles.
+    const rate =
+      (await this.currencyService.resolveRate(
+        monedaReporte,
+        resolvedDate,
+        config
+      )) ??
+      (Number(report?.tipoCambio) > 0 ? Number(report?.tipoCambio) : null)
+    if (!rate || rate <= 0) return {}
+
+    const monedaGasto = this.normalizeMonedaCode(moneda)
+    if (monedaGasto === monedaReporte) {
+      // Ya está en la moneda del viático: el importe nativo es exacto.
+      return {
+        monedaReporte,
+        tcReporte: rate,
+        montoReporte: Math.round((Number(total) || 0) * 100) / 100,
+      }
+    }
+
+    const { montoBase } = await this.currencyService.toBase(
+      total,
+      monedaGasto,
+      resolvedDate,
+      config
+    )
+    return {
+      monedaReporte,
+      tcReporte: rate,
+      montoReporte: Math.round((montoBase / rate) * 100) / 100,
+    }
   }
 
   async create(createExpenseDto: CreateExpenseDto): Promise<Expense> {
@@ -2288,10 +2462,18 @@ export class ExpenseService {
       dto.total,
       dto.fechaEmision
     )
+    const reportFreeze = await this.computeReportCurrencyFreeze(
+      createExpenseDto.clientId,
+      dto.expenseReportId,
+      dto.moneda,
+      dto.total,
+      dto.fechaEmision
+    )
 
     const createdExpense = new this.expenseRepository({
       ...dto,
       ...freeze,
+      ...reportFreeze,
       // Forzar ObjectId: en este flujo el modelo no castea estos ids por sí solo
       // (a diferencia de los create tipados), y guardarlos como string rompe los
       // $lookup/match estrictos del backend.
@@ -2775,13 +2957,28 @@ export class ExpenseService {
     if (dto.total !== undefined || dto.moneda !== undefined) {
       if (dto.moneda !== undefined) dto.moneda = this.normalizeMonedaCode(dto.moneda)
       const existingAsExpense = existing as unknown as Expense
+      const clientId = this.normalizeClientId(existingAsExpense.clientId)
+      const moneda = dto.moneda ?? existingAsExpense.moneda
+      const total = dto.total ?? existingAsExpense.total
+      const fechaEmision = dto.fechaEmision ?? existingAsExpense.fechaEmision
       const freeze = await this.computeCurrencyFreeze(
-        this.normalizeClientId(existingAsExpense.clientId),
-        dto.moneda ?? existingAsExpense.moneda,
-        dto.total ?? existingAsExpense.total,
-        dto.fechaEmision ?? existingAsExpense.fechaEmision
+        clientId,
+        moneda,
+        total,
+        fechaEmision
       )
       Object.assign(dto, freeze)
+      // Si el gasto cuelga de una rendición en moneda extranjera, su equivalente
+      // en esa moneda también se recalcula al cambiar el importe.
+      const reportId = this.expenseReportIdString(existing)
+      const reportFreeze = await this.computeReportCurrencyFreeze(
+        clientId,
+        reportId ?? undefined,
+        moneda,
+        total,
+        fechaEmision
+      )
+      if (reportFreeze.montoReporte !== undefined) Object.assign(dto, reportFreeze)
     }
 
     // Mismo criterio que create(): si la edición trae proyectId/categoryId como

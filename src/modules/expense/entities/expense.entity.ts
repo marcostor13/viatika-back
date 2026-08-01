@@ -127,6 +127,19 @@ export interface ExpenseDocument extends Document {
   tipoCambio?: number
   /** Fecha (YYYY-MM-DD) del TC aplicado — la de emisión del comprobante. */
   tcFecha?: string
+  /**
+   * Moneda de la rendición a la que pertenece el gasto, cuando NO es la moneda
+   * base del cliente (p. ej. un viático en USD). Ausente en el caso normal.
+   */
+  monedaReporte?: string
+  /**
+   * TC `monedaReporte`→base **del día de emisión del comprobante**, congelado al
+   * registrarlo. Es el que permite expresar en dólares un gasto hecho en soles
+   * dentro de un viático en dólares.
+   */
+  tcReporte?: number
+  /** Equivalente de `total` en `monedaReporte`, congelado con `tcReporte`. */
+  montoReporte?: number
   observado?: boolean
   observacionPlazo?: string
   diasRetraso?: number
@@ -253,6 +266,15 @@ export class Expense {
 
   @Prop({ type: String, required: false })
   tcFecha?: string
+
+  @Prop({ type: String, required: false })
+  monedaReporte?: string
+
+  @Prop({ type: Number, required: false })
+  tcReporte?: number
+
+  @Prop({ type: Number, required: false })
+  montoReporte?: number
 
   @Prop({ type: Boolean, default: false })
   observado?: boolean

@@ -128,12 +128,31 @@ describe('ExpenseService — createDeclaracionJurada', () => {
   const mockExpenseReportService = {
     assertReportNotLockedByCajaChica: jest.fn().mockResolvedValue(undefined),
     addExpenseToReport: jest.fn().mockResolvedValue(undefined),
+    findCurrency: jest.fn().mockResolvedValue(null),
   }
   const mockUserService = {
     findEmailNameClient: jest.fn(),
   }
   const mockCategoryService = {
     findOne: jest.fn().mockResolvedValue(null),
+  }
+  const mockCurrencyService = {
+    getConfig: jest
+      .fn()
+      .mockResolvedValue({ monedaBase: 'PEN', supportedCurrencies: [] }),
+    // TC de juguete: USD → PEN a 3.5; el resto sin conversión.
+    resolveRate: jest.fn(
+      (moneda: string, _date: Date | string): Promise<number | null> =>
+        Promise.resolve(moneda === 'USD' ? 3.5 : 1)
+    ),
+    toBase: jest.fn((monto: number, moneda: string) => {
+      const rate = moneda === 'USD' ? 3.5 : 1
+      return Promise.resolve({
+        montoBase: Math.round(monto * rate * 100) / 100,
+        tipoCambio: rate,
+        tcFecha: '2026-02-23',
+      })
+    }),
   }
 
   beforeEach(async () => {
@@ -168,13 +187,7 @@ describe('ExpenseService — createDeclaracionJurada', () => {
           useValue: { create: jest.fn().mockResolvedValue(undefined) },
         },
         { provide: CategoryService, useValue: mockCategoryService },
-        {
-          provide: CurrencyService,
-          useValue: {
-            getConfig: jest.fn().mockResolvedValue({ monedaBase: 'PEN', supportedCurrencies: [] }),
-            toBase: jest.fn().mockResolvedValue({ montoBase: 0, tipoCambio: 1, tcFecha: '2026-01-01' }),
-          },
-        },
+        { provide: CurrencyService, useValue: mockCurrencyService },
       ],
     }).compile()
 
@@ -253,6 +266,126 @@ describe('ExpenseService — createDeclaracionJurada', () => {
     await service.createDeclaracionJurada({ ...basePayload, expenseReportId })
 
     expect(mockExpenseReportService.addExpenseToReport).toHaveBeenCalledTimes(2)
+  })
+
+  it('registra los gastos en la moneda del viático y congela su equivalente en soles', async () => {
+    const expenseReportId = new Types.ObjectId().toHexString()
+    mockExpenseReportService.findCurrency.mockResolvedValue({ moneda: 'USD' })
+
+    const result = await service.createDeclaracionJurada({
+      ...basePayload,
+      moneda: 'US$',
+      expenseReportId,
+    })
+
+    const [alimentacion] = result.expenses as any[]
+    expect(alimentacion.moneda).toBe('USD')
+    expect(alimentacion.total).toBeCloseTo(110)
+    expect(alimentacion.montoBase).toBeCloseTo(385) // 110 × 3.5
+    expect(alimentacion.tipoCambio).toBeCloseTo(3.5)
+    // Ya está en la moneda del viático: el importe en esa moneda es el nativo.
+    expect(alimentacion.monedaReporte).toBe('USD')
+    expect(alimentacion.montoReporte).toBeCloseTo(110)
+    expect(alimentacion.tcReporte).toBeCloseTo(3.5)
+    // El símbolo del formulario se conserva tal cual para el PDF de la DJ.
+    expect(alimentacion.declaracionJuradaMoneda).toBe('US$')
+  })
+
+  it('una DJ dentro de una rendición en soles no se marca en dólares', async () => {
+    const expenseReportId = new Types.ObjectId().toHexString()
+    mockExpenseReportService.findCurrency.mockResolvedValue({ moneda: 'PEN' })
+
+    const result = await service.createDeclaracionJurada({
+      ...basePayload,
+      moneda: 'US$',
+      expenseReportId,
+    })
+
+    const [alimentacion] = result.expenses as any[]
+    expect(alimentacion.moneda).toBe('PEN')
+    expect(alimentacion.montoBase).toBeCloseTo(110)
+  })
+
+  describe('congelado a la moneda de la rendición (TC del día del gasto)', () => {
+    const freeze = (
+      moneda: string | undefined,
+      total: number,
+      fecha = '2026-07-06'
+    ) =>
+      (service as any).computeReportCurrencyFreeze(
+        clientId,
+        new Types.ObjectId().toHexString(),
+        moneda,
+        total,
+        fecha
+      )
+
+    it('convierte a dólares un gasto hecho en soles dentro de un viático en dólares', async () => {
+      mockExpenseReportService.findCurrency.mockResolvedValue({
+        moneda: 'USD',
+        tipoCambio: 3.6,
+      })
+
+      // S/ 54.45 al TC del día (3.5) = USD 15.56, no al TC del viático (3.6).
+      await expect(freeze('PEN', 54.45)).resolves.toEqual({
+        monedaReporte: 'USD',
+        tcReporte: 3.5,
+        montoReporte: 15.56,
+      })
+    })
+
+    it('no toca los gastos de una rendición en moneda base', async () => {
+      mockExpenseReportService.findCurrency.mockResolvedValue({ moneda: 'PEN' })
+      await expect(freeze('PEN', 54.45)).resolves.toEqual({})
+    })
+
+    it('sin rendición no congela nada', async () => {
+      await expect(
+        (service as any).computeReportCurrencyFreeze(
+          clientId,
+          undefined,
+          'PEN',
+          54.45,
+          '2026-07-06'
+        )
+      ).resolves.toEqual({})
+    })
+
+    it('lee la fecha dd/mm/yyyy con la que se persiste, no como mm/dd', async () => {
+      mockExpenseReportService.findCurrency.mockResolvedValue({
+        moneda: 'USD',
+        tipoCambio: 3.556,
+      })
+      mockCurrencyService.resolveRate.mockClear()
+
+      // Con `new Date('13/07/2026')` esto era Invalid Date → TC de hoy.
+      await freeze('PEN', 100, '13/07/2026')
+
+      // La fecha se ancla a medianoche UTC, que es como la lee `toIsoDate`.
+      const fecha = mockCurrencyService.resolveRate.mock.calls[0][1] as Date
+      expect(fecha.toISOString().slice(0, 10)).toBe('2026-07-13')
+    })
+
+    it('si no hay TC del día cae al TC del viático, nunca a 1', async () => {
+      mockExpenseReportService.findCurrency.mockResolvedValue({
+        moneda: 'USD',
+        tipoCambio: 3.556,
+      })
+      mockCurrencyService.resolveRate.mockResolvedValueOnce(null)
+
+      const result = await freeze('PEN', 54.45)
+      expect(result.tcReporte).toBeCloseTo(3.556)
+      expect(result.montoReporte).toBeCloseTo(15.31)
+    })
+  })
+
+  it("normaliza el símbolo 'US$' del formulario cuando la DJ no está en una rendición", async () => {
+    const result = await service.createDeclaracionJurada({
+      ...basePayload,
+      moneda: 'US$',
+    })
+
+    expect((result.expenses[0] as any).moneda).toBe('USD')
   })
 })
 

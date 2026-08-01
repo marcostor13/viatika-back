@@ -487,7 +487,7 @@ export class ExpenseReportService implements OnModuleInit {
         directaDeposit: { $exists: true, $ne: null },
       })
       .populate('userId', 'name email')
-      .populate('expenseIds', 'total montoBase')
+      .populate('expenseIds', 'total montoBase moneda montoReporte monedaReporte')
       .sort({ createdAt: -1 })
       .lean()
       .exec()
@@ -2123,7 +2123,7 @@ export class ExpenseReportService implements OnModuleInit {
         select: 'name email roleId',
         populate: { path: 'roleId', select: 'name' },
       })
-      .populate('expenseIds', 'total montoBase')
+      .populate('expenseIds', 'total montoBase moneda montoReporte monedaReporte')
       .sort({ createdAt: -1 })
       .lean()
       .exec()
@@ -2185,6 +2185,22 @@ export class ExpenseReportService implements OnModuleInit {
     })
   }
 
+  /**
+   * Moneda operativa de una rendición y su TC congelado, en una consulta lean.
+   * Pensado para el alta de gastos: `findOne` popula medio modelo y además
+   * dispara auto-sanados, demasiado para saber en qué moneda se rinde.
+   */
+  async findCurrency(
+    reportId: string
+  ): Promise<{ moneda?: string; tipoCambio?: number } | null> {
+    if (!Types.ObjectId.isValid(reportId)) return null
+    return this.expenseReportModel
+      .findById(reportId)
+      .select('moneda tipoCambio')
+      .lean()
+      .exec() as Promise<{ moneda?: string; tipoCambio?: number } | null>
+  }
+
   async addExpenseToReport(reportId: string, expenseId: string) {
     const existing = await this.expenseReportModel
       .findById(reportId)
@@ -2192,8 +2208,10 @@ export class ExpenseReportService implements OnModuleInit {
       .lean()
       .exec()
 
+    // `$addToSet` y no `$push`: vincular dos veces el mismo gasto lo dejaba
+    // repetido en `expenseIds` y el detalle lo sumaba dos veces al total.
     const updateOp: Record<string, unknown> = {
-      $push: { expenseIds: new Types.ObjectId(expenseId) },
+      $addToSet: { expenseIds: new Types.ObjectId(expenseId) },
     }
     if ((existing as any)?.status === 'rejected') {
       updateOp.$set = { status: 'submitted' }
@@ -2479,7 +2497,7 @@ export class ExpenseReportService implements OnModuleInit {
     const budget = this.reportSettlementAmountBase(report, report?.budget ?? 0)
     const populated = await this.expenseReportModel
       .findById(reportId)
-      .populate('expenseIds', 'total montoBase')
+      .populate('expenseIds', 'total montoBase moneda montoReporte monedaReporte')
       .lean()
       .exec()
     const gastado = (((populated as any)?.expenseIds as any[]) ?? []).reduce(
@@ -2828,7 +2846,7 @@ export class ExpenseReportService implements OnModuleInit {
     if (!settlementType || settlementType !== 'reembolso') {
       const populated = await this.expenseReportModel
         .findById(reportId)
-        .populate('expenseIds', 'total montoBase')
+        .populate('expenseIds', 'total montoBase moneda montoReporte monedaReporte')
         .exec()
       const expenses = (populated?.expenseIds ?? []) as any[]
       const expenseTotal = expenses.reduce(
